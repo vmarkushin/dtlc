@@ -25,7 +25,7 @@ impl Display for Kinds {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr {
     Var(Sym),
     App(BExpr, BExpr),
@@ -79,23 +79,23 @@ impl<T: Into<String>> From<T> for BExpr {
     }
 }
 
-fn typeck_red(r: &mut Env, e: &Expr) -> Result<Type> {
+fn typeck_whnf(r: Env, e: &Expr) -> Result<Type> {
     Ok(*whnf(box typeck(r, e)?))
 }
 
 fn typecheck(e: &Expr) -> Result<Type> {
-    let mut r = Default::default();
-    typeck(&mut r, e)
+    let r = Default::default();
+    typeck(r, e)
 }
 
-fn typeck(r: &mut Env, e: &Expr) -> Result<Type> {
+fn typeck(r: Env, e: &Expr) -> Result<Type> {
     match e {
         Expr::Var(s) => r
             .get(s)
             .cloned()
             .ok_or_else(|| format!("Cannot find variable {}", s)),
         Expr::App(f, a) => {
-            let tf = typeck_red(r, f)?;
+            let tf = typeck_whnf(r.clone(), f)?;
             match tf {
                 Expr::Pi(x, at, rt) => {
                     let ta = typeck(r, a)?;
@@ -103,7 +103,7 @@ fn typeck(r: &mut Env, e: &Expr) -> Result<Type> {
                     if !beta_eq(box ta, at) {
                         return Err(string);
                     }
-                    return Ok(*subst(&x, a, &rt));
+                    return Ok(*subst(&x, a, *rt));
                 }
                 _ => {
                     return Err(format!("'{}' is not a function", f));
@@ -111,46 +111,51 @@ fn typeck(r: &mut Env, e: &Expr) -> Result<Type> {
             }
         }
         Expr::Lam(s, t, e) => {
-            let _ = typeck(r, t)?;
-            r.insert(s.clone(), *t.clone());
-            let te = typeck(r, e)?;
+            let _ = typeck(r.clone(), t)?;
+            let mut r_new = r;
+            r_new.insert(s.clone(), *t.clone());
+            let te = typeck(r_new.clone(), e)?;
             let lt = Type::Pi(s.clone(), t.clone(), box te);
-            typeck(r, &lt)?;
+            typeck(r_new, &lt)?;
             return Ok(lt);
         }
         Expr::Pi(x, a, b) => {
-            let s = typeck_red(r, a)?;
-            r.insert(x.clone(), *a.clone());
-            let t = typeck_red(r, b)?;
-            if !s.is_kind() || !t.is_kind() {
-                return Err("Bad abstraction".into());
+            let s = typeck_whnf(r.clone(), a)?;
+            if !s.is_kind() {
+                return Err("Expected kind at parameter type".into());
+            }
+            let mut r_new = r;
+            r_new.insert(x.clone(), *a.clone());
+            let t = typeck_whnf(r_new, b)?;
+            if !t.is_kind() {
+                return Err("Expected kind at return type".into());
             }
             return Ok(t);
         }
         Expr::Kind(k) => match k {
             Kinds::Star => Ok(Expr::Kind(Kinds::Box)),
-            Kinds::Box => Err("Found a Box".into()),
+            Kinds::Box => Err("Kinds higher than [] are not supported".into()),
         },
     }
 }
 
-fn subst_var(s: &Sym, v: Sym, e: &Expr) -> BExpr {
+fn subst_var(s: &Sym, v: Sym, e: Expr) -> BExpr {
     subst(s, &Expr::Var(v), e)
 }
 
 /// Replaces all *free* occurrences of `v` by `x` in `b`, i.e. `b[v:=x]`.
-pub(crate) fn subst(v: &Sym, x: &Expr, b: &Expr) -> BExpr {
+pub(crate) fn subst(v: &Sym, x: &Expr, b: Expr) -> BExpr {
     let res = box match b {
-        e @ Expr::Var(i) => {
-            if i == v {
+        Expr::Var(i) => {
+            if &i == v {
                 x.clone()
             } else {
-                e.clone()
+                Expr::Var(i)
             }
         }
-        Expr::App(f, a) => Expr::App(subst(v, x, f), subst(v, x, a)),
-        Expr::Lam(i, t, e) => abstr(Expr::Lam, v, x, i, t, &e),
-        Expr::Pi(i, t, e) => abstr(Expr::Pi, v, x, i, t, &e),
+        Expr::App(f, a) => Expr::App(subst(v, x, *f), subst(v, x, *a)),
+        Expr::Lam(i, t, e) => abstr(Expr::Lam, v, x, &i, t, e),
+        Expr::Pi(i, t, e) => abstr(Expr::Pi, v, x, &i, t, e),
         k @ Expr::Kind(_) => k.clone(),
     };
     fn abstr(
@@ -158,26 +163,26 @@ pub(crate) fn subst(v: &Sym, x: &Expr, b: &Expr) -> BExpr {
         v: &Sym,
         x: &Expr,
         i: &Sym,
-        t: &BType,
-        e: &BExpr,
+        t: BType,
+        e: BExpr,
     ) -> Expr {
         let fvx = free_vars(x);
         if v == i {
-            con(i.clone(), subst(v, x, &*t), e.clone())
+            con(i.clone(), subst(v, x, *t), e.clone())
         } else if fvx.contains(i) {
             let vars = {
                 let mut set = fvx.clone();
-                set.extend(free_vars(e));
+                set.extend(free_vars(&e));
                 set
             };
             let mut i_new = i.clone();
             while vars.contains(&i_new) {
                 i_new.push('\'');
             }
-            let e_new = subst_var(i, i_new.clone(), e);
-            con(i_new, subst(v, x, &*t), subst(v, x, &*e_new))
+            let e_new = subst_var(&i, i_new.clone(), *e);
+            con(i_new, subst(v, x, *t), subst(v, x, *e_new))
         } else {
-            con(i.clone(), subst(v, x, &*t), subst(v, x, e))
+            con(i.clone(), subst(v, x, *t), subst(v, x, *e))
         }
     }
     res
@@ -192,32 +197,29 @@ fn alpha_eq(e1: &Expr, e2: &Expr) -> bool {
     match (e1, e2) {
         (Expr::Var(v1), Expr::Var(v2)) => v1 == v2,
         (Expr::App(f1, a1), Expr::App(f2, a2)) => alpha_eq(f1, f2) && alpha_eq(a1, a2),
-        (Expr::Lam(s1, t1, e1), Expr::Lam(s2, t2, e2)) => abstr(t1, t2, e1, e2, s1, s2),
-        (Expr::Pi(s1, t1, e1), Expr::Pi(s2, t2, e2)) => abstr(t1, t2, e1, e2, s1, s2),
+        (Expr::Lam(s1, t1, e1), Expr::Lam(s2, t2, e2)) => abstr(t1, t2, e1, *e2.clone(), s1, s2),
+        (Expr::Pi(s1, t1, e1), Expr::Pi(s2, t2, e2)) => abstr(t1, t2, e1, *e2.clone(), s1, s2),
         (Expr::Kind(k1), Expr::Kind(k2)) => k1 == k2,
         _ => false,
     }
 }
 
-/// Acts like `Cons` in Haskell on `Vec`.
-fn cons<T>(e: T, mut es: Vec<T>) -> Vec<T> {
-    es.insert(0, e);
-    es
-}
-
 /// Evaluates the expression to Weak Head Normal Form.
 pub fn whnf(ee: BExpr) -> BExpr {
-    return spine(ee, Vec::new());
-    fn spine(e: BExpr, args: Vec<Expr>) -> BExpr {
-        match *e {
-            Expr::App(f, a) => spine(f, cons(*a, args)),
-            Expr::Lam(s, _t, e) if !args.is_empty() => {
-                spine(subst(&s, &args[0], &e), args.clone()[1..].to_vec())
+    return spine(ee, &[]);
+    fn spine(e: BExpr, args: &[Expr]) -> BExpr {
+        match (*e, args) {
+            (Expr::App(f, a), _) => {
+                let mut args_new = args.to_owned();
+                args_new.push(*a);
+                spine(f, &args_new)
             }
-            pi @ Expr::Pi(..) => {
+            (Expr::Lam(s, _t, e), [xs @ .., x]) => spine(subst(&s, x, *e), xs),
+            (pi @ Expr::Pi(..), _) => {
                 return box pi;
             }
-            f => args
+            (f, _) => args
+                .to_owned()
                 .into_iter()
                 .fold(box f, |acc, e| box Expr::App(acc, box e)),
         }
@@ -240,25 +242,25 @@ fn free_vars(e: &Expr) -> HashSet<Sym> {
 }
 
 fn nf(e: BExpr) -> BExpr {
-    return spine(e, Vec::new());
-    fn spine(e: BExpr, args: Vec<Expr>) -> BExpr {
-        let res = match *e {
-            Expr::App(f, a) => spine(f, cons(*a, args)),
-            Expr::Lam(s, t, e) => {
-                if args.is_empty() {
-                    box Expr::Lam(s, nf(t), nf(e))
-                } else {
-                    spine(subst(&s, &args[0], &e), args.clone()[1..].to_vec())
-                }
+    return spine(e, &[]);
+    fn spine(e: BExpr, args: &[Expr]) -> BExpr {
+        let res = match (*e, args) {
+            (Expr::App(f, a), _) => {
+                let mut args_new = args.to_owned();
+                args_new.push(*a);
+                spine(f, &args_new)
             }
-            Expr::Pi(s, k, t) => app(Expr::Pi(s, nf(k), nf(t)), args),
-            f => app(f, args),
+            (Expr::Lam(s, t, e), []) => box Expr::Lam(s, nf(t), nf(e)),
+            (Expr::Lam(s, _, e), [xs @ .., x]) => spine(subst(&s, x, *e), xs),
+            (Expr::Pi(s, k, t), _) => app(Expr::Pi(s, nf(k), nf(t)), args),
+            (f, _) => app(f, args),
         };
         res
     }
 
-    fn app(f: Expr, args: Vec<Expr>) -> Box<Expr> {
-        args.into_iter()
+    fn app(f: Expr, args: &[Expr]) -> Box<Expr> {
+        args.to_owned()
+            .into_iter()
             .map(|x| nf(box x))
             .fold(box f, |acc, e| box Expr::App(acc, e))
     }
@@ -289,8 +291,60 @@ fn arrow(f: impl Into<BType>, t: impl Into<BExpr>) -> BExpr {
 fn test_id() {
     use Kinds::*;
     let id = lam("a", Star, lam("x", "a", "x"));
-    println!("{} : {}", id, typecheck(&id).unwrap());
+    assert_eq!(typecheck(&id).unwrap(), *pi("a", Star, pi("x", "a", "a")));
     let zero = lam('s', arrow("Nat", "Nat"), lam('z', "Nat", 'z'));
     let z = nf(app(app(app(app(id, "Nat"), zero), ">0"), "0"));
-    println!("{}", z);
+    assert_eq!(z.to_string(), "0");
+}
+
+#[test]
+fn test_nat() {
+    use Kinds::*;
+
+    fn nat_def(val: BExpr) -> BExpr {
+        lam(
+            "nat",
+            Star,
+            lam("s", arrow("nat", "nat"), lam("z", "nat", val)),
+        )
+    }
+
+    fn nat_data(n: u32) -> BExpr {
+        let mut val = "z".into();
+        for _ in 0..n {
+            val = app("s", val);
+        }
+        val
+    }
+
+    fn church_nat(n: u32) -> BExpr {
+        nat_def(nat_data(n))
+    }
+
+    let n = church_nat(11);
+    assert!(beta_eq(
+        box typecheck(&n).unwrap(),
+        pi("t", Star, arrow(arrow("t", "t"), arrow("t", "t")))
+    ));
+
+    fn plus(n: BExpr, m: BExpr) -> BExpr {
+        nat_def(app(
+            app(app(n, "nat"), "s"),
+            app(app(app(m, "nat"), "s"), "z"),
+        ))
+    }
+
+    assert!(beta_eq(plus(church_nat(5), church_nat(7)), church_nat(12)));
+
+    fn mul(n: BExpr, m: BExpr) -> BExpr {
+        nat_def(app(
+            app(
+                app(n, "nat"),
+                app(app(plus(m.clone(), church_nat(0)), "nat"), "s"),
+            ),
+            nat_data(0),
+        ))
+    }
+
+    assert!(beta_eq(mul(church_nat(5), church_nat(7)), church_nat(35)));
 }
