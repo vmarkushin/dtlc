@@ -66,7 +66,7 @@ impl Display for Expr {
                     e => f.write_str(&format!("{}", e)),
                 }
             }
-            Expr::Lam(i, t, b) => f.write_str(&format!("(λ{}:{}. {})", i, t, b)),
+            Expr::Lam(i, t, b) => f.write_str(&format!("(λ {}:{}. {})", i, t, b)),
             Expr::Pi(i, k, t) => f.write_str(&format!("(Π {}:{}, {})", i, k, t)),
             Expr::Kind(k) => f.write_str(&format!("{}", k)),
         }
@@ -74,8 +74,13 @@ impl Display for Expr {
 }
 
 impl<T: Into<String>> From<T> for BExpr {
+    #[track_caller]
     fn from(s: T) -> Self {
-        box Expr::Var(s.into())
+        let ident = s.into();
+        if !ident.chars().all(|c| char::is_alphanumeric(c) || c == '_') {
+            panic!("Invalid identifier: {}", ident)
+        }
+        box Expr::Var(ident)
     }
 }
 
@@ -271,8 +276,29 @@ fn beta_eq(e1: BExpr, e2: BExpr) -> bool {
     alpha_eq(&nf(e1), &nf(e2))
 }
 
+#[track_caller]
+fn assert_beta_eq(e1: BExpr, e2: BExpr) {
+    let nf1 = nf(e1);
+    let nf2 = nf(e2);
+    let eq = alpha_eq(&nf1, &nf2);
+    if !eq {
+        panic!(
+            r#"assertion failed: `(left != right)`
+left: `{:?}`,
+right: `{:?}`"#,
+            nf1, nf2,
+        )
+    }
+}
+
 pub fn app(f: impl Into<BExpr>, a: impl Into<BExpr>) -> BExpr {
     box Expr::App(f.into(), a.into())
+}
+
+pub fn app_many(f: impl Into<BExpr>, aa: impl IntoIterator<Item = impl Into<BExpr>>) -> BExpr {
+    aa.into_iter()
+        .map(Into::into)
+        .fold(f.into(), |acc, e| box Expr::App(acc, e))
 }
 
 pub fn lam(s: impl Into<String>, t: impl Into<BType>, e: impl Into<BExpr>) -> BExpr {
@@ -299,52 +325,49 @@ fn test_id() {
 
 #[test]
 fn test_nat() {
-    use Kinds::*;
+    use crate::t;
 
     fn nat_def(val: BExpr) -> BExpr {
-        lam(
-            "nat",
-            Star,
-            lam("s", arrow("nat", "nat"), lam("z", "nat", val)),
-        )
+        t! {
+            fun nat: * => fun s: (nat -> nat) => fun z: nat => @val
+        }
     }
 
     fn nat_data(n: u32) -> BExpr {
-        let mut val = "z".into();
+        let mut val = t!(z);
         for _ in 0..n {
-            val = app("s", val);
+            val = t!(s (@val));
         }
         val
     }
 
-    fn church_nat(n: u32) -> BExpr {
+    /// Church's nats.
+    fn nat(n: u32) -> BExpr {
         nat_def(nat_data(n))
     }
 
-    let n = church_nat(11);
-    assert!(beta_eq(
+    let n = nat(4);
+    assert_beta_eq(
         box typecheck(&n).unwrap(),
-        pi("t", Star, arrow(arrow("t", "t"), arrow("t", "t")))
-    ));
+        t!(forall t : *, (t -> t) -> (t -> t)),
+    );
+    assert_beta_eq(
+        n,
+        t!(fun nat:* => (fun s:(forall _:nat, nat) => fun z:nat => s (s (s (s z))))),
+    );
 
     fn plus(n: BExpr, m: BExpr) -> BExpr {
-        nat_def(app(
-            app(app(n, "nat"), "s"),
-            app(app(app(m, "nat"), "s"), "z"),
-        ))
+        nat_def(t! { @n nat s (@m nat s z) })
     }
 
-    assert!(beta_eq(plus(church_nat(5), church_nat(7)), church_nat(12)));
+    assert_beta_eq(plus(nat(5), nat(7)), nat(12));
 
     fn mul(n: BExpr, m: BExpr) -> BExpr {
-        nat_def(app(
-            app(
-                app(n, "nat"),
-                app(app(plus(m.clone(), church_nat(0)), "nat"), "s"),
-            ),
-            nat_data(0),
-        ))
+        let plus_f = plus(m, nat(0));
+        nat_def(t! {
+            @n nat (@plus_f nat s) {nat_data(0)}
+        })
     }
 
-    assert!(beta_eq(mul(church_nat(5), church_nat(7)), church_nat(35)));
+    assert_beta_eq(mul(nat(5), nat(7)), nat(35));
 }
