@@ -1,10 +1,13 @@
 #![allow(clippy::ptr_arg)]
 
-use crate::item::Item;
 #[cfg(test)]
 use quickcheck::quickcheck;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
+use std::str::FromStr;
+
+use crate::ensure;
+use crate::item::Item;
 
 pub type Sym = String;
 pub type BExpr = Box<Expr>;
@@ -56,8 +59,30 @@ impl Env {
     }
 }
 
-pub type TCError = String;
-type Result<T> = std::result::Result<T, TCError>;
+#[derive(Debug, thiserror::Error)]
+pub enum TCError {
+    #[error("Unknown variable: `{0}`")]
+    UnknownVar(String),
+
+    #[error("Wrong type. Expected `{expected}`, but got `{got}`")]
+    WrongType { expected: Type, got: Type },
+    #[error("Wrong argument type. Expected `{expected}`, but got `{got}`")]
+    WrongArgumentType { expected: Type, got: Type },
+
+    #[error("Expected function, but got item of type `{0}`")]
+    ExpectedFunc(Type),
+    #[error("Expected kind but got type `{0}`")]
+    ExpectedKind(Type),
+    #[error("Expected kind at return type, but got `{0}`")]
+    ExpectedKindReturn(Type),
+    #[error("Expected var, lam or pi, but got item of type `{0}`")]
+    ExpectedVarLamPi(Type),
+
+    #[error("Kinds higher than [] are not supported")]
+    KindTooHigh,
+}
+
+type Result<T, E = TCError> = std::result::Result<T, E>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kinds {
@@ -119,14 +144,21 @@ impl Display for Expr {
     }
 }
 
-impl<T: Into<String>> From<T> for BExpr {
+#[derive(Debug, thiserror::Error)]
+#[error("Invalid identifier: `{0}`")]
+pub struct ParseExprError(pub String);
+
+impl FromStr for BExpr {
+    type Err = ParseExprError;
+
     #[track_caller]
-    fn from(s: T) -> Self {
-        let ident = s.into();
-        if !ident.chars().all(|c| char::is_alphanumeric(c) || c == '_') {
-            panic!("Invalid identifier: {}", ident)
-        }
-        box Expr::Var(ident)
+    fn from_str(s: &str) -> Result<Self, ParseExprError> {
+        let s = s.to_owned();
+        ensure!(
+            s.chars().all(|c| char::is_alphanumeric(c) || c == '_'),
+            ParseExprError(s),
+        );
+        Ok(box Expr::Var(s))
     }
 }
 
@@ -147,21 +179,22 @@ impl Expr {
             Expr::Var(s) => r
                 .get_type(s)
                 .cloned()
-                .ok_or_else(|| format!("Cannot find variable {}", s)),
+                .ok_or_else(|| TCError::UnknownVar(s.clone())),
             Expr::App(f, a) => {
                 let tf = f.typeck_whnf(r.clone())?;
                 match tf {
                     Expr::Pi(x, at, rt) => {
                         let ta = a.typeck(r)?;
-                        let string = format!("Argument type {} != {}", ta, at);
-                        if !(box ta).beta_eq(*at) {
-                            return Err(string);
+                        let at = *at;
+                        if !(box ta.clone()).beta_eq(at.clone()) {
+                            return Err(TCError::WrongArgumentType {
+                                expected: at,
+                                got: ta,
+                            });
                         }
                         Ok(*rt.subst(&x, a))
                     }
-                    _ => {
-                        return Err(format!("'{}' is not a function", f));
-                    }
+                    _ => Err(TCError::ExpectedFunc(tf)),
                 }
             }
             Expr::Lam(s, t, e) => {
@@ -176,20 +209,18 @@ impl Expr {
             Expr::Pi(x, a, b) => {
                 let s = a.typeck_whnf(r.clone())?;
                 if !s.is_kind() {
-                    return Err("Expected kind at parameter type".into());
+                    return Err(TCError::ExpectedKind(s));
                 }
                 let mut r_new = r;
                 r_new.add_type(x.clone(), *a.clone());
                 let t = b.typeck_whnf(r_new)?;
                 if !t.is_kind() {
-                    return Err("Expected kind at return type".into());
+                    return Err(TCError::ExpectedKindReturn(t));
                 }
                 Ok(t)
             }
-            Expr::Kind(k) => match k {
-                Kinds::Star => Ok(Expr::Kind(Kinds::Box)),
-                Kinds::Box => Err("Kinds higher than [] are not supported".into()),
-            },
+            Expr::Kind(Kinds::Star) => Ok(Expr::Kind(Kinds::Box)),
+            Expr::Kind(Kinds::Box) => Err(TCError::KindTooHigh),
         }
     }
 
@@ -282,6 +313,7 @@ impl Expr {
     /// Evaluates the expression to Weak Head Normal Form.
     pub fn whnf(self) -> BExpr {
         return spine(self, &[]);
+
         fn spine(e: Expr, args: &[Expr]) -> BExpr {
             match (e, args) {
                 (Expr::App(f, a), _) => {
@@ -316,6 +348,7 @@ impl Expr {
 
     pub fn nf(self) -> BExpr {
         return spine(self, &[]);
+
         fn spine(e: Expr, args: &[Expr]) -> BExpr {
             match (e, args) {
                 // Nat O
@@ -332,8 +365,7 @@ impl Expr {
                     // xs.reverse();
                     app(Expr::Pi(s, k.nf(), t.nf()), args)
                 }
-                (f, aa) => {
-                    // dbg!((&f, aa));
+                (f, _) => {
                     let mut xs = args.to_owned();
                     xs.reverse();
                     app(f, &xs)
@@ -363,7 +395,7 @@ impl Expr {
         match norm {
             Expr::Var(v) if v == *ty_name => Ok(()),
             Expr::Pi(_, _, b) | Expr::Lam(_, _, b) => b.ensure_ret_type_eq(ty_name),
-            e => Err(format!("Expected var, lam or pi, got: {}", e)),
+            e => Err(TCError::ExpectedVarLamPi(e)),
         }
     }
 }
@@ -397,16 +429,30 @@ pub fn arrow(f: impl Into<BType>, t: impl Into<BExpr>) -> BExpr {
 mod tests {
     use super::*;
     use crate::parser::Parser;
-    use crate::tests::*;
     use crate::{expr, t};
+
+    #[track_caller]
+    pub fn assert_beta_eq(e1: BExpr, e2: BExpr) {
+        let nf1 = e1.nf();
+        let nf2 = e2.nf();
+        let eq = nf1.alpha_eq(&nf2);
+        if !eq {
+            panic!(
+                r#"assertion failed: `(left != right)`
+left: `{:?}`,
+right: `{:?}`"#,
+                nf1, nf2,
+            )
+        }
+    }
 
     #[test]
     fn test_id() {
         use Kinds::*;
-        let id = lam("a", Star, lam("x", "a", "x"));
-        assert_eq!(id.typecheck().unwrap(), *pi("a", Star, pi("x", "a", "a")));
-        let zero = lam('s', arrow("Nat", "Nat"), lam('z', "Nat", 'z'));
-        let z = app_many(id, [BExpr::from("Nat"), zero, "s".into(), "0".into()]).nf();
+        let id = lam("a", Star, t! { fun x: a => x });
+        assert_eq!(id.typecheck().unwrap(), *t! { forall a : * => x : a => a });
+        let zero = t! { fun s: (Nat -> Nat) => fun z: Nat => z };
+        let z = app_many(id, [t! { Nat }, zero, t! { s }, t! { "0" }]).nf();
         assert_eq!(z.to_string(), "0");
     }
 

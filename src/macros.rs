@@ -1,19 +1,25 @@
 #[macro_export]
 macro_rules! t {
+    ($($it:tt)+) => {
+        crate::parser::Parser::new(crate::grammar::ExprParser::new(), crate::grammar::ItemParser::new())
+            .parse_expr(stringify!($($it)+))
+            .map(std::boxed::Box::new)
+            .unwrap()
+    };
     (*) => {
         Kinds::Star
     };
     (fun $x:tt : ($($ty:tt)+) => $($tt:tt)+) => {
-        lam(stringify!($x), t!($($ty)+), t!($($tt)+))
+        lam(t!($x), t!($($ty)+), t!($($tt)+))
     };
     (fun $x:tt : $ty:tt => $($tt:tt)+) => {
-        lam(stringify!($x), t!($ty), t!($($tt)+))
+        lam(t!($x), t!($ty), t!($($tt)+))
     };
     (forall $x:tt : ($($tt1:tt)+), $($tt2:tt)+) => {
-        pi(stringify!($x), t!($($tt1)+), t!($($tt2)+))
+        pi(t!($x), t!($($tt1)+), t!($($tt2)+))
     };
     (forall $x:tt : $tt1:tt, $($tt2:tt)+) => {
-        pi(stringify!($x), t!($tt1), t!($($tt2)+))
+        pi(t!($x), t!($tt1), t!($($tt2)+))
     };
     ({$($tt:tt)+}) => {
         BExpr::from($($tt)+)
@@ -33,14 +39,12 @@ macro_rules! t {
     (($($tt:tt)+)) => {
         t!($($tt)+)
     };
-    ($val:tt) => {
-        BExpr::from(stringify!($val))
-    };
+    ($val:tt) => { stringify!($f).parse::<BExpr>().unwrap() };
     (@ $f:tt $($aa:tt)+) => {
         app_many($f, [$(t!($aa)),+])
     };
     ($f:tt $($aa:tt)+) => {
-        app_many(stringify!($f), [$(t!($aa)),+])
+        app_many(t!($f), [$(t!($aa)),+])
     };
 }
 

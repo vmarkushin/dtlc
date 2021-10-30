@@ -1,5 +1,6 @@
-use crate::expr::BExpr;
+//use crate::expr::*;
 
+/*
 #[track_caller]
 pub fn assert_beta_eq(e1: BExpr, e2: BExpr) {
     let nf1 = e1.nf();
@@ -14,3 +15,4 @@ right: `{:?}`"#,
         )
     }
 }
+*/
