@@ -1,6 +1,8 @@
 #![allow(clippy::ptr_arg)]
 
 use crate::item::Item;
+#[cfg(test)]
+use quickcheck::quickcheck;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 
@@ -43,6 +45,12 @@ impl Env {
                     self.add_type(name.clone(), ty);
                 }
                 self.defs.insert(name, body);
+            }
+            Item::Data { name, cons } => {
+                self.add_type(name, Kinds::Star.into());
+                for (con_name, con) in cons {
+                    self.add_type(con_name, con);
+                }
             }
         }
     }
@@ -134,6 +142,7 @@ impl Expr {
     }
 
     pub fn typeck(&self, r: Env) -> Result<Type> {
+        // dbg!(&self);
         match self {
             Expr::Var(s) => r
                 .get_type(s)
@@ -252,7 +261,7 @@ impl Expr {
     }
 
     /// Compares expressions modulo α-conversions. That is, λx.x == λy.y.
-    fn alpha_eq(&self, e2: &Expr) -> bool {
+    pub(crate) fn alpha_eq(&self, e2: &Expr) -> bool {
         let e1 = self;
         let abstr = |t1: &Expr, t2, e1: &Expr, e2: Expr, s1: &Sym, s2| {
             t1.alpha_eq(t2) && e1.alpha_eq(&e2.subst_var(s2, s1.clone()))
@@ -309,6 +318,8 @@ impl Expr {
         return spine(self, &[]);
         fn spine(e: Expr, args: &[Expr]) -> BExpr {
             match (e, args) {
+                // Nat O
+                // Nat -> * -> Vector
                 (Expr::App(f, a), _) => {
                     let mut args_new = args.to_owned();
                     args_new.push(*a);
@@ -316,8 +327,17 @@ impl Expr {
                 }
                 (Expr::Lam(s, t, e), []) => box Expr::Lam(s, t.nf(), e.nf()),
                 (Expr::Lam(s, _, e), [xs @ .., x]) => spine(*e.subst(&s, x), xs),
-                (Expr::Pi(s, k, t), _) => app(Expr::Pi(s, k.nf(), t.nf()), args),
-                (f, _) => app(f, args),
+                (Expr::Pi(s, k, t), _) => {
+                    // let mut xs = args.to_owned();
+                    // xs.reverse();
+                    app(Expr::Pi(s, k.nf(), t.nf()), args)
+                }
+                (f, aa) => {
+                    // dbg!((&f, aa));
+                    let mut xs = args.to_owned();
+                    xs.reverse();
+                    app(f, &xs)
+                }
             }
         }
 
@@ -332,6 +352,19 @@ impl Expr {
     /// Compares expressions modulo β-conversions.
     fn beta_eq(self, e2: Expr) -> bool {
         self.nf().alpha_eq(&e2.nf())
+    }
+
+    /*
+    data Vect
+     */
+    /// Example: `ensure_ret_type_eq(A -> B -> app (app Vec Nat) Nat), (fun a b : * => Vec a b)) == Ok
+    pub fn ensure_ret_type_eq(&self, ty_name: &Sym) -> Result<()> {
+        let norm = *self.clone().whnf();
+        match norm {
+            Expr::Var(v) if v == *ty_name => Ok(()),
+            Expr::Pi(_, _, b) | Expr::Lam(_, _, b) => b.ensure_ret_type_eq(ty_name),
+            e => Err(format!("Expected var, lam or pi, got: {}", e)),
+        }
     }
 }
 
@@ -363,41 +396,52 @@ pub fn arrow(f: impl Into<BType>, t: impl Into<BExpr>) -> BExpr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::Parser;
     use crate::tests::*;
+    use crate::{expr, t};
 
     #[test]
     fn test_id() {
         use Kinds::*;
         let id = lam("a", Star, lam("x", "a", "x"));
-        assert_eq!(&id.typecheck().unwrap(), *pi("a", Star, pi("x", "a", "a")));
+        assert_eq!(id.typecheck().unwrap(), *pi("a", Star, pi("x", "a", "a")));
         let zero = lam('s', arrow("Nat", "Nat"), lam('z', "Nat", 'z'));
-        let z = nf(app(app(app(app(id, "Nat"), zero), ">0"), "0"));
+        let z = app_many(id, [BExpr::from("Nat"), zero, "s".into(), "0".into()]).nf();
         assert_eq!(z.to_string(), "0");
+    }
+
+    fn nat_def(val: BExpr) -> BExpr {
+        t! {
+            fun nat: * => fun s: (nat -> nat) => fun z: nat => @val
+        }
+    }
+
+    fn mul(n: BExpr, m: BExpr) -> BExpr {
+        let plus_f = plus(m, nat(0));
+        dbg!(nat_def(t! {
+            @n nat (@plus_f nat s) {nat_data(0)}
+        }))
+    }
+
+    fn nat_data(n: u32) -> BExpr {
+        let mut val = t!(z);
+        for _ in 0..n {
+            val = t!(s (@val));
+        }
+        val
+    }
+
+    /// Church's nats.
+    fn nat(n: u32) -> BExpr {
+        nat_def(nat_data(n))
+    }
+
+    fn plus(n: BExpr, m: BExpr) -> BExpr {
+        nat_def(t! { @n nat s (@m nat s z) })
     }
 
     #[test]
     fn test_nat() {
-        use crate::t;
-
-        fn nat_def(val: BExpr) -> BExpr {
-            t! {
-                fun nat: * => fun s: (nat -> nat) => fun z: nat => @val
-            }
-        }
-
-        fn nat_data(n: u32) -> BExpr {
-            let mut val = t!(z);
-            for _ in 0..n {
-                val = t!(s (@val));
-            }
-            val
-        }
-
-        /// Church's nats.
-        fn nat(n: u32) -> BExpr {
-            nat_def(nat_data(n))
-        }
-
         let n = nat(4);
         assert_beta_eq(
             box n.typecheck().unwrap(),
@@ -408,19 +452,42 @@ mod tests {
             t!(fun nat:* => (fun s:(forall _:nat, nat) => fun z:nat => s (s (s (s z))))),
         );
 
-        fn plus(n: BExpr, m: BExpr) -> BExpr {
-            nat_def(t! { @n nat s (@m nat s z) })
-        }
-
         assert_beta_eq(plus(nat(5), nat(7)), nat(12));
-
-        fn mul(n: BExpr, m: BExpr) -> BExpr {
-            let plus_f = plus(m, nat(0));
-            nat_def(t! {
-                @n nat (@plus_f nat s) {nat_data(0)}
-            })
-        }
 
         assert_beta_eq(mul(nat(5), nat(7)), nat(35));
     }
+
+    #[quickcheck_macros::quickcheck]
+    fn prop(x: u8, y: u8) -> bool {
+        let x = x as u32 % 10;
+        let y = y as u32 % 10;
+        eprintln!("{} * {}", x, y);
+        mul(nat(x), nat(y)).beta_eq(*nat(x * y))
+    }
+
+    // #[test]
+    // fn test_reduction() {
+    //     let parser = Parser::new(grammar::ExprParser::new(), grammar::ItemParser::new());
+    //     let mut env = expr::Env::new();
+    //
+    //     env.add_item(
+    //         parser
+    //             .parse_item("data Nat | O : Nat | S : Nat -> Nat")
+    //             .unwrap(),
+    //     );
+    //
+    //     env.add_item(
+    //         parser
+    //             .parse_item("data Vector | Vec : Nat -> * -> Vector")
+    //             .unwrap(),
+    //     );
+    //     let replicate = parser
+    //         .parse_expr("(forall a : * , forall x : Nat , Vec x a) Nat O")
+    //         .unwrap();
+    //     let e = app_many("Vec", ["O", "Nat"]);
+    //     e.typeck(env.clone()).unwrap();
+    //     let e = e.normalize_in(&env);
+    //     println!("{}", e);
+    //     println!("{:?}", e);
+    // }
 }

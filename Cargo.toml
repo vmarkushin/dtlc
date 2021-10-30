@@ -10,6 +10,8 @@ codespan-reporting = "0.11.1"
 lalrpop-util = { version = "0.19.6", features = ["lexer"] }
 regex = "1"
 anyhow = "1.0.44"
+quickcheck = "1.0.3"
+quickcheck_macros = "1.0.0"
 
 [build-dependencies]
 lalrpop = "0.19.6"
