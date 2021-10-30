@@ -1,0 +1,43 @@
+use crate::expr::{self, Kinds, Expr, Sym};
+use crate::item::{self, Item};
+
+grammar;
+
+Ident: Sym = <s:r"[a-zA-Z][a-zA-Z0-9]*"> => Sym::from(s);
+
+AtomExpr: Expr = {
+    "*" => Kinds::Star.into(),
+    <var: Ident> => {
+        Expr::Var(var)
+    },
+    "(" <Expr> ")",
+};
+
+AppExpr : Expr = {
+    <l: AtomExpr> "->" <r: Expr> => {
+        *expr::arrow(l, r)
+    },
+    AtomExpr,
+    <f: AtomExpr> <args: AtomExpr+> => {
+        *expr::app_many(f, args)
+    },
+}
+
+pub Expr: Expr = {
+    "fun" <ident: Ident> ":" <ty: Expr> "=>" <body: Expr> => {
+        Expr::Lam(ident, box ty, box body)
+    },
+    "forall" <ident: Ident> ":" <ty: Expr> "," <body: Expr> => {
+        Expr::Pi(ident, box ty, box body)
+    },
+    AppExpr,
+};
+
+pub Item: Item = {
+    <name: Ident> "=>" <body: Expr> => {
+        Item::Fn { name, ty: None, body }
+    },
+    <name: Ident> ":" <ty: Expr> "=>" <body: Expr> => {
+        Item::Fn { name, ty: Some(ty), body }
+    }
+}
