@@ -13,8 +13,6 @@ mod parser;
 mod tests;
 mod token;
 
-use crate::expr::Expr;
-use crate::item::Item;
 use crate::parser::Parser;
 use anyhow::anyhow;
 use std::io;
@@ -26,9 +24,8 @@ fn repl(prompt: &str, mut f: impl FnMut(String) -> anyhow::Result<()>) {
         io::stdout().flush().unwrap();
         let mut input = String::new();
         io::stdin().read_line(&mut input).unwrap();
-        match f(input) {
-            Err(e) => eprintln!("{}", e),
-            _ => (),
+        if let Err(e) = f(input) {
+            eprintln!("{}", e);
         }
     }
 }

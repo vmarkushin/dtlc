@@ -1,3 +1,4 @@
+#[allow(unused)]
 pub enum Token {
     Ident(String),
     Lam,

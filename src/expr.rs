@@ -1,3 +1,5 @@
+#![allow(clippy::ptr_arg)]
+
 use crate::item::Item;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
@@ -38,9 +40,9 @@ impl Env {
         match item {
             Item::Fn { name, ty, body } => {
                 if let Some(ty) = ty {
-                    self.add_type(name.clone(), ty.clone());
+                    self.add_type(name.clone(), ty);
                 }
-                self.defs.insert(name.clone(), body);
+                self.defs.insert(name, body);
             }
         }
     }
@@ -87,10 +89,7 @@ impl From<Kinds> for BExpr {
 
 impl Expr {
     pub fn is_kind(&self) -> bool {
-        match self {
-            Expr::Kind(_) => true,
-            _ => false,
-        }
+        matches!(self, Expr::Kind(_))
     }
 }
 
@@ -128,6 +127,7 @@ impl Expr {
         Ok(*(box self.typeck(r)?).whnf())
     }
 
+    #[allow(unused)]
     pub(crate) fn typecheck(&self) -> Result<Type> {
         let r = Default::default();
         self.typeck(r)
@@ -145,10 +145,10 @@ impl Expr {
                     Expr::Pi(x, at, rt) => {
                         let ta = a.typeck(r)?;
                         let string = format!("Argument type {} != {}", ta, at);
-                        if !(box ta).beta_eq(at) {
+                        if !(box ta).beta_eq(*at) {
                             return Err(string);
                         }
-                        return Ok(*rt.subst(&x, a));
+                        Ok(*rt.subst(&x, a))
                     }
                     _ => {
                         return Err(format!("'{}' is not a function", f));
@@ -162,7 +162,7 @@ impl Expr {
                 let te = e.typeck(r_new.clone())?;
                 let lt = Type::Pi(s.clone(), t.clone(), box te);
                 lt.typeck(r_new)?;
-                return Ok(lt);
+                Ok(lt)
             }
             Expr::Pi(x, a, b) => {
                 let s = a.typeck_whnf(r.clone())?;
@@ -175,7 +175,7 @@ impl Expr {
                 if !t.is_kind() {
                     return Err("Expected kind at return type".into());
                 }
-                return Ok(t);
+                Ok(t)
             }
             Expr::Kind(k) => match k {
                 Kinds::Star => Ok(Expr::Kind(Kinds::Box)),
@@ -217,8 +217,8 @@ impl Expr {
                 }
             }
             Expr::App(f, a) => Expr::App(f.subst(v, x), a.subst(v, x)),
-            Expr::Lam(i, t, e) => abstr(Expr::Lam, v, x, &i, t, e),
-            Expr::Pi(i, t, e) => abstr(Expr::Pi, v, x, &i, t, e),
+            Expr::Lam(i, t, e) => abstr(Expr::Lam, v, x, &i, *t, e),
+            Expr::Pi(i, t, e) => abstr(Expr::Pi, v, x, &i, *t, e),
             k @ Expr::Kind(_) => k.clone(),
         };
         fn abstr(
@@ -226,7 +226,7 @@ impl Expr {
             v: &Sym,
             x: &Expr,
             i: &Sym,
-            t: BType,
+            t: Type,
             e: BExpr,
         ) -> Expr {
             let fvx = x.free_vars();
@@ -234,7 +234,7 @@ impl Expr {
                 con(i.clone(), t.subst(v, x), e.clone())
             } else if fvx.contains(i) {
                 let vars = {
-                    let mut set = fvx.clone();
+                    let mut set = fvx;
                     set.extend(e.free_vars());
                     set
                 };
@@ -242,7 +242,7 @@ impl Expr {
                 while vars.contains(&i_new) {
                     i_new.push('\'');
                 }
-                let e_new = e.subst_var(&i, i_new.clone());
+                let e_new = e.subst_var(i, i_new.clone());
                 con(i_new, t.subst(v, x), e_new.subst(v, x))
             } else {
                 con(i.clone(), t.subst(v, x), e.subst(v, x))
@@ -271,19 +271,17 @@ impl Expr {
     }
 
     /// Evaluates the expression to Weak Head Normal Form.
-    pub fn whnf(self: Box<Self>) -> BExpr {
+    pub fn whnf(self) -> BExpr {
         return spine(self, &[]);
-        fn spine(e: BExpr, args: &[Expr]) -> BExpr {
-            match (*e, args) {
+        fn spine(e: Expr, args: &[Expr]) -> BExpr {
+            match (e, args) {
                 (Expr::App(f, a), _) => {
                     let mut args_new = args.to_owned();
                     args_new.push(*a);
-                    spine(f, &args_new)
+                    spine(*f, &args_new)
                 }
-                (Expr::Lam(s, _t, e), [xs @ .., x]) => spine(e.subst(&s, x), xs),
-                (pi @ Expr::Pi(..), _) => {
-                    return box pi;
-                }
+                (Expr::Lam(s, _t, e), [xs @ .., x]) => spine(*e.subst(&s, x), xs),
+                (pi @ Expr::Pi(..), _) => box pi,
                 (f, _) => args
                     .to_owned()
                     .into_iter()
@@ -307,21 +305,20 @@ impl Expr {
         }
     }
 
-    pub fn nf(self: Box<Self>) -> BExpr {
+    pub fn nf(self) -> BExpr {
         return spine(self, &[]);
-        fn spine(e: BExpr, args: &[Expr]) -> BExpr {
-            let res = match (*e, args) {
+        fn spine(e: Expr, args: &[Expr]) -> BExpr {
+            match (e, args) {
                 (Expr::App(f, a), _) => {
                     let mut args_new = args.to_owned();
                     args_new.push(*a);
-                    spine(f, &args_new)
+                    spine(*f, &args_new)
                 }
                 (Expr::Lam(s, t, e), []) => box Expr::Lam(s, t.nf(), e.nf()),
-                (Expr::Lam(s, _, e), [xs @ .., x]) => spine(e.subst(&s, x), xs),
+                (Expr::Lam(s, _, e), [xs @ .., x]) => spine(*e.subst(&s, x), xs),
                 (Expr::Pi(s, k, t), _) => app(Expr::Pi(s, k.nf(), t.nf()), args),
                 (f, _) => app(f, args),
-            };
-            res
+            }
         }
 
         fn app(f: Expr, args: &[Expr]) -> Box<Expr> {
@@ -333,11 +330,12 @@ impl Expr {
     }
 
     /// Compares expressions modulo β-conversions.
-    fn beta_eq(self: Box<Self>, e2: BExpr) -> bool {
+    fn beta_eq(self, e2: Expr) -> bool {
         self.nf().alpha_eq(&e2.nf())
     }
 }
 
+#[allow(unused)]
 pub fn app(f: impl Into<BExpr>, a: impl Into<BExpr>) -> BExpr {
     box Expr::App(f.into(), a.into())
 }
@@ -348,10 +346,12 @@ pub fn app_many(f: impl Into<BExpr>, aa: impl IntoIterator<Item = impl Into<BExp
         .fold(f.into(), |acc, e| box Expr::App(acc, e))
 }
 
+#[allow(unused)]
 pub fn lam(s: impl Into<String>, t: impl Into<BType>, e: impl Into<BExpr>) -> BExpr {
     box Expr::Lam(s.into(), t.into(), e.into())
 }
 
+#[allow(unused)]
 fn pi(s: impl Into<String>, t: impl Into<BType>, e: impl Into<BExpr>) -> BExpr {
     box Expr::Pi(s.into(), t.into(), e.into())
 }
