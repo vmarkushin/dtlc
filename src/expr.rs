@@ -2,8 +2,10 @@
 
 #[cfg(test)]
 use quickcheck::quickcheck;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
+use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 
 use crate::ensure;
@@ -49,8 +51,12 @@ impl Env {
                 }
                 self.defs.insert(name, body);
             }
-            Item::Data { name, cons } => {
-                self.add_type(name, Kinds::Star.into());
+            Item::Data { name, ty, cons } => {
+                if let Some(ty) = ty {
+                    self.add_type(name, ty);
+                } else {
+                    self.add_type(name, Kinds::Star.into());
+                }
                 for (con_name, con) in cons {
                     self.add_type(con_name, con);
                 }
@@ -106,6 +112,23 @@ pub enum Expr {
     Lam(Sym, BType, BExpr),
     Pi(Sym, BType, BType),
     Kind(Kinds),
+}
+
+impl Expr {
+    pub(crate) fn ensure_well_formed_type(&self, env: Env) -> Result<()> {
+        // data Nat : Bool Bool
+        let norm = self.clone().whnf();
+        norm.typeck(env)?;
+        match norm {
+            Expr::Lam(_, _, _) => {}
+            Expr::Pi(_, _, _) => {}
+            Expr::Kind(_) => {}
+            Expr::App(_, _) => {
+                unreachable!()
+            }
+            _ => Err(todo!()),
+        }
+    }
 }
 
 impl From<Kinds> for Expr {
@@ -174,7 +197,6 @@ impl Expr {
     }
 
     pub fn typeck(&self, r: Env) -> Result<Type> {
-        // dbg!(&self);
         match self {
             Expr::Var(s) => r
                 .get_type(s)
@@ -184,9 +206,9 @@ impl Expr {
                 let tf = f.typeck_whnf(r.clone())?;
                 match tf {
                     Expr::Pi(x, at, rt) => {
-                        let ta = a.typeck(r)?;
+                        let ta = a.typeck(r.clone())?;
                         let at = *at;
-                        if !(box ta.clone()).beta_eq(at.clone()) {
+                        if !(box ta.clone()).beta_eq(at.clone(), &r) {
                             return Err(TCError::WrongArgumentType {
                                 expected: at,
                                 got: ta,
@@ -224,17 +246,17 @@ impl Expr {
         }
     }
 
-    pub fn normalize_in(self, env: &Env) -> Expr {
-        let norm = *(box self).nf();
+    pub fn nf_in(self, env: &Env) -> Expr {
+        let norm = *(box self).nf(env);
         match norm {
             Expr::Var(v) => env
                 .get_item(&v)
-                .map(|e| e.clone().normalize_in(env))
+                .map(|e| e.clone().nf_in(env))
                 .unwrap_or(Expr::Var(v)),
             Expr::App(f, arg) => match *f {
                 Expr::Var(v) => env
                     .get_item(&v)
-                    .map(|e| Expr::App(box e.clone().normalize_in(env), arg.clone()))
+                    .map(|e| Expr::App(box e.clone().nf_in(env), arg.clone()))
                     .unwrap_or(Expr::App(box Expr::Var(v), arg)),
                 _ => Expr::App(f, arg),
             },
@@ -312,23 +334,7 @@ impl Expr {
 
     /// Evaluates the expression to Weak Head Normal Form.
     pub fn whnf(self) -> BExpr {
-        return spine(self, &[]);
-
-        fn spine(e: Expr, args: &[Expr]) -> BExpr {
-            match (e, args) {
-                (Expr::App(f, a), _) => {
-                    let mut args_new = args.to_owned();
-                    args_new.push(*a);
-                    spine(*f, &args_new)
-                }
-                (Expr::Lam(s, _t, e), [xs @ .., x]) => spine(*e.subst(&s, x), xs),
-                (pi @ Expr::Pi(..), _) => box pi,
-                (f, _) => args
-                    .to_owned()
-                    .into_iter()
-                    .fold(box f, |acc, e| box Expr::App(acc, box e)),
-            }
-        }
+        self.normalize(&Default::default(), false, false)
     }
 
     fn free_vars(&self) -> HashSet<Sym> {
@@ -346,44 +352,82 @@ impl Expr {
         }
     }
 
-    pub fn nf(self) -> BExpr {
-        return spine(self, &[]);
+    pub fn nf(self, env: &Env) -> BExpr {
+        self.normalize(env, true, true)
+    }
 
-        fn spine(e: Expr, args: &[Expr]) -> BExpr {
+    pub fn normalize(self, env: &Env, is_deep: bool, is_strict: bool) -> BExpr {
+        return spine(self, env, &[], is_deep, is_strict);
+
+        fn spine(e: Expr, env: &Env, args: &[Expr], is_deep: bool, is_strict: bool) -> BExpr {
             match (e, args) {
-                // Nat O
-                // Nat -> * -> Vector
                 (Expr::App(f, a), _) => {
                     let mut args_new = args.to_owned();
                     args_new.push(*a);
-                    spine(*f, &args_new)
+                    spine(*f, env, &args_new, is_deep, is_strict)
                 }
-                (Expr::Lam(s, t, e), []) => box Expr::Lam(s, t.nf(), e.nf()),
-                (Expr::Lam(s, _, e), [xs @ .., x]) => spine(*e.subst(&s, x), xs),
+                (Expr::Lam(s, t, e), []) => box Expr::Lam(
+                    s,
+                    t.normalize(env, is_deep, is_strict),
+                    if is_deep {
+                        e.normalize(env, is_deep, is_strict)
+                    } else {
+                        e
+                    },
+                ),
+                (Expr::Lam(s, _, e), [xs @ .., x]) => {
+                    let arg = if is_strict {
+                        *x.clone().normalize(env, is_deep, is_strict)
+                    } else {
+                        x.to_owned()
+                    };
+                    let ee = *e.subst(&s, &arg);
+                    let expr = if is_deep {
+                        *ee.normalize(env, is_deep, is_strict)
+                    } else {
+                        ee
+                    };
+                    spine(expr, env, xs, is_deep, is_strict)
+                }
                 (Expr::Pi(s, k, t), _) => {
-                    // let mut xs = args.to_owned();
-                    // xs.reverse();
-                    app(Expr::Pi(s, k.nf(), t.nf()), args)
+                    // TODO: should we reverse args?
+                    app(
+                        Expr::Pi(
+                            s,
+                            k.normalize(env, false, false),
+                            t.normalize(env, false, false),
+                        ),
+                        args,
+                        env,
+                    )
                 }
+                (Expr::Var(v), args) => env
+                    .get_item(&v)
+                    .map(|e| spine(e.clone(), env, args, is_deep, is_strict))
+                    .unwrap_or_else(|| {
+                        let mut xs = args.to_owned();
+                        xs.reverse();
+                        app(Expr::Var(v), &xs, env)
+                    }),
                 (f, _) => {
                     let mut xs = args.to_owned();
                     xs.reverse();
-                    app(f, &xs)
+                    app(f, &xs, env)
                 }
             }
         }
 
-        fn app(f: Expr, args: &[Expr]) -> Box<Expr> {
+        fn app(f: Expr, args: &[Expr], env: &Env) -> Box<Expr> {
             args.to_owned()
                 .into_iter()
-                .map(|x| (box x).nf())
+                .map(|x| (box x).nf(env))
                 .fold(box f, |acc, e| box Expr::App(acc, e))
         }
     }
 
     /// Compares expressions modulo β-conversions.
-    fn beta_eq(self, e2: Expr) -> bool {
-        self.nf().alpha_eq(&e2.nf())
+    fn beta_eq(self, e2: Expr, env: &Env) -> bool {
+        self.nf(env).alpha_eq(&e2.nf(env))
     }
 
     /*
@@ -449,10 +493,11 @@ right: `{:?}`"#,
     #[test]
     fn test_id() {
         use Kinds::*;
+        let env = Default::default();
         let id = lam("a", Star, t! { fun x: a => x });
         assert_eq!(id.typecheck().unwrap(), *t! { forall a : * => x : a => a });
         let zero = t! { fun s: (Nat -> Nat) => fun z: Nat => z };
-        let z = app_many(id, [t! { Nat }, zero, t! { s }, t! { "0" }]).nf();
+        let z = app_many(id, [t! { Nat }, zero, t! { s }, t! { "0" }]).nf(&env);
         assert_eq!(z.to_string(), "0");
     }
 
@@ -464,9 +509,9 @@ right: `{:?}`"#,
 
     fn mul(n: BExpr, m: BExpr) -> BExpr {
         let plus_f = plus(m, nat(0));
-        dbg!(nat_def(t! {
+        nat_def(t! {
             @n nat (@plus_f nat s) {nat_data(0)}
-        }))
+        })
     }
 
     fn nat_data(n: u32) -> BExpr {
@@ -498,42 +543,43 @@ right: `{:?}`"#,
             t!(fun nat:* => (fun s:(forall _:nat, nat) => fun z:nat => s (s (s (s z))))),
         );
 
-        assert_beta_eq(plus(nat(5), nat(7)), nat(12));
+        let e1 = plus(nat(5), nat(7));
+        println!("{}", e1);
+        assert_beta_eq(e1, nat(12));
 
         assert_beta_eq(mul(nat(5), nat(7)), nat(35));
     }
 
     #[quickcheck_macros::quickcheck]
     fn prop(x: u8, y: u8) -> bool {
+        let env = Default::default();
+
         let x = x as u32 % 10;
         let y = y as u32 % 10;
         eprintln!("{} * {}", x, y);
-        mul(nat(x), nat(y)).beta_eq(*nat(x * y))
+        mul(nat(x), nat(y)).beta_eq(*nat(x * y), &env)
     }
-
-    // #[test]
-    // fn test_reduction() {
-    //     let parser = Parser::new(grammar::ExprParser::new(), grammar::ItemParser::new());
-    //     let mut env = expr::Env::new();
-    //
-    //     env.add_item(
-    //         parser
-    //             .parse_item("data Nat | O : Nat | S : Nat -> Nat")
-    //             .unwrap(),
-    //     );
-    //
-    //     env.add_item(
-    //         parser
-    //             .parse_item("data Vector | Vec : Nat -> * -> Vector")
-    //             .unwrap(),
-    //     );
-    //     let replicate = parser
-    //         .parse_expr("(forall a : * , forall x : Nat , Vec x a) Nat O")
-    //         .unwrap();
-    //     let e = app_many("Vec", ["O", "Nat"]);
-    //     e.typeck(env.clone()).unwrap();
-    //     let e = e.normalize_in(&env);
-    //     println!("{}", e);
-    //     println!("{:?}", e);
-    // }
 }
+
+pub(crate) struct Enved<'a, T> {
+    env: &'a Env,
+    inner: T,
+}
+
+pub(crate) struct EnvedMut<'a, T> {
+    env: Cow<'a, Env>,
+    inner: T,
+}
+
+// impl<T> Deref for Enved<T> {
+//     type Target = T;
+//     fn deref(&self) -> &Self::Target {
+//         &self.inner
+//     }
+// }
+//
+// impl<T> DerefMut for Enved<T> {
+//     fn deref_mut(&mut self) -> &mut Self::Target {
+//         &mut self.inner
+//     }
+// }

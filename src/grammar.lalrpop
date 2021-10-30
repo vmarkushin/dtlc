@@ -37,6 +37,10 @@ pub Clause: (Sym, Expr) = {
     "|" <name: Ident> ":" <e: Expr> => (name, e)
 }
 
+DataType: Expr = {
+    ":" <Expr>
+}
+
 pub Item: Item = {
     <name: Ident> "=>" <body: Expr> => {
         Item::Fn { name, ty: None, body }
@@ -44,8 +48,8 @@ pub Item: Item = {
     <name: Ident> ":" <ty: Expr> "=>" <body: Expr> => {
         Item::Fn { name, ty: Some(ty), body }
     },
-    "data" <name: Ident> <cons: Clause*> => {
-        Item::Data { name, cons }
+    "data" <name: Ident> <ty: DataType?> <cons: Clause*> => {
+        Item::Data { name, ty, cons }
     }
 
 }

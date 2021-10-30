@@ -1,6 +1,6 @@
 use crate::{
     ensure,
-    expr::{Env, Expr, Sym, TCError, Type},
+    expr::{Env, Expr, Kinds, Sym, TCError, Type},
 };
 
 #[derive(Debug)]
@@ -12,6 +12,7 @@ pub enum Item {
     },
     Data {
         name: Sym,
+        ty: Option<Type>,
         cons: Vec<(Sym, Type)>,
     },
 }
@@ -43,7 +44,18 @@ impl Item {
                     }
                 }
             }
-            Item::Data { name, cons } => {
+            Item::Data {
+                name,
+                ty: data_ty,
+                cons,
+            } => {
+                match data_ty {
+                    Some(ty) => ty.ensure_well_formed_type(r),
+                    None => {
+                        data_ty.insert(Kinds::Star.into());
+                        Ok(())
+                    }
+                }
                 for (_, ty) in cons {
                     ty.ensure_ret_type_eq(name)?;
                 }

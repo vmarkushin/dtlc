@@ -62,14 +62,12 @@ mod test {
         );
         let e = app_many(t! { Vec }, [t! { O }, t! { Nat }]);
         e.typeck(env.clone()).unwrap();
+        let e = e.nf_in(&env);
+
+        let e = app_many(replicate, ["Nat", "O"]);
+        e.typeck(env.clone()).unwrap();
         let e = e.normalize_in(&env);
         println!("{}", e);
         println!("{:?}", e);
-
-        // let e = app_many(replicate, ["Nat", "O"]);
-        // e.typeck(env.clone()).unwrap();
-        // let e = e.normalize_in(&env);
-        // println!("{}", e);
-        // println!("{:?}", e);
     }
 }
