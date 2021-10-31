@@ -2,8 +2,10 @@ use crate::env::Prog;
 use crate::expr::Expr;
 use crate::grammar::{ExprParser, ItemParser, ProgParser};
 use crate::item::Item;
+use crate::token::Token;
+use logos::Logos;
 
-type ParseError<'a> = lalrpop_util::ParseError<usize, lalrpop_util::lexer::Token<'a>, &'static str>;
+type ParseError<'a> = lalrpop_util::ParseError<usize, Token<'a>, &'static str>;
 
 pub struct Parser {
     expr_parser: ExprParser,
@@ -13,15 +15,24 @@ pub struct Parser {
 
 impl Parser {
     pub(crate) fn parse_item<'a>(&self, input: &'a str) -> Result<Item, ParseError<'a>> {
-        self.item_parser.parse(input)
+        let tokens = Token::lexer(input);
+        self.item_parser
+            .parse(tokens)
+            .map_err(|x| x.map_location(|_| 0))
     }
 
     pub(crate) fn parse_expr<'a>(&self, input: &'a str) -> Result<Expr, ParseError<'a>> {
-        self.expr_parser.parse(input)
+        let tokens = Token::lexer(input);
+        self.expr_parser
+            .parse(tokens)
+            .map_err(|x| x.map_location(|_| 0))
     }
 
     pub(crate) fn parse_prog<'a>(&self, input: &'a str) -> Result<Prog, ParseError<'a>> {
-        self.prog_parser.parse(input)
+        let tokens = Token::lexer(input);
+        self.prog_parser
+            .parse(tokens)
+            .map_err(|x| x.map_location(|_| 0))
     }
 }
 

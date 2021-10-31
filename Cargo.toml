@@ -10,6 +10,7 @@ codespan-reporting = "0.11.1"
 lalrpop-util = { version = "0.19.6", features = ["lexer"] }
 regex = "1"
 rustyline = "9.0.0"
+logos = "0.12.0"
 
 thiserror = "1.0.30"
 eyre = "0.6.5"

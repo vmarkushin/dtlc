@@ -1,15 +1,50 @@
-use crate::expr::{self, Kinds, Expr, Sym, BExpr};
+use crate::expr::{self, Expr, Sym, BExpr};
 use crate::item::{self, Item};
+use crate::token::{Token};
 
-grammar;
+grammar<'input>;
 
-Ident: Sym = <s:r"[a-zA-Z][a-zA-Z0-9]*"> => Sym::from(s);
+Ident: Sym = <s:"ident"> => Sym::from(s);
+
+extern {
+    enum Token<'input> {
+        "ident" => Token::Ident(<&'input str>),
+        "universe" => Token::Universe(<&'input str>),
+        "forall" => Token::Pi,
+        "exists" => Token::Sigma,
+        "data" => Token::Data,
+        "codata" => Token::Codata,
+
+        "@" => Token::At,
+        ":" => Token::Colon,
+        "," => Token::Comma,
+        "." => Token::Dot,
+        "=>" => Token::DArrow,
+        "lam" => Token::Lam,
+        "let" => Token::Let,
+        "|" => Token::Pipe,
+        "->" => Token::RArrow,
+
+        "{" => Token::LBrace,
+        "[" => Token::LBracket,
+        "(" => Token::LParen,
+
+        "}" => Token::RBrace,
+        "]" => Token::RBracket,
+        ")" => Token::RParen,
+    }
+}
 
 AtomExpr: Expr = {
-    "*" => Kinds::Star.into(),
-    <var: Ident> => {
-        Expr::Var(var)
+    <uni: "universe"> => {
+        let level = if uni.len() > 4 {
+            uni[4..].parse::<u32>().expect("the number is always valid, because we used regex [0-9]+; qed")
+        } else {
+            0
+        };
+        Expr::Universe(level)
     },
+    <var: Ident> => Expr::Var(var),
     "(" <Expr> ")",
 };
 

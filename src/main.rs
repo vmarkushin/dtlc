@@ -39,7 +39,7 @@ mod test {
 
     #[test]
     fn test_parser() {
-        assert!(grammar::ExprParser::new().parse("x").is_ok());
+        assert!(Parser::default().parse_expr("x").is_ok());
     }
 
     #[test]

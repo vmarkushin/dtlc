@@ -43,27 +43,12 @@ pub enum TCError {
 type Result<T, E = TCError> = std::result::Result<T, E>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Kinds {
-    Star,
-    Box,
-}
-
-impl Display for Kinds {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Kinds::Star => f.write_str("*"),
-            Kinds::Box => f.write_str("[]"),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr {
     Var(Sym),
     App(BExpr, BExpr),
     Lam(Sym, BType, BExpr),
     Pi(Sym, BType, BType),
-    Kind(Kinds),
+    Universe(u32),
 }
 
 impl Expr {
@@ -91,21 +76,9 @@ impl Expr {
     }
 }
 
-impl From<Kinds> for Expr {
-    fn from(k: Kinds) -> Self {
-        Self::Kind(k)
-    }
-}
-
-impl From<Kinds> for BExpr {
-    fn from(k: Kinds) -> Self {
-        box Expr::Kind(k)
-    }
-}
-
 impl Expr {
     pub fn is_kind(&self) -> bool {
-        matches!(self, Expr::Kind(_))
+        matches!(self, Expr::Universe(_))
     }
 }
 
@@ -122,7 +95,7 @@ impl Display for Expr {
             }
             Expr::Lam(i, t, b) => f.write_str(&format!("(λ {}:{}. {})", i, t, b)),
             Expr::Pi(i, k, t) => f.write_str(&format!("(Π {}:{}, {})", i, k, t)),
-            Expr::Kind(k) => f.write_str(&format!("{}", k)),
+            Expr::Universe(k) => f.write_str(&format!("Type{}", k)),
         }
     }
 }
@@ -219,8 +192,7 @@ impl Expr {
                 }
                 Ok(t)
             }
-            Expr::Kind(Kinds::Star) => Ok(Expr::Kind(Kinds::Box)),
-            Expr::Kind(Kinds::Box) => Err(TCError::KindTooHigh),
+            Expr::Universe(n) => Ok(Expr::Universe(n + 1)),
         }
     }
 
@@ -241,7 +213,7 @@ impl Expr {
             Expr::App(f, a) => Expr::App(f.subst(v, x), a.subst(v, x)),
             Expr::Lam(i, t, e) => abstr(Expr::Lam, v, x, &i, *t, e),
             Expr::Pi(i, t, e) => abstr(Expr::Pi, v, x, &i, *t, e),
-            k @ Expr::Kind(_) => k.clone(),
+            k @ Expr::Universe(_) => k.clone(),
         };
         fn abstr(
             con: fn(Sym, BExpr, BExpr) -> Expr,
@@ -287,7 +259,7 @@ impl Expr {
                 abstr(t1, t2, e1, *e2.clone(), s1, s2)
             }
             (Expr::Pi(s1, t1, e1), Expr::Pi(s2, t2, e2)) => abstr(t1, t2, e1, *e2.clone(), s1, s2),
-            (Expr::Kind(k1), Expr::Kind(k2)) => k1 == k2,
+            (Expr::Universe(k1), Expr::Universe(k2)) => k1 == k2,
             _ => false,
         }
     }
@@ -312,7 +284,7 @@ impl Expr {
             Expr::App(f, a) => f.free_vars().union(&a.free_vars()).cloned().collect(),
             Expr::Lam(i, t, e) => abstr(i, t, e),
             Expr::Pi(i, k, t) => abstr(i, k, t),
-            Expr::Kind(_) => Default::default(),
+            Expr::Universe(_) => Default::default(),
         }
     }
 
@@ -458,10 +430,12 @@ right: `{:?}`"#,
 
     #[test]
     fn test_id() {
-        use Kinds::*;
         let env = Default::default();
-        let id = lam("a", Star, t! { lam x: a => x });
-        assert_eq!(id.typecheck().unwrap(), *t! { forall a : * => x : a => a });
+        let id = lam("a", Expr::Universe(0), t! { lam x: a => x });
+        assert_eq!(
+            id.typecheck().unwrap(),
+            *t! { forall a : Type => x : a => a }
+        );
         let zero = t! { lam s: (Nat -> Nat) => lam z: Nat => z };
         let z = app_many(id, [t! { Nat }, zero, t! { s }, t! { "0" }]).nf(&env);
         assert_eq!(z.to_string(), "0");

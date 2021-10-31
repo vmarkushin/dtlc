@@ -1,7 +1,7 @@
 use crate::{
     ensure,
     env::Env,
-    expr::{Expr, Kinds, Sym, TCError, Type},
+    expr::{Expr, Sym, TCError, Type},
 };
 
 #[derive(Debug)]
@@ -52,7 +52,7 @@ impl Item {
                         let _ = ty.ensure_well_formed_type(r.clone())?;
                     }
                     None => {
-                        let _ = data_ty.insert(Kinds::Star.into());
+                        let _ = data_ty.insert(Expr::Universe(0));
                     }
                 }
                 for (_, ty) in cons {

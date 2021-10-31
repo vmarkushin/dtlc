@@ -1,4 +1,4 @@
-use crate::expr::{BExpr, Expr, Kinds, Sym, Type};
+use crate::expr::{BExpr, Expr, Sym, Type};
 use crate::item::Item;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -48,7 +48,7 @@ impl Env {
                 let ty = if let Some(ty) = ty {
                     ty
                 } else {
-                    Kinds::Star.into()
+                    Expr::Universe(0)
                 };
                 self.add_type(name, ty.clone());
                 for (con_name, con) in cons {
