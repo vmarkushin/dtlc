@@ -58,7 +58,7 @@ pub fn repl(prompt: &str, mut f: impl FnMut(&'static str) -> Result<()>) {
     rl.save_history("history.txt").unwrap();
 }
 
-pub fn run_repl(parser: &Parser, env: &mut expr::Env, input: &'static str) -> Result<()> {
+pub fn run_repl(parser: &Parser, env: &mut crate::env::Env, input: &'static str) -> Result<()> {
     if let Some(input) = input.strip_prefix(":let ") {
         let mut item = parser
             .parse_item(input)
@@ -66,6 +66,15 @@ pub fn run_repl(parser: &Parser, env: &mut expr::Env, input: &'static str) -> Re
         item.infer_or_check_type_in(env.clone())
             .wrap_err("Failed to typecheck expression")?;
         env.add_item(item);
+        return Ok(());
+    } else if let Some(input) = input.strip_prefix(":t ") {
+        let expr = parser
+            .parse_expr(input)
+            .wrap_err("Failed to parse expression")?;
+        let t = expr
+            .typeck(env.clone())
+            .wrap_err("Failed to typecheck expression")?;
+        println!("{}", t);
         return Ok(());
     }
 
@@ -75,6 +84,6 @@ pub fn run_repl(parser: &Parser, env: &mut expr::Env, input: &'static str) -> Re
     println!("in: {}", &expr);
     expr.typeck(env.clone())
         .wrap_err("Failed to typecheck expression")?;
-    println!("{}", expr.normalize_in(env));
+    println!("{}", expr.nf(env));
     Ok(())
 }

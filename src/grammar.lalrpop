@@ -1,4 +1,4 @@
-use crate::expr::{self, Kinds, Expr, Sym};
+use crate::expr::{self, Kinds, Expr, Sym, BExpr};
 use crate::item::{self, Item};
 
 grammar;
@@ -23,33 +23,51 @@ AppExpr : Expr = {
     },
 }
 
+ForallParam : Vec<(Sym, BExpr)> = {
+    "(" <idents: Ident+> ":" <ty : Expr> ")" => idents.into_iter().map(|ident| (ident, box ty.clone())).collect()
+}
+
+ForallParams : Vec<(Sym, BExpr)> = {
+    <ident: Ident> ":" <ty : Expr> => vec![(ident, box ty)],
+    <ForallParam+> => <>.into_iter().flatten().collect()
+}
+
 pub Expr: Expr = {
-    "fun" <ident: Ident> ":" <ty: Expr> "=>" <body: Expr> => {
-        Expr::Lam(ident, box ty, box body)
+    "lam" <params: ForallParams> "=>" <body: Expr> => {
+        Expr::lam_many(params, box body)
     },
-    "forall" <ident: Ident> ":" <ty: Expr> "," <body: Expr> => {
-        Expr::Pi(ident, box ty, box body)
+    "forall" <params: ForallParams> "," <body: Expr> => {
+        Expr::pi_many(params, box body)
     },
     AppExpr,
 };
 
-pub Clause: (Sym, Expr) = {
-    "|" <name: Ident> ":" <e: Expr> => (name, e)
+pub Clause: (Sym, Option<Expr>) = {
+    "|" <name: Ident> ":" <e: Expr> => (name, Some(e)),
+    "|" <name: Ident> => (name, None)
 }
 
 DataType: Expr = {
     ":" <Expr>
 }
 
+TypeArg: (Option<Sym>, Expr) = {
+    "(" <name: Ident> ":" <e: Expr> ")" => (Some(name), e),
+    <AtomExpr> => (None, <>),
+}
+
 pub Item: Item = {
-    <name: Ident> "=>" <body: Expr> => {
+    "let" <name: Ident> "=>" <body: Expr> => {
         Item::Fn { name, ty: None, body }
     },
-    <name: Ident> ":" <ty: Expr> "=>" <body: Expr> => {
+    "let" <name: Ident> ":" <ty: Expr> "=>" <body: Expr> => {
         Item::Fn { name, ty: Some(ty), body }
     },
-    "data" <name: Ident> <ty: DataType?> <cons: Clause*> => {
-        Item::Data { name, ty, cons }
-    }
+    "data" <name: Ident> <ty_args: TypeArg*> <ty: DataType?> <cons: Clause*> => {
+       Item::Data { name, ty_args, ty, cons }
+    },
+}
 
+pub Prog : Vec<Item> = {
+    <Item*>
 }

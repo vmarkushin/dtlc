@@ -1,5 +1,6 @@
 #![allow(clippy::ptr_arg)]
 
+use crate::env::{Env, Enved, EnvedMut};
 #[cfg(test)]
 use quickcheck::quickcheck;
 use std::borrow::Cow;
@@ -15,55 +16,6 @@ pub type Sym = String;
 pub type BExpr = Box<Expr>;
 pub type Type = Expr;
 pub type BType = Box<Type>;
-
-#[derive(Clone, Default, Debug)]
-pub struct Env {
-    types: HashMap<Sym, Type>,
-    defs: HashMap<Sym, Expr>,
-}
-
-impl Env {
-    pub(crate) fn get_item(&self, sym: &Sym) -> Option<&Expr> {
-        self.defs.get(sym)
-    }
-}
-
-impl Env {
-    pub(crate) fn get_type(&self, p0: &Sym) -> Option<&Type> {
-        self.types.get(p0)
-    }
-}
-
-impl Env {
-    pub fn new() -> Self {
-        Env::default()
-    }
-
-    pub fn add_type(&mut self, sym: Sym, ty: Type) {
-        self.types.insert(sym, ty);
-    }
-
-    pub fn add_item(&mut self, item: Item) {
-        match item {
-            Item::Fn { name, ty, body } => {
-                if let Some(ty) = ty {
-                    self.add_type(name.clone(), ty);
-                }
-                self.defs.insert(name, body);
-            }
-            Item::Data { name, ty, cons } => {
-                if let Some(ty) = ty {
-                    self.add_type(name, ty);
-                } else {
-                    self.add_type(name, Kinds::Star.into());
-                }
-                for (con_name, con) in cons {
-                    self.add_type(con_name, con);
-                }
-            }
-        }
-    }
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum TCError {
@@ -115,19 +67,27 @@ pub enum Expr {
 }
 
 impl Expr {
-    pub(crate) fn ensure_well_formed_type(&self, env: Env) -> Result<()> {
-        // data Nat : Bool Bool
-        let norm = self.clone().whnf();
-        norm.typeck(env)?;
-        match norm {
-            Expr::Lam(_, _, _) => {}
-            Expr::Pi(_, _, _) => {}
-            Expr::Kind(_) => {}
-            Expr::App(_, _) => {
-                unreachable!()
-            }
-            _ => Err(todo!()),
-        }
+    pub(crate) fn ensure_well_formed_type(&self, env: Env) -> Result<Type> {
+        let norm = self.clone().whnf_in(&env);
+        let t = norm.typeck(env)?;
+        ensure!(t.is_kind(), TCError::ExpectedKind(t));
+        Ok(t)
+    }
+
+    pub fn pi(param: Sym, param_ty: impl Into<BType>, ret_ty: impl Into<BType>) -> Self {
+        Self::Pi(param, param_ty.into(), ret_ty.into())
+    }
+
+    pub fn pi_many(params: impl IntoIterator<Item = (Sym, BType)>, ret_ty: BType) -> Self {
+        *params
+            .into_iter()
+            .fold(ret_ty, |acc, (s, t)| box Expr::Pi(s, t, acc))
+    }
+
+    pub fn lam_many(params: impl IntoIterator<Item = (Sym, BType)>, body: BExpr) -> Self {
+        *params
+            .into_iter()
+            .fold(body, |acc, (s, t)| box Expr::Lam(s, t, acc))
     }
 }
 
@@ -184,6 +144,24 @@ impl FromStr for BExpr {
         Ok(box Expr::Var(s))
     }
 }
+
+// impl EnvedMut<Expr> {
+
+// }
+
+// impl Expr {
+//     pub fn with_env(self, env: &Env) -> Enved<Self> {
+//         Enved::new(self, env)
+//     }
+//
+//     pub fn with_env_mut(self, env: &Env) -> EnvedMut<Self> {
+//         EnvedMut::new(self, env.into())
+//     }
+//
+//     fn typeck_whnf(&self, r: Env) -> Result<Type> {
+//         Ok(*(box self.typeck(r.clone())?).whnf_in(&r))
+//     }
+// }
 
 impl Expr {
     fn typeck_whnf(&self, r: Env) -> Result<Type> {
@@ -243,24 +221,6 @@ impl Expr {
             }
             Expr::Kind(Kinds::Star) => Ok(Expr::Kind(Kinds::Box)),
             Expr::Kind(Kinds::Box) => Err(TCError::KindTooHigh),
-        }
-    }
-
-    pub fn nf_in(self, env: &Env) -> Expr {
-        let norm = *(box self).nf(env);
-        match norm {
-            Expr::Var(v) => env
-                .get_item(&v)
-                .map(|e| e.clone().nf_in(env))
-                .unwrap_or(Expr::Var(v)),
-            Expr::App(f, arg) => match *f {
-                Expr::Var(v) => env
-                    .get_item(&v)
-                    .map(|e| Expr::App(box e.clone().nf_in(env), arg.clone()))
-                    .unwrap_or(Expr::App(box Expr::Var(v), arg)),
-                _ => Expr::App(f, arg),
-            },
-            x => x,
         }
     }
 
@@ -334,7 +294,11 @@ impl Expr {
 
     /// Evaluates the expression to Weak Head Normal Form.
     pub fn whnf(self) -> BExpr {
-        self.normalize(&Default::default(), false, false)
+        self.whnf_in(&Default::default())
+    }
+
+    pub fn whnf_in(self, r: &Env) -> BExpr {
+        self.normalize(r, false, false)
     }
 
     fn free_vars(&self) -> HashSet<Sym> {
@@ -430,15 +394,17 @@ impl Expr {
         self.nf(env).alpha_eq(&e2.nf(env))
     }
 
-    /*
-    data Vect
-     */
-    /// Example: `ensure_ret_type_eq(A -> B -> app (app Vec Nat) Nat), (fun a b : * => Vec a b)) == Ok
-    pub fn ensure_ret_type_eq(&self, ty_name: &Sym) -> Result<()> {
-        let norm = *self.clone().whnf();
+    /// Example: `ensure_ret_type_eq(A -> B -> app (app Vec Nat) Nat), (lam a b : * => Vec a b)) == Ok
+    pub fn ensure_ret_type_eq(
+        &self,
+        ty_name: &Sym,
+        ty_args: &Vec<(Option<Sym>, Type)>,
+        env: &Env,
+    ) -> Result<()> {
+        let norm = *self.clone().whnf_in(env);
         match norm {
             Expr::Var(v) if v == *ty_name => Ok(()),
-            Expr::Pi(_, _, b) | Expr::Lam(_, _, b) => b.ensure_ret_type_eq(ty_name),
+            Expr::Pi(_, _, b) | Expr::Lam(_, _, b) => b.ensure_ret_type_eq(ty_name, ty_args, env),
             e => Err(TCError::ExpectedVarLamPi(e)),
         }
     }
@@ -476,9 +442,9 @@ mod tests {
     use crate::{expr, t};
 
     #[track_caller]
-    pub fn assert_beta_eq(e1: BExpr, e2: BExpr) {
-        let nf1 = e1.nf();
-        let nf2 = e2.nf();
+    pub fn assert_beta_eq(e1: BExpr, e2: BExpr, env: &Env) {
+        let nf1 = e1.nf(env);
+        let nf2 = e2.nf(env);
         let eq = nf1.alpha_eq(&nf2);
         if !eq {
             panic!(
@@ -494,16 +460,16 @@ right: `{:?}`"#,
     fn test_id() {
         use Kinds::*;
         let env = Default::default();
-        let id = lam("a", Star, t! { fun x: a => x });
+        let id = lam("a", Star, t! { lam x: a => x });
         assert_eq!(id.typecheck().unwrap(), *t! { forall a : * => x : a => a });
-        let zero = t! { fun s: (Nat -> Nat) => fun z: Nat => z };
+        let zero = t! { lam s: (Nat -> Nat) => lam z: Nat => z };
         let z = app_many(id, [t! { Nat }, zero, t! { s }, t! { "0" }]).nf(&env);
         assert_eq!(z.to_string(), "0");
     }
 
     fn nat_def(val: BExpr) -> BExpr {
         t! {
-            fun nat: * => fun s: (nat -> nat) => fun z: nat => @val
+            lam nat: * => lam s: (nat -> nat) => lam z: nat => @val
         }
     }
 
@@ -534,20 +500,23 @@ right: `{:?}`"#,
     #[test]
     fn test_nat() {
         let n = nat(4);
+        let env = Env::default();
         assert_beta_eq(
             box n.typecheck().unwrap(),
             t!(forall t : *, (t -> t) -> (t -> t)),
+            &env,
         );
         assert_beta_eq(
             n,
-            t!(fun nat:* => (fun s:(forall _:nat, nat) => fun z:nat => s (s (s (s z))))),
+            t!(lam nat:* => (lam s:(forall _:nat, nat) => lam z:nat => s (s (s (s z))))),
+            &env,
         );
 
         let e1 = plus(nat(5), nat(7));
         println!("{}", e1);
-        assert_beta_eq(e1, nat(12));
+        assert_beta_eq(e1, nat(12), &env);
 
-        assert_beta_eq(mul(nat(5), nat(7)), nat(35));
+        assert_beta_eq(mul(nat(5), nat(7)), nat(35), &env);
     }
 
     #[quickcheck_macros::quickcheck]
@@ -559,27 +528,10 @@ right: `{:?}`"#,
         eprintln!("{} * {}", x, y);
         mul(nat(x), nat(y)).beta_eq(*nat(x * y), &env)
     }
-}
 
-pub(crate) struct Enved<'a, T> {
-    env: &'a Env,
-    inner: T,
+    #[test]
+    fn test_type_check() {
+        let parser = Parser::default();
+        assert!(parser.parse_expr("x").unwrap().typecheck().is_err());
+    }
 }
-
-pub(crate) struct EnvedMut<'a, T> {
-    env: Cow<'a, Env>,
-    inner: T,
-}
-
-// impl<T> Deref for Enved<T> {
-//     type Target = T;
-//     fn deref(&self) -> &Self::Target {
-//         &self.inner
-//     }
-// }
-//
-// impl<T> DerefMut for Enved<T> {
-//     fn deref_mut(&mut self) -> &mut Self::Target {
-//         &mut self.inner
-//     }
-// }
