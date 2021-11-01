@@ -1,5 +1,5 @@
-use crate::expr::{arrow, BExpr, Expr, Sym, Type};
-use crate::item::{params_to_app, params_to_pi, Item};
+use crate::decl::{merge_pis, params_to_app, params_to_pi, Decl};
+use crate::term::{arrow, BTerm, Sym, Term, Type};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -32,17 +32,17 @@ pub struct EnvedMut<'a, T> {
 #[derive(Clone, Default, Debug)]
 pub struct Env {
     types: HashMap<Sym, Type>,
-    defs: HashMap<Sym, Expr>,
+    defs: HashMap<Sym, Term>,
 }
 
 impl Env {
-    pub(crate) fn get_item(&self, sym: &Sym) -> Option<&Expr> {
+    pub(crate) fn get_decl(&self, sym: &Sym) -> Option<&Term> {
         self.defs.get(sym)
     }
 }
 
 impl Env {
-    pub(crate) fn get_type(&self, p0: &Sym) -> Option<&Type> {
+    pub(crate) fn get_type(&self, p0: &str) -> Option<&Type> {
         self.types.get(p0)
     }
 }
@@ -52,19 +52,25 @@ impl Env {
         Env::default()
     }
 
+    pub fn run(&mut self, prog: Prog) -> Term {
+        EnvedMut::from((prog, self)).run()
+    }
+
     pub fn add_type(&mut self, sym: Sym, ty: Type) {
         self.types.insert(sym, ty);
     }
 
-    pub fn add_item(&mut self, item: Item) {
-        match item {
-            Item::Fn { name, ty, body } => {
+    pub fn add_decl(&mut self, decl: Decl) {
+        use crate::dsp;
+
+        match decl {
+            Decl::Fn { name, ty, body } => {
                 if let Some(ty) = ty {
                     self.add_type(name.clone(), ty);
                 }
                 self.defs.insert(name, body);
             }
-            Item::Data {
+            Decl::Data {
                 name,
                 ty,
                 ty_params,
@@ -73,7 +79,7 @@ impl Env {
                 let ty = if let Some(ty) = ty {
                     ty
                 } else {
-                    Expr::Universe(0)
+                    Term::Universe(0)
                 };
                 let params_pi = params_to_pi(ty_params.clone());
                 let data_ty = match params_pi.clone() {
@@ -81,20 +87,22 @@ impl Env {
                     None => ty,
                 };
 
-                let data_ident = name.parse::<Expr>().unwrap();
+                let data_ident = name.parse::<Term>().unwrap();
 
                 self.add_type(name, data_ty);
 
                 for con in cons {
                     let data_app_ty = params_to_app(data_ident.clone(), ty_params.clone());
-                    let con_ty = match params_to_pi(con.params) {
-                        Some(pi) => arrow(pi, data_app_ty),
-                        None => data_app_ty,
+                    let con_ty = if !con.params.is_empty() {
+                        merge_pis(con.params.clone(), data_app_ty)
+                    } else {
+                        data_app_ty
                     };
-                    if let Some(pi) = &params_pi {
-                        todo!("merge pis")
-                        // merge_pis()
-                    }
+                    let con_ty = if !ty_params.is_empty() {
+                        merge_pis(ty_params.clone(), con_ty)
+                    } else {
+                        con_ty
+                    };
                     self.add_type(con.name, con_ty);
                 }
             }
@@ -103,19 +111,19 @@ impl Env {
 }
 
 impl<'a> EnvedMut<'a, Prog> {
-    pub fn run(self) -> Expr {
-        for mut item in self.inner {
-            item.infer_or_check_type_in(&mut Cow::Borrowed(self.env))
+    pub fn run(self) -> Term {
+        for mut decl in self.inner {
+            decl.infer_or_check_type_in(&mut Cow::Borrowed(self.env))
                 .unwrap();
-            self.env.add_item(item);
+            self.env.add_decl(decl);
         }
         let main = self
             .env
-            .get_item(&"main".to_owned())
+            .get_decl(&"main".to_owned())
             .expect("function 'main' not found");
         main.typeck(&mut Cow::Borrowed(self.env)).unwrap();
         Enved::from((main.clone(), &*self.env)).nf()
     }
 }
 
-pub type Prog = Vec<Item>;
+pub type Prog = Vec<Decl>;

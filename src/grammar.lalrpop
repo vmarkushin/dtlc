@@ -1,5 +1,5 @@
-use crate::expr::{self, Expr, Sym, BExpr, Param};
-use crate::item::{self, Item, Constructor};
+use crate::term::{self, Term, Sym, BTerm, Param};
+use crate::decl::{self, Decl, Constructor};
 use crate::token::{Token};
 
 grammar<'input>;
@@ -36,7 +36,7 @@ extern {
     }
 }
 
-AtomExpr: Expr = {
+AtomExpr: Term = {
     <uni: "universe"> => {
         let uni_lvl = &uni[4..]; // Skip "Type" prefix
         let level = if !uni_lvl.is_empty() {
@@ -44,43 +44,43 @@ AtomExpr: Expr = {
         } else {
             0
         };
-        Expr::Universe(level)
+        Term::Universe(level)
     },
-    <var: Ident> => Expr::Var(var),
-    "(" <Expr> ")",
+    <var: Ident> => Term::Var(var),
+    "(" <Term> ")",
 };
 
-AppExpr : Expr = {
-    <l: AtomExpr> "->" <r: Expr> => {
-        expr::arrow(l, r)
+AppExpr : Term = {
+    <l: AtomExpr> "->" <r: Term> => {
+        term::arrow(l, r)
     },
     AtomExpr,
     <f: AtomExpr> <args: AtomExpr+> => {
-        expr::app_many(f, args)
+        term::app_many(f, args)
     },
 }
 
-ForallParam : Vec<(Sym, BExpr)> = {
-    "(" <idents: Ident+> ":" <ty : Expr> ")" => idents.into_iter().map(|ident| (ident, box ty.clone())).collect()
+ForallParam : Vec<(Sym, BTerm)> = {
+    "(" <idents: Ident+> ":" <ty : Term> ")" => idents.into_iter().map(|ident| (ident, box ty.clone())).collect()
 }
 
-ForallParams : Vec<(Sym, BExpr)> = {
-    <ident: Ident> ":" <ty : Expr> => vec![(ident, box ty)],
+ForallParams : Vec<(Sym, BTerm)> = {
+    <ident: Ident> ":" <ty : Term> => vec![(ident, box ty)],
     <ForallParam+> => <>.into_iter().flatten().collect()
 }
 
-pub Expr: Expr = {
-    "lam" <params: ForallParams> "=>" <body: Expr> => {
-        Expr::lam_many(params, box body)
+pub Term: Term = {
+    "lam" <params: ForallParams> "=>" <body: Term> => {
+        Term::lam_many(params, box body)
     },
-    "forall" <params: ForallParams> "," <body: Expr> => {
-        Expr::pi_many(params, box body)
+    "forall" <params: ForallParams> "," <body: Term> => {
+        Term::pi_many(params, box body)
     },
     AppExpr,
 };
 
 TypeParam: Param = {
-    "(" <name: Ident> ":" <e: Expr> ")" => Param::new(Some(name), e),
+    "(" <name: Ident> ":" <e: Term> ")" => Param::new(Some(name), e),
     <AtomExpr> => Param::new(None, <>),
 }
 
@@ -88,23 +88,23 @@ Clause: Constructor = {
     "|" <name: Ident> <params: TypeParam*> => Constructor::new(name, params),
 }
 
-DataType: Expr = {
-    ":" <Expr>
+DataType: Term = {
+    ":" <Term>
 }
 
 
-pub Item: Item = {
-    "let" <name: Ident> ":=" <body: Expr> => {
-        Item::Fn { name, ty: None, body }
+pub Decl: Decl = {
+    "let" <name: Ident> ":=" <body: Term> => {
+        Decl::Fn { name, ty: None, body }
     },
-    "let" <name: Ident> ":" <ty: Expr> "=>" <body: Expr> => {
-        Item::Fn { name, ty: Some(ty), body }
+    "let" <name: Ident> ":" <ty: Term> "=>" <body: Term> => {
+        Decl::Fn { name, ty: Some(ty), body }
     },
     "data" <name: Ident> <ty_params: TypeParam*> <ty: DataType?> <cons: Clause*> => {
-       Item::Data { name, ty_params, ty, cons }
+       Decl::Data { name, ty_params, ty, cons }
     },
 }
 
-pub Prog : Vec<Item> = {
-    <Item*>
+pub Prog : Vec<Decl> = {
+    <Decl*>
 }

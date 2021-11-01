@@ -18,12 +18,12 @@ mod grammar {
     lalrpop_mod!(grammar);
 }
 
+pub mod decl;
 mod env;
-pub mod expr;
-pub mod item;
 pub mod macros;
 pub mod parser;
 mod repl;
+pub mod term;
 mod token;
 
 fn main() {
@@ -35,16 +35,16 @@ mod test {
     use super::*;
     use crate::{
         env::{Env, Enved, EnvedMut},
-        expr::{app_many, Expr},
         parser::Parser,
+        term::{app_many, Term},
     };
 
     #[test]
     fn test_parser() {
-        assert!(Parser::default().parse_expr("x").is_ok());
+        assert!(Parser::default().parse_term("x").is_ok());
     }
 
-    fn run_prog(s: impl AsRef<str>) -> Expr {
+    fn run_prog(s: impl AsRef<str>) -> Term {
         let prog = Parser::default().parse_prog(s.as_ref()).unwrap();
         EnvedMut::from((prog, &mut Default::default())).run()
     }

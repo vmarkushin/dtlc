@@ -11,7 +11,7 @@ pub enum Token<'input> {
     #[token("exists")]
     #[token("Σ")]
     Sigma,
-    #[regex("[a-zA-Z][a-zA-Z0-9]*")]
+    #[regex("[a-zA-Z_][a-zA-Z0-9_]*")]
     Ident(&'input str),
     #[token("data")]
     Data,
