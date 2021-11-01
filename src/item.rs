@@ -1,9 +1,11 @@
 use crate::{
-    ensure,
     env::Env,
     expr::{Expr, Sym, TCError, Type},
 };
-use std::fmt::{Debug, Display, Formatter};
+use std::{
+    borrow::Cow,
+    fmt::{Debug, Display, Formatter},
+};
 
 #[derive(Debug)]
 pub enum Item {
@@ -21,22 +23,16 @@ pub enum Item {
 }
 
 impl Item {
-    #[must_use]
-    pub fn infer_or_check_type_in(&mut self, r: Env) -> Result<(), TCError> {
+    pub fn infer_or_check_type_in(&mut self, r: &mut Cow<Env>) -> Result<(), TCError> {
         match self {
             Item::Fn { ty, body, .. } => {
                 let got_ty = body.typeck(r)?;
                 match ty {
-                    Some(ty) => {
-                        ensure!(
-                            *ty == got_ty,
-                            TCError::WrongType {
-                                expected: ty.clone(),
-                                got: got_ty
-                            },
-                        );
-                        Ok(())
-                    }
+                    Some(ty) if *ty == got_ty => Err(TCError::WrongType {
+                        expected: ty.clone(),
+                        got: got_ty,
+                    }),
+                    Some(_) => Ok(()),
                     None => {
                         *ty = Some(got_ty);
                         Ok(())
@@ -51,11 +47,9 @@ impl Item {
             } => {
                 match data_ty {
                     Some(ty) => {
-                        let _ = ty.ensure_well_formed_type(r.clone())?;
+                        ty.ensure_well_formed_type(r)?;
                     }
-                    None => {
-                        let _ = data_ty.insert(Expr::Universe(0));
-                    }
+                    None => *data_ty = Some(Expr::Universe(0)),
                 }
                 for (_, ty) in cons {
                     if let Some(ty) = ty {

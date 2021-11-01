@@ -3,7 +3,6 @@ macro_rules! t {
     ($($it:tt)+) => {
         crate::parser::Parser::default()
             .parse_expr(stringify!($($it)+))
-            .map(std::boxed::Box::new)
             .unwrap()
     };
 }

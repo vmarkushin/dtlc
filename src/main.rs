@@ -1,4 +1,4 @@
-#![feature(box_syntax)]
+#![feature(box_syntax, box_patterns)]
 
 #[allow(
     clippy::needless_lifetimes,
@@ -6,6 +6,8 @@
     clippy::just_underscores_and_digits,
     clippy::clone_on_copy,
     clippy::type_complexity,
+    clippy::unit_arg,
+    clippy::extra_unused_lifetimes,
     dead_code,
     unused_imports
 )]
@@ -24,8 +26,6 @@ pub mod parser;
 mod repl;
 mod token;
 
-use crate::parser::Parser;
-
 fn main() {
     repl::repl("> ", repl::run_repl);
 }
@@ -34,8 +34,9 @@ fn main() {
 mod test {
     use super::*;
     use crate::{
-        env::Env,
-        expr::{app_many, BExpr},
+        env::{Env, Enved, EnvedMut},
+        expr::{app_many, Expr},
+        parser::Parser,
     };
 
     #[test]
@@ -43,8 +44,9 @@ mod test {
         assert!(Parser::default().parse_expr("x").is_ok());
     }
 
-    fn run_prog(s: impl AsRef<str>) -> BExpr {
-        Env::new().run(Parser::default().parse_prog(s.as_ref()).unwrap())
+    fn run_prog(s: impl AsRef<str>) -> Expr {
+        let prog = Parser::default().parse_prog(s.as_ref()).unwrap();
+        EnvedMut::from((prog, &mut Default::default())).run()
     }
 
     #[test]
