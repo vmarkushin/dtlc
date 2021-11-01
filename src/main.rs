@@ -27,44 +27,42 @@ mod token;
 use crate::parser::Parser;
 
 fn main() {
-    let parser = Parser::default();
-    let mut env = crate::env::Env::new();
-    repl::repl("> ", |input| repl::run_repl(&parser, &mut env, input));
+    repl::repl("> ", repl::run_repl);
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::{
+        env::Env,
+        expr::{app_many, BExpr},
+    };
 
     #[test]
     fn test_parser() {
         assert!(Parser::default().parse_expr("x").is_ok());
     }
 
+    fn run_prog(s: impl AsRef<str>) -> BExpr {
+        Env::new().run(Parser::default().parse_prog(s.as_ref()).unwrap())
+    }
+
     #[test]
     #[ignore]
     fn test_uni() {
-        let parser = Parser::default();
-        let mut env = crate::env::Env::new();
-
-        let prog = parser
-            .parse_prog(
-                r#"
+        let e = run_prog(
+            r#"
             data Nat
                 | O : Nat
                 | S : Nat -> Nat
 
-            let replicate => lam A : Type => lam n : Nat => Vec n A
+            let replicate := lam (A : Type) (n : Nat) => Vec n A
 
             data Vector | Vec : Nat -> Type -> Vector
 
-            let main => replicate Nat O
+            let main := replicate Nat O
         "#,
-            )
-            .unwrap();
-
-        let e = env.run(prog);
-        println!("{}", e);
-        println!("{:?}", e);
+        );
+        assert_eq!(e, t! { Vec O Nat })
     }
 }
