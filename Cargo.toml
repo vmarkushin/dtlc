@@ -12,6 +12,7 @@ regex = "1"
 rustyline = "9.0.0"
 logos = "0.12.0"
 derive_more = "0.99.16"
+owo-colors = "3.0.1"
 
 thiserror = "1.0.30"
 eyre = "0.6.5"

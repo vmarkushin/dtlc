@@ -1,10 +1,14 @@
+use std::borrow::Borrow;
 use std::path::PathBuf;
 use std::{borrow::Cow, fmt};
 
 use crate::env::{Env, Enved};
 use crate::parser::Parser;
 
+use crate::token::Token;
 use eyre::{Result, WrapErr};
+use logos::Logos;
+use owo_colors::OwoColorize;
 use rustyline::{
     completion::Completer,
     config,
@@ -51,13 +55,44 @@ impl Validate for Validator {
 }
 
 #[derive(Default)]
+struct SyntaxHighlighter {}
+
+impl rustyline::highlight::Highlighter for SyntaxHighlighter {
+    fn highlight<'l>(&self, line: &'l str, pos: usize) -> Cow<'l, str> {
+        let tokens = Token::lexer(line);
+        let mut copy = line.to_owned();
+        let mut offset = 0;
+        for (tok, span) in tokens.spanned() {
+            let span = (span.start + offset..span.end + offset);
+            let prev = &copy[span.clone()];
+            match tok {
+                Token::Lam => {
+                    let string = format!("{}", prev.red());
+                    offset += string.len() - 3;
+                    copy.replace_range(span, &string)
+                }
+                Token::Let => {
+                    let string = format!("{}", prev.blue());
+                    offset += string.len() - 3;
+                    copy.replace_range(span, &string)
+                }
+                _ => (),
+            };
+        }
+        Cow::Owned(copy)
+    }
+}
+
+#[derive(Default)]
 struct Highlighter {
     brackets: MatchingBracketHighlighter,
+    syntax: SyntaxHighlighter,
 }
 
 impl Highlight for Highlighter {
     fn highlight<'l>(&self, line: &'l str, pos: usize) -> Cow<'l, str> {
-        self.brackets.highlight(line, pos)
+        // let out: Cow<'l, str> = self.brackets.highlight(line, pos);
+        self.syntax.highlight(line, pos)
     }
     fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
         &'s self,
