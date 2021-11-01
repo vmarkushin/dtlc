@@ -49,6 +49,8 @@ pub enum Token<'input> {
     LParen,
     #[token(")")]
     RParen,
+    #[token(":=")]
+    Assignment,
 
     #[error]
     #[regex(r"[ \t\n\f]+", logos::skip)]
@@ -56,30 +58,35 @@ pub enum Token<'input> {
 }
 
 impl<'a> Display for Token<'a> {
+    #[rustfmt::skip]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        use Token::*;
+
         match self {
-            Token::Universe(n) => write!(f, "Type{}", n),
-            Token::Pi => f.write_str("forall"),
-            Token::Sigma => f.write_str("exists"),
-            Token::Ident(s) => f.write_str(s),
-            Token::Data => f.write_str("data"),
-            Token::Codata => f.write_str("codata"),
-            Token::At => f.write_str("@"),
-            Token::Colon => f.write_str(":"),
-            Token::Comma => f.write_str(","),
-            Token::Dot => f.write_str("."),
-            Token::DArrow => f.write_str("=>"),
-            Token::Lam => f.write_str("lam"),
-            Token::Let => f.write_str("let"),
-            Token::Pipe => f.write_str("|"),
-            Token::RArrow => f.write_str("->"),
-            Token::LBrace => f.write_str("{"),
-            Token::RBrace => f.write_str("}"),
-            Token::LBracket => f.write_str("["),
-            Token::RBracket => f.write_str("]"),
-            Token::LParen => f.write_str("("),
-            Token::RParen => f.write_str(")"),
-            Token::Whitespace => f.write_str(" "),
+            Universe(n) => write!(f, "Type{}", n),
+            Ident(s)    => f.write_str(s),
+
+            Pi          => f.write_str("forall"),
+            Sigma       => f.write_str("exists"),
+            Data        => f.write_str("data"),
+            Codata      => f.write_str("codata"),
+            At          => f.write_str("@"),
+            Colon       => f.write_str(":"),
+            Assignment  => f.write_str(":="),
+            Comma       => f.write_str(","),
+            Dot         => f.write_str("."),
+            DArrow      => f.write_str("=>"),
+            Lam         => f.write_str("lam"),
+            Let         => f.write_str("let"),
+            Pipe        => f.write_str("|"),
+            RArrow      => f.write_str("->"),
+            LBrace      => f.write_str("{"),
+            RBrace      => f.write_str("}"),
+            LBracket    => f.write_str("["),
+            RBracket    => f.write_str("]"),
+            LParen      => f.write_str("("),
+            RParen      => f.write_str(")"),
+            Whitespace  => f.write_str(" "),
         }
     }
 }

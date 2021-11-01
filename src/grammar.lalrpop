@@ -20,6 +20,7 @@ extern {
         "," => Token::Comma,
         "." => Token::Dot,
         "=>" => Token::DArrow,
+        ":=" => Token::Assignment,
         "lam" => Token::Lam,
         "let" => Token::Let,
         "|" => Token::Pipe,
@@ -93,7 +94,7 @@ TypeParam: (Option<Sym>, Expr) = {
 }
 
 pub Item: Item = {
-    "let" <name: Ident> "=>" <body: Expr> => {
+    "let" <name: Ident> ":=" <body: Expr> => {
         Item::Fn { name, ty: None, body }
     },
     "let" <name: Ident> ":" <ty: Expr> "=>" <body: Expr> => {
