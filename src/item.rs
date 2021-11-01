@@ -1,11 +1,13 @@
 use crate::expr::{app, arrow, pi, Param};
 use crate::parser::Parser;
 use crate::{
-    ensure,
     env::Env,
     expr::{Expr, Sym, TCError, Type},
 };
-use std::fmt::{Debug, Display, Formatter};
+use std::{
+    borrow::Cow,
+    fmt::{Debug, Display, Formatter},
+};
 
 #[derive(Debug)]
 pub struct Constructor {
@@ -58,22 +60,16 @@ pub fn params_to_app(f: Expr, params: Vec<Param>) -> Type {
 }
 
 impl Item {
-    #[must_use]
-    pub fn infer_or_check_type_in(&mut self, mut r: Env) -> Result<(), TCError> {
+    pub fn infer_or_check_type_in(&mut self, mut r: &mut Cow<Env>) -> Result<(), TCError> {
         match self {
             Item::Fn { ty, body, .. } => {
                 let got_ty = body.typeck(r)?;
                 match ty {
-                    Some(ty) => {
-                        ensure!(
-                            *ty == got_ty,
-                            TCError::WrongType {
-                                expected: ty.clone(),
-                                got: got_ty
-                            },
-                        );
-                        Ok(())
-                    }
+                    Some(ty) if *ty == got_ty => Err(TCError::WrongType {
+                        expected: ty.clone(),
+                        got: got_ty,
+                    }),
+                    Some(_) => Ok(()),
                     None => {
                         *ty = Some(got_ty);
                         Ok(())
@@ -87,7 +83,7 @@ impl Item {
                 cons,
             } => {
                 let ret_ty = match ret_ty {
-                    Some(ty) => ty.ensure_well_formed_type(r.clone())?,
+                    Some(ty) => ty.ensure_well_formed_type(r)?,
                     None => ret_ty.insert(Expr::Universe(0)).clone(),
                 };
 

@@ -2,7 +2,32 @@ use crate::expr::{arrow, BExpr, Expr, Sym, Type};
 use crate::item::{params_to_app, params_to_pi, Item};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::ops::{Deref, DerefMut};
+
+use derive_more::{Deref, DerefMut, From};
+
+#[derive(DerefMut, Deref, From)]
+pub struct Enved<'a, T> {
+    #[deref]
+    #[deref_mut]
+    pub inner: T,
+    pub env: &'a Env,
+}
+
+impl<'a, T: Clone> Clone for Enved<'a, T> {
+    fn clone(&self) -> Self {
+        let inner = self.inner.clone();
+        let env = self.env;
+        Self { inner, env }
+    }
+}
+
+#[derive(DerefMut, Deref, From)]
+pub struct EnvedMut<'a, T> {
+    #[deref]
+    #[deref_mut]
+    pub inner: T,
+    pub env: &'a mut Env,
+}
 
 #[derive(Clone, Default, Debug)]
 pub struct Env {
@@ -75,65 +100,22 @@ impl Env {
             }
         }
     }
+}
 
-    pub fn run(&mut self, prog: Prog) -> BExpr {
-        for mut item in prog {
-            item.infer_or_check_type_in(self.clone()).unwrap();
-            self.add_item(item);
+impl<'a> EnvedMut<'a, Prog> {
+    pub fn run(self) -> Expr {
+        for mut item in self.inner {
+            item.infer_or_check_type_in(&mut Cow::Borrowed(self.env))
+                .unwrap();
+            self.env.add_item(item);
         }
         let main = self
+            .env
             .get_item(&"main".to_owned())
             .expect("function 'main' not found");
-        main.typeck(self.clone()).unwrap();
-        main.clone().nf(self)
+        main.typeck(&mut Cow::Borrowed(self.env)).unwrap();
+        Enved::from((main.clone(), &*self.env)).nf()
     }
 }
 
 pub type Prog = Vec<Item>;
-
-pub(crate) struct Enved<'a, T> {
-    env: &'a Env,
-    inner: T,
-}
-
-impl<'a, T> Enved<'a, T> {
-    pub fn new(env: &'a Env, inner: T) -> Self {
-        Enved { env, inner }
-    }
-}
-
-impl<'a, T> EnvedMut<'a, T> {
-    pub fn new(env: Cow<'a, Env>, inner: T) -> Self {
-        Self { env, inner }
-    }
-}
-
-pub(crate) struct EnvedMut<'a, T> {
-    env: Cow<'a, Env>,
-    inner: T,
-}
-
-impl<T> DerefMut for Enved<'_, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
-
-impl<T> Enved<'_, T> {
-    pub fn into_inner(self) -> T {
-        self.inner
-    }
-}
-
-impl<T> Deref for Enved<'_, T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<T> EnvedMut<'_, T> {
-    pub fn into_inner(self) -> T {
-        self.inner
-    }
-}

@@ -1,23 +1,22 @@
 use std::path::PathBuf;
 use std::{borrow::Cow, fmt};
 
-use crate::env::Env;
+use crate::env::{Env, Enved};
 use crate::parser::Parser;
 
 use eyre::{Result, WrapErr};
-use rustyline::config;
-use rustyline::hint::HistoryHinter;
 use rustyline::{
     completion::Completer,
+    config,
     error::ReadlineError,
     highlight::{Highlighter as Highlight, MatchingBracketHighlighter},
     hint::Hinter as DoHint,
+    hint::HistoryHinter,
     validate::{
         MatchingBracketValidator, ValidationContext, ValidationResult, Validator as Validate,
     },
-    Editor, Helper as Help,
+    ColorMode, CompletionType, Editor, Helper as Help,
 };
-use rustyline::{ColorMode, CompletionType};
 
 struct Report(pub eyre::Report);
 
@@ -94,10 +93,6 @@ struct Helper {
 }
 
 impl Helper {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn typecheck(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
         macro_rules! validate_incomplete {
             ( $e:expr ) => {
@@ -126,7 +121,7 @@ impl Helper {
                 .wrap_err("Failed to parse expression");
             let mut item = validate_incomplete!(res);
             validate_incomplete!(item
-                .infer_or_check_type_in(self.env.clone())
+                .infer_or_check_type_in(&mut Cow::Borrowed(&self.env))
                 .wrap_err("Failed to typecheck expression"));
             return Ok(ValidationResult::Valid(None));
         }
@@ -136,7 +131,7 @@ impl Helper {
                 .parse_expr(input)
                 .wrap_err("Failed to parse expression"));
             let t = validate_incomplete!(expr
-                .typeck(self.env.clone())
+                .typeck(&mut Cow::Borrowed(&self.env))
                 .wrap_err("Failed to typecheck expression"));
             return Ok(ValidationResult::Valid(None));
         }
@@ -146,7 +141,7 @@ impl Helper {
             .parse_expr(input)
             .wrap_err("Failed to parse expression"));
         validate_incomplete!(expr
-            .typeck(self.env.clone())
+            .typeck(&mut Cow::Borrowed(&self.env))
             .wrap_err("Failed to typecheck expression"));
         Ok(ValidationResult::Valid(None))
     }
@@ -247,12 +242,12 @@ pub fn repl(prompt: &str, mut f: impl FnMut(&Parser, &mut Env, &'static str) -> 
     rl.save_history(&history).unwrap();
 }
 
-pub fn run_repl(parser: &Parser, env: &mut crate::env::Env, input: &'static str) -> Result<()> {
+pub fn run_repl(parser: &Parser, env: &mut Env, input: &'static str) -> Result<()> {
     if input.starts_with("let") || input.starts_with("data") {
         let mut item = parser
             .parse_item(input)
             .wrap_err("Failed to parse expression")?;
-        item.infer_or_check_type_in(env.clone())
+        item.infer_or_check_type_in(&mut Cow::Borrowed(env))
             .wrap_err("Failed to typecheck expression")?;
         env.add_item(item);
         return Ok(());
@@ -262,7 +257,7 @@ pub fn run_repl(parser: &Parser, env: &mut crate::env::Env, input: &'static str)
             .parse_expr(input)
             .wrap_err("Failed to parse expression")?;
         let t = expr
-            .typeck(env.clone())
+            .typeck(&mut Cow::Borrowed(env))
             .wrap_err("Failed to typecheck expression")?;
         println!("{}", t);
         return Ok(());
@@ -272,8 +267,8 @@ pub fn run_repl(parser: &Parser, env: &mut crate::env::Env, input: &'static str)
         .parse_expr(input)
         .wrap_err("Failed to parse expression")?;
     println!("in: {}", &expr);
-    expr.typeck(env.clone())
+    expr.typeck(&mut Cow::Borrowed(env))
         .wrap_err("Failed to typecheck expression")?;
-    println!("{}", expr.nf(env));
+    println!("{}", Enved::from((expr, &*env)).nf());
     Ok(())
 }
