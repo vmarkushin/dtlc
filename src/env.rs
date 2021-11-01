@@ -42,7 +42,7 @@ impl Env {
             Item::Data {
                 name,
                 ty,
-                ty_args,
+                ty_params: ty_args,
                 cons,
             } => {
                 let ty = if let Some(ty) = ty {
@@ -63,7 +63,8 @@ impl Env {
     }
 
     pub fn run(&mut self, prog: Prog) -> BExpr {
-        for item in prog {
+        for mut item in prog {
+            item.infer_or_check_type_in(self.clone()).unwrap();
             self.add_item(item);
         }
         let main = self

@@ -35,7 +35,6 @@ fn main() {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::expr::{app, app_many, BExpr};
 
     #[test]
     fn test_parser() {
@@ -43,6 +42,7 @@ mod test {
     }
 
     #[test]
+    #[ignore]
     fn test_uni() {
         let parser = Parser::default();
         let mut env = crate::env::Env::new();
@@ -50,13 +50,13 @@ mod test {
         let prog = parser
             .parse_prog(
                 r#"
-            let replicate => lam A : * => lam n : Nat => Vec n A
-
             data Nat
                 | O : Nat
                 | S : Nat -> Nat
 
-            data Vector | Vec : Nat -> * -> Vector
+            let replicate => lam A : Type => lam n : Nat => Vec n A
+
+            data Vector | Vec : Nat -> Type -> Vector
 
             let main => replicate Nat O
         "#,

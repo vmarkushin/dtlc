@@ -53,12 +53,33 @@ pub enum Token<'input> {
     #[error]
     #[regex(r"[ \t\n\f]+", logos::skip)]
     Whitespace,
-    // #[regex(r"[ \t\n\f]+")]
-    // Error,
 }
 
 impl<'a> Display for Token<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("{:?}", self))
+        match self {
+            Token::Universe(n) => write!(f, "Type{}", n),
+            Token::Pi => f.write_str("forall"),
+            Token::Sigma => f.write_str("exists"),
+            Token::Ident(s) => f.write_str(s),
+            Token::Data => f.write_str("data"),
+            Token::Codata => f.write_str("codata"),
+            Token::At => f.write_str("@"),
+            Token::Colon => f.write_str(":"),
+            Token::Comma => f.write_str(","),
+            Token::Dot => f.write_str("."),
+            Token::DArrow => f.write_str("=>"),
+            Token::Lam => f.write_str("lam"),
+            Token::Let => f.write_str("let"),
+            Token::Pipe => f.write_str("|"),
+            Token::RArrow => f.write_str("->"),
+            Token::LBrace => f.write_str("{"),
+            Token::RBrace => f.write_str("}"),
+            Token::LBracket => f.write_str("["),
+            Token::RBracket => f.write_str("]"),
+            Token::LParen => f.write_str("("),
+            Token::RParen => f.write_str(")"),
+            Token::Whitespace => f.write_str(" "),
+        }
     }
 }

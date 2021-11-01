@@ -1,16 +1,11 @@
 #![allow(clippy::ptr_arg)]
 
-use crate::env::{Env, Enved, EnvedMut};
-#[cfg(test)]
-use quickcheck::quickcheck;
-use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use crate::env::Env;
+use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
-use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 
 use crate::ensure;
-use crate::item::Item;
 
 pub type Sym = String;
 pub type BExpr = Box<Expr>;
@@ -63,15 +58,17 @@ impl Expr {
         Self::Pi(param, param_ty.into(), ret_ty.into())
     }
 
-    pub fn pi_many(params: impl IntoIterator<Item = (Sym, BType)>, ret_ty: BType) -> Self {
+    pub fn pi_many(params: Vec<(Sym, BType)>, ret_ty: BType) -> Self {
         *params
             .into_iter()
+            .rev()
             .fold(ret_ty, |acc, (s, t)| box Expr::Pi(s, t, acc))
     }
 
-    pub fn lam_many(params: impl IntoIterator<Item = (Sym, BType)>, body: BExpr) -> Self {
+    pub fn lam_many(params: Vec<(Sym, BType)>, body: BExpr) -> Self {
         *params
             .into_iter()
+            .rev()
             .fold(body, |acc, (s, t)| box Expr::Lam(s, t, acc))
     }
 }
@@ -87,15 +84,15 @@ impl Display for Expr {
         match self {
             Expr::Var(i) => f.write_str(i),
             Expr::App(ff, a) => {
-                f.write_str(&format!("{} ", ff))?;
+                write!(f, "{} ", ff)?;
                 match a.as_ref() {
-                    app @ Expr::App(_, _) => f.write_str(&format!("({})", app)),
-                    e => f.write_str(&format!("{}", e)),
+                    app @ Expr::App(_, _) => write!(f, "({})", app),
+                    e => write!(f, "{}", e),
                 }
             }
-            Expr::Lam(i, t, b) => f.write_str(&format!("(λ {}:{}. {})", i, t, b)),
-            Expr::Pi(i, k, t) => f.write_str(&format!("(Π {}:{}, {})", i, k, t)),
-            Expr::Universe(k) => f.write_str(&format!("Type{}", k)),
+            Expr::Lam(i, t, b) => write!(f, "(λ {}:{}. {})", i, t, b),
+            Expr::Pi(i, k, t) => write!(f, "(Π {}:{}, {})", i, k, t),
+            Expr::Universe(k) => write!(f, "Type{}", k),
         }
     }
 }
@@ -117,24 +114,6 @@ impl FromStr for BExpr {
         Ok(box Expr::Var(s))
     }
 }
-
-// impl EnvedMut<Expr> {
-
-// }
-
-// impl Expr {
-//     pub fn with_env(self, env: &Env) -> Enved<Self> {
-//         Enved::new(self, env)
-//     }
-//
-//     pub fn with_env_mut(self, env: &Env) -> EnvedMut<Self> {
-//         EnvedMut::new(self, env.into())
-//     }
-//
-//     fn typeck_whnf(&self, r: Env) -> Result<Type> {
-//         Ok(*(box self.typeck(r.clone())?).whnf_in(&r))
-//     }
-// }
 
 impl Expr {
     fn typeck_whnf(&self, r: Env) -> Result<Type> {
@@ -411,7 +390,8 @@ pub fn arrow(f: impl Into<BType>, t: impl Into<BExpr>) -> BExpr {
 mod tests {
     use super::*;
     use crate::parser::Parser;
-    use crate::{expr, t};
+    use crate::t;
+    use quickcheck::quickcheck;
 
     #[track_caller]
     pub fn assert_beta_eq(e1: BExpr, e2: BExpr, env: &Env) {
@@ -429,16 +409,25 @@ right: `{:?}`"#,
     }
 
     #[test]
+    #[ignore]
     fn test_id() {
-        let env = Default::default();
-        let id = lam("a", Expr::Universe(0), t! { lam x: a => x });
-        assert_eq!(
-            id.typecheck().unwrap(),
-            *t! { forall a : Type => x : a => a }
-        );
-        let zero = t! { lam s: (Nat -> Nat) => lam z: Nat => z };
-        let z = app_many(id, [t! { Nat }, zero, t! { s }, t! { "0" }]).nf(&env);
-        assert_eq!(z.to_string(), "0");
+        let mut env = Env::default();
+        env.add_type("Nat".into(), Expr::Universe(0));
+        let parser = Parser::default();
+        let prog = parser
+            .parse_prog(
+                r#"
+        data Nat
+            | O : Nat
+            | S : Nat -> Nat
+        let id => lam (A : Type) (x : A) => x
+        let zero => lam (s : Nat -> Nat) (z : Nat) => z
+        let main => id Nat (zero S O)
+        "#,
+            )
+            .unwrap();
+        prog.iter().for_each(|x| println!("{}", x));
+        assert_eq!(env.run(prog).to_string(), "O");
     }
 
     fn nat_def(val: BExpr) -> BExpr {
@@ -472,6 +461,7 @@ right: `{:?}`"#,
     }
 
     #[test]
+    #[ignore]
     fn test_nat() {
         let n = nat(4);
         let env = Env::default();
@@ -493,6 +483,7 @@ right: `{:?}`"#,
         assert_beta_eq(mul(nat(5), nat(7)), nat(35), &env);
     }
 
+    #[ignore]
     #[quickcheck_macros::quickcheck]
     fn prop(x: u8, y: u8) -> bool {
         let env = Default::default();

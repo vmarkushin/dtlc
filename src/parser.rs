@@ -59,7 +59,7 @@ fn parse_pi() {
     assert_eq!(
         parser.parse_expr("forall T : A, T").unwrap(),
         Expr::pi_many(
-            [("T".parse().unwrap(), "A".parse().unwrap())],
+            vec![("T".parse().unwrap(), "A".parse().unwrap())],
             "T".parse().unwrap()
         )
     );
@@ -67,7 +67,7 @@ fn parse_pi() {
     assert_eq!(
         parser.parse_expr("forall (T : A), T").unwrap(),
         Expr::pi_many(
-            [("T".parse().unwrap(), "A".parse().unwrap())],
+            vec![("T".parse().unwrap(), "A".parse().unwrap())],
             "T".parse().unwrap()
         )
     );
@@ -75,7 +75,7 @@ fn parse_pi() {
     assert_eq!(
         parser.parse_expr("forall (T U V : A), T").unwrap(),
         Expr::pi_many(
-            [
+            vec![
                 ("T".parse().unwrap(), "A".parse().unwrap()),
                 ("U".parse().unwrap(), "A".parse().unwrap()),
                 ("V".parse().unwrap(), "A".parse().unwrap())
@@ -87,7 +87,7 @@ fn parse_pi() {
     assert_eq!(
         parser.parse_expr("forall (T U : A) (V : B), T").unwrap(),
         Expr::pi_many(
-            [
+            vec![
                 ("T".parse().unwrap(), "A".parse().unwrap()),
                 ("U".parse().unwrap(), "A".parse().unwrap()),
                 ("V".parse().unwrap(), "B".parse().unwrap())
@@ -107,7 +107,7 @@ fn parse_lam() {
     assert_eq!(
         parser.parse_expr("lam x : T => x").unwrap(),
         Expr::lam_many(
-            [("x".parse().unwrap(), "T".parse().unwrap())],
+            vec![("x".parse().unwrap(), "T".parse().unwrap())],
             "x".parse().unwrap()
         )
     );
@@ -115,7 +115,7 @@ fn parse_lam() {
     assert_eq!(
         parser.parse_expr("lam (x : T) => x").unwrap(),
         Expr::lam_many(
-            [("x".parse().unwrap(), "T".parse().unwrap())],
+            vec![("x".parse().unwrap(), "T".parse().unwrap())],
             "x".parse().unwrap()
         )
     );
@@ -123,7 +123,7 @@ fn parse_lam() {
     assert_eq!(
         parser.parse_expr("lam (x y z : T) => x").unwrap(),
         Expr::lam_many(
-            [
+            vec![
                 ("x".parse().unwrap(), "T".parse().unwrap()),
                 ("y".parse().unwrap(), "T".parse().unwrap()),
                 ("z".parse().unwrap(), "T".parse().unwrap())
@@ -135,7 +135,7 @@ fn parse_lam() {
     assert_eq!(
         parser.parse_expr("lam (x y : T) (z : U) => x").unwrap(),
         Expr::lam_many(
-            [
+            vec![
                 ("x".parse().unwrap(), "T".parse().unwrap()),
                 ("y".parse().unwrap(), "T".parse().unwrap()),
                 ("z".parse().unwrap(), "U".parse().unwrap())

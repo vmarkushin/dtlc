@@ -1,7 +1,6 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use crate::expr;
 use crate::parser::Parser;
 
 use eyre::{Result, WrapErr};
@@ -59,7 +58,7 @@ pub fn repl(prompt: &str, mut f: impl FnMut(&'static str) -> Result<()>) {
 }
 
 pub fn run_repl(parser: &Parser, env: &mut crate::env::Env, input: &'static str) -> Result<()> {
-    if let Some(input) = input.strip_prefix(":let ") {
+    if input.starts_with("let") || input.starts_with("data") {
         let mut item = parser
             .parse_item(input)
             .wrap_err("Failed to parse expression")?;

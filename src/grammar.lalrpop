@@ -37,8 +37,9 @@ extern {
 
 AtomExpr: Expr = {
     <uni: "universe"> => {
-        let level = if uni.len() > 4 {
-            uni[4..].parse::<u32>().expect("the number is always valid, because we used regex [0-9]+; qed")
+        let uni_lvl = &uni[4..]; // Skip "Type" prefix
+        let level = if !uni_lvl.is_empty() {
+            uni_lvl.parse::<u32>().expect("the number is always valid, because we used regex [0-9]*; qed")
         } else {
             0
         };
@@ -77,7 +78,7 @@ pub Expr: Expr = {
     AppExpr,
 };
 
-pub Clause: (Sym, Option<Expr>) = {
+Clause: (Sym, Option<Expr>) = {
     "|" <name: Ident> ":" <e: Expr> => (name, Some(e)),
     "|" <name: Ident> => (name, None)
 }
@@ -86,7 +87,7 @@ DataType: Expr = {
     ":" <Expr>
 }
 
-TypeArg: (Option<Sym>, Expr) = {
+TypeParam: (Option<Sym>, Expr) = {
     "(" <name: Ident> ":" <e: Expr> ")" => (Some(name), e),
     <AtomExpr> => (None, <>),
 }
@@ -98,8 +99,8 @@ pub Item: Item = {
     "let" <name: Ident> ":" <ty: Expr> "=>" <body: Expr> => {
         Item::Fn { name, ty: Some(ty), body }
     },
-    "data" <name: Ident> <ty_args: TypeArg*> <ty: DataType?> <cons: Clause*> => {
-       Item::Data { name, ty_args, ty, cons }
+    "data" <name: Ident> <ty_params: TypeParam*> <ty: DataType?> <cons: Clause*> => {
+       Item::Data { name, ty_params, ty, cons }
     },
 }
 
