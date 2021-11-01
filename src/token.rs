@@ -1,7 +1,7 @@
 use logos::Logos;
 use std::fmt::{Display, Formatter};
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Logos)]
+#[derive(Clone, Debug, Logos)]
 pub enum Token<'input> {
     #[regex("Type[0-9]*")]
     Universe(&'input str),

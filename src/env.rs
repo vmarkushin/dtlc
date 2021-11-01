@@ -1,5 +1,5 @@
-use crate::expr::{BExpr, Expr, Sym, Type};
-use crate::item::Item;
+use crate::expr::{arrow, BExpr, Expr, Sym, Type};
+use crate::item::{params_to_app, params_to_pi, Item};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
@@ -42,7 +42,7 @@ impl Env {
             Item::Data {
                 name,
                 ty,
-                ty_params: ty_args,
+                ty_params,
                 cons,
             } => {
                 let ty = if let Some(ty) = ty {
@@ -50,13 +50,27 @@ impl Env {
                 } else {
                     Expr::Universe(0)
                 };
-                self.add_type(name, ty.clone());
-                for (con_name, con) in cons {
-                    if let Some(con) = con {
-                        self.add_type(con_name, con);
-                    } else {
-                        self.add_type(con_name, ty.clone());
+                let params_pi = params_to_pi(ty_params.clone());
+                let data_ty = match params_pi.clone() {
+                    Some(pi) => arrow(pi, ty),
+                    None => ty,
+                };
+
+                let data_ident = name.parse::<Expr>().unwrap();
+
+                self.add_type(name, data_ty);
+
+                for con in cons {
+                    let data_app_ty = params_to_app(data_ident.clone(), ty_params.clone());
+                    let con_ty = match params_to_pi(con.params) {
+                        Some(pi) => arrow(pi, data_app_ty),
+                        None => data_app_ty,
+                    };
+                    if let Some(pi) = &params_pi {
+                        todo!("merge pis")
+                        // merge_pis()
                     }
+                    self.add_type(con.name, con_ty);
                 }
             }
         }

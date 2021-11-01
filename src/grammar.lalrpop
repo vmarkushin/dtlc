@@ -1,5 +1,5 @@
-use crate::expr::{self, Expr, Sym, BExpr};
-use crate::item::{self, Item};
+use crate::expr::{self, Expr, Sym, BExpr, Param};
+use crate::item::{self, Item, Constructor};
 use crate::token::{Token};
 
 grammar<'input>;
@@ -52,11 +52,11 @@ AtomExpr: Expr = {
 
 AppExpr : Expr = {
     <l: AtomExpr> "->" <r: Expr> => {
-        *expr::arrow(l, r)
+        expr::arrow(l, r)
     },
     AtomExpr,
     <f: AtomExpr> <args: AtomExpr+> => {
-        *expr::app_many(f, args)
+        expr::app_many(f, args)
     },
 }
 
@@ -79,19 +79,19 @@ pub Expr: Expr = {
     AppExpr,
 };
 
-Clause: (Sym, Option<Expr>) = {
-    "|" <name: Ident> ":" <e: Expr> => (name, Some(e)),
-    "|" <name: Ident> => (name, None)
+TypeParam: Param = {
+    "(" <name: Ident> ":" <e: Expr> ")" => Param::new(Some(name), e),
+    <AtomExpr> => Param::new(None, <>),
+}
+
+Clause: Constructor = {
+    "|" <name: Ident> <params: TypeParam*> => Constructor::new(name, params),
 }
 
 DataType: Expr = {
     ":" <Expr>
 }
 
-TypeParam: (Option<Sym>, Expr) = {
-    "(" <name: Ident> ":" <e: Expr> ")" => (Some(name), e),
-    <AtomExpr> => (None, <>),
-}
 
 pub Item: Item = {
     "let" <name: Ident> ":=" <body: Expr> => {

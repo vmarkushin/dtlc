@@ -101,7 +101,7 @@ impl Display for Expr {
 #[error("Invalid identifier: `{0}`")]
 pub struct ParseExprError(pub String);
 
-impl FromStr for BExpr {
+impl FromStr for Expr {
     type Err = ParseExprError;
 
     #[track_caller]
@@ -111,7 +111,16 @@ impl FromStr for BExpr {
             s.chars().all(|c| char::is_alphanumeric(c) || c == '_'),
             ParseExprError(s),
         );
-        Ok(box Expr::Var(s))
+        Ok(Expr::Var(s))
+    }
+}
+
+impl FromStr for BExpr {
+    type Err = ParseExprError;
+
+    #[track_caller]
+    fn from_str(s: &str) -> Result<Self, ParseExprError> {
+        s.parse::<Expr>().map(Box::new)
     }
 }
 
@@ -346,12 +355,7 @@ impl Expr {
     }
 
     /// Example: `ensure_ret_type_eq(A -> B -> app (app Vec Nat) Nat), (lam a b : * => Vec a b)) == Ok
-    pub fn ensure_ret_type_eq(
-        &self,
-        ty_name: &Sym,
-        ty_args: &Vec<(Option<Sym>, Type)>,
-        env: &Env,
-    ) -> Result<()> {
+    pub fn ensure_ret_type_eq(&self, ty_name: &Sym, ty_args: &Vec<Param>, env: &Env) -> Result<()> {
         let norm = *self.clone().whnf_in(env);
         match norm {
             Expr::Var(v) if v == *ty_name => Ok(()),
@@ -361,15 +365,36 @@ impl Expr {
     }
 }
 
-#[allow(unused)]
-pub fn app(f: impl Into<BExpr>, a: impl Into<BExpr>) -> BExpr {
-    box Expr::App(f.into(), a.into())
+#[derive(Debug, Clone)]
+pub struct Param {
+    pub name: Option<Sym>,
+    pub ty: Type,
 }
 
-pub fn app_many(f: impl Into<BExpr>, aa: impl IntoIterator<Item = impl Into<BExpr>>) -> BExpr {
+impl Param {
+    pub fn new(name: Option<Sym>, ty: Type) -> Self {
+        Param { name, ty }
+    }
+}
+
+impl Display for Param {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if let Some(name) = &self.name {
+            write!(f, "({} : {})", name, self.ty)
+        } else {
+            write!(f, "{}", self.ty)
+        }
+    }
+}
+
+pub fn app(f: impl Into<BExpr>, a: impl Into<BExpr>) -> Expr {
+    Expr::App(f.into(), a.into())
+}
+
+pub fn app_many(f: impl Into<BExpr>, aa: impl IntoIterator<Item = impl Into<BExpr>>) -> Expr {
     aa.into_iter()
         .map(Into::into)
-        .fold(f.into(), |acc, e| box Expr::App(acc, e))
+        .fold(*f.into(), |acc, e| Expr::App(box acc, e))
 }
 
 #[allow(unused)]
@@ -377,12 +402,11 @@ pub fn lam(s: impl Into<String>, t: impl Into<BType>, e: impl Into<BExpr>) -> BE
     box Expr::Lam(s.into(), t.into(), e.into())
 }
 
-#[allow(unused)]
-fn pi(s: impl Into<String>, t: impl Into<BType>, e: impl Into<BExpr>) -> BExpr {
-    box Expr::Pi(s.into(), t.into(), e.into())
+pub fn pi(s: impl Into<String>, t: impl Into<BType>, e: impl Into<BExpr>) -> Expr {
+    Expr::Pi(s.into(), t.into(), e.into())
 }
 
-pub fn arrow(f: impl Into<BType>, t: impl Into<BExpr>) -> BExpr {
+pub fn arrow(f: impl Into<BType>, t: impl Into<BExpr>) -> Expr {
     pi("_", f, t)
 }
 
