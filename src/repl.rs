@@ -8,7 +8,9 @@ use crate::parser::Parser;
 use crate::token::Token;
 use eyre::{Result, WrapErr};
 use logos::Logos;
-use owo_colors::OwoColorize;
+use owo_colors::colored::Color;
+use owo_colors::colors::css::Orange;
+use owo_colors::{OwoColorize, Stream, XtermColors};
 use rustyline::{
     completion::Completer,
     config,
@@ -55,31 +57,68 @@ impl Validate for Validator {
 }
 
 #[derive(Default)]
-struct SyntaxHighlighter {}
+struct SyntaxHighlighter {
+    truecolor: bool,
+}
+
+impl SyntaxHighlighter {
+    pub fn new(truecolor: bool) -> Self {
+        SyntaxHighlighter { truecolor }
+    }
+}
 
 impl rustyline::highlight::Highlighter for SyntaxHighlighter {
     fn highlight<'l>(&self, line: &'l str, pos: usize) -> Cow<'l, str> {
+        use owo_colors::AnsiColors::*;
         let tokens = Token::lexer(line);
         let mut copy = line.to_owned();
         let mut offset = 0;
+
         for (tok, span) in tokens.spanned() {
-            let span = (span.start + offset..span.end + offset);
+            let span = span.start + offset..span.end + offset;
             let prev = &copy[span.clone()];
-            match tok {
-                Token::Lam => {
-                    let string = format!("{}", prev.red());
-                    offset += string.len() - 3;
-                    copy.replace_range(span, &string)
+            let maybe_colour = match tok {
+                Token::Lam => Some((Red, XtermColors::MuesliOrange)),
+                Token::Let => Some((BrightYellow, XtermColors::FlushOrange)),
+                Token::Universe(_) => Some((Red, XtermColors::FlushOrange)),
+                Token::Pi => Some((Red, XtermColors::MuesliOrange)),
+                Token::Sigma => Some((Red, XtermColors::MuesliOrange)),
+                Token::Data => Some((BrightYellow, XtermColors::FlushOrange)),
+                Token::Codata => Some((BrightYellow, XtermColors::FlushOrange)),
+                Token::DArrow => Some((Yellow, XtermColors::MuesliOrange)),
+                Token::Assignment => Some((Yellow, XtermColors::MuesliOrange)),
+                Token::Ident(n) if n.starts_with(char::is_uppercase) => {
+                    Some((Green, XtermColors::BlazeOrange))
                 }
-                Token::Let => {
-                    let string = format!("{}", prev.blue());
-                    offset += string.len() - 3;
-                    copy.replace_range(span, &string)
-                }
-                _ => (),
+                _ => None,
             };
+            if let Some(col) = maybe_colour {
+                let colored = if self.truecolor {
+                    format!("{}", prev.color(col.1))
+                } else {
+                    format!("{}", prev.color(col.0))
+                };
+                offset += colored.len() - prev.len();
+                copy.replace_range(span, &colored);
+            }
         }
         Cow::Owned(copy)
+    }
+
+    fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
+        Cow::Borrowed(hint)
+    }
+
+    fn highlight_candidate<'c>(
+        &self,
+        candidate: &'c str,
+        completion: CompletionType,
+    ) -> Cow<'c, str> {
+        panic!("{}", candidate)
+    }
+
+    fn highlight_char(&self, line: &str, pos: usize) -> bool {
+        true
     }
 }
 
@@ -91,28 +130,31 @@ struct Highlighter {
 
 impl Highlight for Highlighter {
     fn highlight<'l>(&self, line: &'l str, pos: usize) -> Cow<'l, str> {
-        // let out: Cow<'l, str> = self.brackets.highlight(line, pos);
         self.syntax.highlight(line, pos)
     }
+
     fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
         &'s self,
         prompt: &'p str,
         default: bool,
     ) -> Cow<'b, str> {
-        self.brackets.highlight_prompt(prompt, default)
+        self.syntax.highlight_prompt(prompt, default)
     }
+
     fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
-        self.brackets.highlight_hint(hint)
+        self.syntax.highlight_hint(hint)
     }
+
     fn highlight_candidate<'c>(
         &self,
         candidate: &'c str,
         completion: CompletionType,
     ) -> Cow<'c, str> {
-        self.brackets.highlight_candidate(candidate, completion)
+        self.syntax.highlight_candidate(candidate, completion)
     }
+
     fn highlight_char(&self, line: &str, pos: usize) -> bool {
-        self.brackets.highlight_char(line, pos)
+        self.syntax.highlight_char(line, pos)
     }
 }
 
@@ -248,7 +290,13 @@ pub fn repl(prompt: &str, mut f: impl FnMut(&Parser, &mut Env, &'static str) -> 
             .color_mode(ColorMode::Enabled)
             .build(),
     );
-    rl.set_helper(Some(Helper::default()));
+    rl.set_helper(Some(Helper {
+        highlighter: Highlighter {
+            syntax: SyntaxHighlighter::new(true),
+            ..Default::default()
+        },
+        ..Default::default()
+    }));
 
     let history = PathBuf::from(std::env::var("HOME").unwrap()).join(".dtlc_history");
     drop(rl.load_history(&history));
