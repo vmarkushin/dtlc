@@ -1,5 +1,5 @@
 use crate::decl::{merge_pis, params_to_app, params_to_pi, Decl};
-use crate::term::{arrow, BTerm, Sym, Term, Type};
+use crate::term::{Pi, Term, Type, Var};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -31,18 +31,18 @@ pub struct EnvedMut<'a, T> {
 
 #[derive(Clone, Default, Debug)]
 pub struct Env {
-    types: HashMap<Sym, Type>,
-    defs: HashMap<Sym, Term>,
+    types: HashMap<Var, Type>,
+    defs: HashMap<Var, Term>,
 }
 
 impl Env {
-    pub(crate) fn get_decl(&self, sym: &Sym) -> Option<&Term> {
+    pub(crate) fn get_decl(&self, sym: &Var) -> Option<&Term> {
         self.defs.get(sym)
     }
 }
 
 impl Env {
-    pub(crate) fn get_type(&self, p0: &str) -> Option<&Type> {
+    pub(crate) fn get_type(&self, p0: &Var) -> Option<&Type> {
         self.types.get(p0)
     }
 }
@@ -56,34 +56,37 @@ impl Env {
         EnvedMut::from((prog, self)).run()
     }
 
-    pub fn add_type(&mut self, sym: Sym, ty: Type) {
+    pub fn add_type(&mut self, sym: Var, ty: Type) {
         self.types.insert(sym, ty);
     }
 
     pub fn add_decl(&mut self, decl: Decl) {
-        use crate::dsp;
-
         match decl {
-            Decl::Fn { name, ty, body } => {
-                if let Some(ty) = ty {
+            Decl::Fn {
+                name,
+                return_ty,
+                body,
+            } => {
+                if let Some(ty) = return_ty {
                     self.add_type(name.clone(), ty);
                 }
                 self.defs.insert(name, body);
             }
             Decl::Data {
                 name,
-                ty,
+                universe,
                 ty_params,
                 cons,
             } => {
-                let ty = if let Some(ty) = ty {
+                let ty = if let Some(ty) = universe {
                     ty
                 } else {
-                    Term::Universe(0)
+                    Term::Universe(Default::default())
                 };
+
                 let params_pi = params_to_pi(ty_params.clone());
-                let data_ty = match params_pi.clone() {
-                    Some(pi) => arrow(pi, ty),
+                let data_ty = match params_pi {
+                    Some(pi) => Pi::arrow(pi, ty).into(),
                     None => ty,
                 };
 
@@ -119,7 +122,7 @@ impl<'a> EnvedMut<'a, Prog> {
         }
         let main = self
             .env
-            .get_decl(&"main".to_owned())
+            .get_decl(&Var("main".to_owned()))
             .expect("function 'main' not found");
         main.typeck(&mut Cow::Borrowed(self.env)).unwrap();
         Enved::from((main.clone(), &*self.env)).nf()
