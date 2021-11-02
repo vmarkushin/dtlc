@@ -1,10 +1,10 @@
-use crate::term::{self, Term, Sym, BTerm, Param};
+use crate::term::{self, Term, Sym, Param, Lam, Pi, App, Universe, Var};
 use crate::decl::{self, Decl, Constructor};
-use crate::token::{Token};
+use crate::token::Token;
 
 grammar<'input>;
 
-Ident: Sym = <s:"ident"> => Sym::from(s);
+Ident: Var = <s:"ident"> => Var(Sym::from(s));
 
 extern {
     enum Token<'input> {
@@ -44,40 +44,40 @@ AtomExpr: Term = {
         } else {
             0
         };
-        Term::Universe(level)
+        Term::Universe(Universe(level))
     },
-    <var: Ident> => Term::Var(var),
+    <var: Ident> => Term::Variable(var),
     "(" <Term> ")",
 };
 
 AppExpr : Term = {
-    <l: AtomExpr> "->" <r: Term> => {
-        term::arrow(l, r)
-    },
     AtomExpr,
-    <f: AtomExpr> <args: AtomExpr+> => {
-        term::app_many(f, args)
-    },
+    <f: AtomExpr> <args: AtomExpr+> => App::new_many(f, args.into_iter()),
 }
 
-ForallParam : Vec<(Sym, BTerm)> = {
-    "(" <idents: Ident+> ":" <ty : Term> ")" => idents.into_iter().map(|ident| (ident, box ty.clone())).collect()
+ForallParam : Vec<(Var, Term)> = {
+    "(" <idents: Ident+> ":" <ty : Term> ")" => idents.into_iter().map(|ident| (ident, ty.clone())).collect()
 }
 
-ForallParams : Vec<(Sym, BTerm)> = {
-    <ident: Ident> ":" <ty : Term> => vec![(ident, box ty)],
-    <ForallParam+> => <>.into_iter().flatten().collect()
+ForallParams : Vec<(Var, Term)> = {
+    <ident: Ident> ":" <ty : Term> => vec![(ident, ty)],
+    <ForallParam+> => <>.into_iter().flatten().collect(),
+}
+
+pub Lam : Term = {
+    "lam" <params: ForallParams> "=>" <body: Term> => Lam::new_many(body, params.into_iter()),
+}
+
+pub Pi : Term = {
+    <l: AtomExpr> "->" <r: Term> => Pi::arrow(l, r).into(),
+    "forall" <params: ForallParams> "," <body: Term> => Pi::new_many(body, params.into_iter()),
 }
 
 pub Term: Term = {
-    "lam" <params: ForallParams> "=>" <body: Term> => {
-        Term::lam_many(params, box body)
-    },
-    "forall" <params: ForallParams> "," <body: Term> => {
-        Term::pi_many(params, box body)
-    },
+    Pi,
+    Lam,
     AppExpr,
-};
+}
 
 TypeParam: Param = {
     "(" <name: Ident> ":" <e: Term> ")" => Param::new(Some(name), e),
@@ -95,13 +95,13 @@ DataType: Term = {
 
 pub Decl: Decl = {
     "let" <name: Ident> ":=" <body: Term> => {
-        Decl::Fn { name, ty: None, body }
+        Decl::Fn { name, return_ty: None, body }
     },
     "let" <name: Ident> ":" <ty: Term> "=>" <body: Term> => {
-        Decl::Fn { name, ty: Some(ty), body }
+        Decl::Fn { name, return_ty: Some(ty), body }
     },
-    "data" <name: Ident> <ty_params: TypeParam*> <ty: DataType?> <cons: Clause*> => {
-       Decl::Data { name, ty_params, ty, cons }
+    "data" <name: Ident> <ty_params: TypeParam*> <universe: DataType?> <cons: Clause*> => {
+       Decl::Data { name, ty_params, universe, cons }
     },
 }
 

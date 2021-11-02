@@ -130,7 +130,7 @@ impl Helper {
                 .parser
                 .parse_term(input)
                 .wrap_err("Failed to parse expression"));
-            let t = validate_incomplete!(term
+            let _t = validate_incomplete!(term
                 .typeck(&mut Cow::Borrowed(&self.env))
                 .wrap_err("Failed to typecheck expression"));
             return Ok(ValidationResult::Valid(None));

@@ -34,9 +34,9 @@ fn main() {
 mod test {
     use super::*;
     use crate::{
-        env::{Env, Enved, EnvedMut},
+        env::{EnvedMut},
         parser::Parser,
-        term::{app_many, Term},
+        term::{Term},
     };
 
     #[test]

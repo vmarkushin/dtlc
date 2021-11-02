@@ -4,7 +4,10 @@ use crate::env::{Env, Enved};
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
+use std::marker::PhantomData;
 use std::str::FromStr;
+
+use derive_more::{Add, Deref, DerefMut, Display, From};
 
 use crate::ensure;
 
@@ -16,7 +19,7 @@ pub type BType = Box<Type>;
 #[derive(Debug, thiserror::Error)]
 pub enum TCError {
     #[error("Unknown variable: `{0}`")]
-    UnknownVar(String),
+    UnknownVar(Var),
 
     #[error("Wrong type. Expected `{expected}`, but got `{got}`")]
     WrongType { expected: Type, got: Type },
@@ -38,13 +41,188 @@ pub enum TCError {
 
 type Result<T, E = TCError> = std::result::Result<T, E>;
 
+#[derive(Deref, DerefMut, Clone, Debug, PartialEq, Eq)]
+pub struct ReducesTo<T> {
+    #[deref]
+    #[deref_mut]
+    term: Term,
+    _t: PhantomData<T>,
+}
+
+impl<T> ReducesTo<T> {
+    fn into_inner(self) -> Term {
+        self.term
+    }
+}
+
+impl<T> ReducesTo<T> {
+    pub fn unchecked(term: impl Into<Term>) -> Self {
+        Self {
+            term: term.into(),
+            _t: PhantomData,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Display, Deref, DerefMut, From)]
+pub struct Var(pub Sym);
+
+impl From<&str> for Var {
+    fn from(v: &str) -> Self {
+        Self(v.to_owned())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct App {
+    pub f: Box<ReducesTo<Lam>>,
+    pub arg: BTerm,
+}
+
+impl App {
+    pub fn new(f: impl Into<Term>, arg: impl Into<Term>) -> Self {
+        let f = box ReducesTo::unchecked(f.into());
+        let arg = box arg.into();
+        Self { f, arg }
+    }
+
+    pub fn new_many(f: impl Into<Term>, args: impl IntoIterator<Item = impl Into<Term>>) -> Term {
+        args.into_iter()
+            .map(Into::into)
+            .fold(f.into(), |f, arg| App::new(f, arg).into())
+    }
+
+    pub fn alpha_eq(&self, other: &Self) -> bool {
+        self.f.alpha_eq(&*other.f) && self.arg.alpha_eq(&*other.arg)
+    }
+
+    pub fn free_vars(&self) -> HashSet<Var> {
+        let Self { box f, box arg } = self;
+        f.free_vars().into_iter().chain(arg.free_vars()).collect()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Lam {
+    pub arg_name: Var,
+    pub arg_ty: BType,
+    pub body: BTerm,
+}
+
+impl Lam {
+    pub fn new(arg_name: Var, arg_ty: BType, body: BTerm) -> Self {
+        Self {
+            arg_name,
+            arg_ty,
+            body,
+        }
+    }
+
+    pub fn new_many(
+        term: Term,
+        params: impl Sized + DoubleEndedIterator<Item = (Var, Type)>,
+    ) -> Term {
+        params.into_iter().rev().fold(term, |acc, (arg, arg_ty)| {
+            Self::new(arg, box arg_ty, box acc).into()
+        })
+    }
+
+    pub fn alpha_eq(&self, other: &Self) -> bool {
+        let Self {
+            arg_name: s1,
+            arg_ty: t1,
+            body: e1,
+        } = self;
+        let Self {
+            arg_name: s2,
+            arg_ty: t2,
+            body: e2,
+        } = other;
+        t1.alpha_eq(t2) && e1.alpha_eq(&e2.clone().subst_var(s2, s1.clone()))
+    }
+
+    pub fn free_vars(&self) -> HashSet<Var> {
+        let Self {
+            arg_name,
+            arg_ty,
+            body,
+        } = self;
+        let mut set = body.free_vars();
+        set.remove(arg_name);
+        arg_ty.free_vars().into_iter().chain(set).collect()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pi {
+    pub argty_name: Var,
+    pub argty_ty: BType,
+    pub ty: BTerm,
+}
+
+impl Pi {
+    pub fn new(argty_name: Var, argty_ty: BType, ty: BTerm) -> Self {
+        Self {
+            argty_name,
+            argty_ty,
+            ty,
+        }
+    }
+
+    pub fn new_many(
+        term: Term,
+        params: impl Sized + DoubleEndedIterator<Item = (Var, Type)>,
+    ) -> Term {
+        params
+            .into_iter()
+            .rev()
+            .fold(term, |acc, (argty_name, argty_ty)| {
+                Self::new(argty_name, box argty_ty, box acc).into()
+            })
+    }
+
+    pub fn arrow(argty_ty: impl Into<Type>, ty: impl Into<Type>) -> Self {
+        Self::new(Var("_".to_owned()), box argty_ty.into(), box ty.into())
+    }
+
+    pub fn alpha_eq(&self, other: &Self) -> bool {
+        let Self {
+            argty_name: s1,
+            argty_ty: t1,
+            ty: e1,
+        } = self;
+        let Self {
+            argty_name: s2,
+            argty_ty: t2,
+            ty: e2,
+        } = other;
+        t1.alpha_eq(t2) && e1.alpha_eq(&e2.clone().subst_var(s2, s1.clone()))
+    }
+
+    pub fn free_vars(&self) -> HashSet<Var> {
+        let Self {
+            argty_name,
+            argty_ty,
+            ty,
+        } = self;
+        let mut set = ty.free_vars();
+        set.remove(argty_name);
+        argty_ty.free_vars().into_iter().chain(set).collect()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, Default, From, Add)]
+pub struct Universe(pub u32);
+
+#[derive(Clone, Debug, PartialEq, Eq, From)]
 pub enum Term {
-    Var(Sym),
-    App(BTerm, BTerm),
-    Lam(Sym, BType, BTerm),
-    Pi(Sym, BType, BType),
-    Universe(u32),
+    Variable(Var),
+
+    Application(App),
+    Lambda(Lam),
+
+    Pi(Pi),
+    Universe(Universe),
 }
 
 impl Term {
@@ -55,26 +233,6 @@ impl Term {
         Ok(t)
     }
 
-    pub fn pi(param: Sym, param_ty: impl Into<BType>, ret_ty: impl Into<BType>) -> Self {
-        Self::Pi(param, param_ty.into(), ret_ty.into())
-    }
-
-    pub fn pi_many(params: Vec<(Sym, BType)>, ret_ty: BType) -> Self {
-        *params
-            .into_iter()
-            .rev()
-            .fold(ret_ty, |acc, (s, t)| box Term::Pi(s, t, acc))
-    }
-
-    pub fn lam_many(params: Vec<(Sym, BType)>, body: BTerm) -> Self {
-        *params
-            .into_iter()
-            .rev()
-            .fold(body, |acc, (s, t)| box Term::Lam(s, t, acc))
-    }
-}
-
-impl Term {
     pub fn is_kind(&self) -> bool {
         matches!(self, Term::Universe(_))
     }
@@ -83,16 +241,24 @@ impl Term {
 impl Display for Term {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Term::Var(i) => f.write_str(i),
-            Term::App(ff, a) => {
-                write!(f, "{} ", ff)?;
-                match a.as_ref() {
-                    app @ Term::App(_, _) => write!(f, "({})", app),
+            Term::Variable(Var(i)) => f.write_str(i),
+            Term::Application(App { f: ff, arg }) => {
+                write!(f, "{} ", &***ff)?;
+                match arg.as_ref() {
+                    app @ Term::Application(_) => write!(f, "({})", app),
                     e => write!(f, "{}", e),
                 }
             }
-            Term::Lam(i, t, b) => write!(f, "(λ {}:{}. {})", i, t, b),
-            Term::Pi(i, k, t) => write!(f, "(Π {}:{}, {})", i, k, t),
+            Term::Lambda(Lam {
+                arg_name,
+                arg_ty,
+                body,
+            }) => write!(f, "(λ {}:{}. {})", arg_name, arg_ty, body),
+            Term::Pi(Pi {
+                argty_name,
+                argty_ty,
+                ty,
+            }) => write!(f, "(Π {}:{}, {})", argty_name, argty_ty, ty),
             Term::Universe(k) => write!(f, "Type{}", k),
         }
     }
@@ -112,7 +278,7 @@ impl FromStr for Term {
             s.chars().all(|c| char::is_alphanumeric(c) || c == '_'),
             ParseExprError(s),
         );
-        Ok(Term::Var(s))
+        Ok(Term::Variable(s.into()))
     }
 }
 
@@ -135,66 +301,81 @@ impl Term {
         self.typeck(&mut Cow::Owned(Default::default()))
     }
 
-    pub fn typeck(&self, r: &mut Cow<Env>) -> Result<Type> {
+    pub fn typeck(&self, env: &mut Cow<Env>) -> Result<Type> {
         match self {
-            Term::Var(s) => r
+            Term::Variable(s) => env
                 .get_type(s)
                 .cloned()
                 .ok_or_else(|| TCError::UnknownVar(s.clone())),
-            Term::App(f, a) => match f.typeck_whnf(r)? {
-                Term::Pi(x, box at, box rt) => {
-                    let ta = a.typeck(r)?;
-                    if !Enved::from((ta.clone(), &**r)).beta_eq(Enved::from((at.clone(), &**r))) {
+            Term::Application(App { f, arg }) => match f.typeck_whnf(env)? {
+                Term::Pi(Pi {
+                    argty_name,
+                    box argty_ty,
+                    box ty,
+                }) => {
+                    let arg_ty = arg.typeck(env)?;
+                    if !Enved::from((arg_ty.clone(), &**env))
+                        .beta_eq(Enved::from((argty_ty.clone(), &**env)))
+                    {
                         return Err(TCError::WrongArgumentType {
-                            expected: at,
-                            got: ta,
+                            expected: argty_ty,
+                            got: arg_ty,
                         });
                     }
-                    Ok(rt.subst(&x, a))
+                    Ok(ty.subst(&argty_name, arg))
                 }
                 other => Err(TCError::ExpectedFunc(other)),
             },
-            Term::Lam(s, t, e) => {
-                t.typeck(r)?;
-                r.to_mut().add_type(s.clone(), *t.clone());
-                let te = e.typeck(r)?;
-                let lt = Type::Pi(s.clone(), t.clone(), box te);
-                lt.typeck(r)?;
-                Ok(lt)
+            Term::Lambda(Lam {
+                arg_name,
+                box arg_ty,
+                box body,
+            }) => {
+                arg_ty.typeck(env)?;
+                env.to_mut().add_type(arg_name.clone(), arg_ty.clone());
+                let body_ty = body.typeck(env)?;
+                let body_pi = Pi::new(arg_name.clone(), box arg_ty.clone(), box body_ty);
+                let body_pi = Term::from(body_pi);
+                body_pi.typeck(env)?;
+                Ok(body_pi)
             }
-            Term::Pi(x, a, b) => {
-                let s = a.typeck_whnf(r)?;
+            Term::Pi(Pi {
+                argty_name,
+                box argty_ty,
+                box ty,
+            }) => {
+                let s = argty_ty.typeck_whnf(env)?;
                 if !s.is_kind() {
                     return Err(TCError::ExpectedKind(s));
                 }
-                r.to_mut().add_type(x.clone(), *a.clone());
-                let t = b.typeck_whnf(r)?;
+                env.to_mut().add_type(argty_name.clone(), argty_ty.clone());
+                let t = ty.typeck_whnf(env)?;
                 if !t.is_kind() {
                     return Err(TCError::ExpectedKindReturn(t));
                 }
                 Ok(t)
             }
-            Term::Universe(n) => Ok(Term::Universe(n + 1)),
+            Term::Universe(Universe(n)) => Ok(Universe(n + 1).into()),
         }
     }
 
-    fn subst_var(self, s: &Sym, v: Sym) -> Term {
-        self.subst(s, &Term::Var(v))
+    fn subst_var(self, s: &Var, v: Var) -> Term {
+        self.subst(s, &Term::Variable(v))
     }
 
     /// Replaces all *free* occurrences of `v` by `x` in `b`, i.e. `b[v:=x]`.
-    pub(crate) fn subst(self, v: &Sym, x: &Term) -> Term {
-        fn abstr(
-            con: fn(Sym, BTerm, BTerm) -> Term,
-            v: &Sym,
+    pub(crate) fn subst(self, v: &Var, x: &Term) -> Term {
+        fn abstr<T: Into<Term>, F: Fn(Var, BTerm, BTerm) -> T>(
+            con: F,
+            v: &Var,
             x: &Term,
-            i: &Sym,
+            i: &Var,
             t: Type,
             e: BTerm,
         ) -> Term {
             let fvx = x.free_vars();
             if v == i {
-                con(i.clone(), box t.subst(v, x), e.clone())
+                con(i.clone(), box t.subst(v, x), e.clone()).into()
             } else if fvx.contains(i) {
                 let vars = {
                     let mut set = fvx;
@@ -206,42 +387,42 @@ impl Term {
                     i_new.push('\'');
                 }
                 let e_new = e.subst_var(i, i_new.clone());
-                con(i_new, box t.subst(v, x), box e_new.subst(v, x))
+                con(i_new, box t.subst(v, x), box e_new.subst(v, x)).into()
             } else {
-                con(i.clone(), box t.subst(v, x), box e.subst(v, x))
+                con(i.clone(), box t.subst(v, x), box e.subst(v, x)).into()
             }
         }
 
         match self {
-            Term::Var(i) => {
-                if &i == v {
-                    x.clone()
-                } else {
-                    Term::Var(i)
-                }
+            Term::Variable(i) if &i == v => x.clone(),
+            v @ Term::Variable(_) => v,
+            Term::Application(App { box f, box arg }) => {
+                App::new(f.into_inner().subst(v, x), arg.subst(v, x)).into()
             }
-            Term::App(f, a) => Term::App(box f.subst(v, x), box a.subst(v, x)),
-            Term::Lam(i, t, e) => abstr(Term::Lam, v, x, &i, *t, e),
-            Term::Pi(i, t, e) => abstr(Term::Pi, v, x, &i, *t, e),
+            Term::Lambda(Lam {
+                arg_name,
+                box arg_ty,
+                body,
+            }) => abstr(Lam::new, v, x, &arg_name, arg_ty, body),
+            Term::Pi(Pi {
+                argty_name,
+                box argty_ty,
+                ty,
+            }) => abstr(Pi::new, v, x, &argty_name, argty_ty, ty),
             k @ Term::Universe(_) => k,
         }
     }
 
     /// Compares expressions modulo α-conversions. That is, λx.x == λy.y.
-    pub(crate) fn alpha_eq(&self, e2: &Term) -> bool {
-        let e1 = self;
-        let abstr = |t1: &Term, t2, e1: &Term, e2: Term, s1: &Sym, s2| {
-            t1.alpha_eq(t2) && e1.alpha_eq(&e2.subst_var(s2, s1.clone()))
-        };
+    pub(crate) fn alpha_eq(&self, other: &Term) -> bool {
+        use Term as T;
 
-        match (e1, e2) {
-            (Term::Var(v1), Term::Var(v2)) => v1 == v2,
-            (Term::App(f1, a1), Term::App(f2, a2)) => f1.alpha_eq(f2) && a1.alpha_eq(a2),
-            (Term::Lam(s1, t1, e1), Term::Lam(s2, t2, e2)) => {
-                abstr(t1, t2, e1, *e2.clone(), s1, s2)
-            }
-            (Term::Pi(s1, t1, e1), Term::Pi(s2, t2, e2)) => abstr(t1, t2, e1, *e2.clone(), s1, s2),
-            (Term::Universe(k1), Term::Universe(k2)) => k1 == k2,
+        match (self, other) {
+            (T::Variable(v1), T::Variable(v2)) if v1 == v2 => true,
+            (T::Application(a1), T::Application(a2)) if a1.alpha_eq(a2) => true,
+            (T::Lambda(l1), T::Lambda(l2)) if l1.alpha_eq(l2) => true,
+            (T::Pi(p1), T::Pi(p2)) if p1.alpha_eq(p2) => true,
+            (T::Universe(k1), T::Universe(k2)) if k1 == k2 => true,
             _ => false,
         }
     }
@@ -251,17 +432,12 @@ impl Term {
         Enved::from((self, &Default::default())).whnf_in()
     }
 
-    fn free_vars(&self) -> HashSet<Sym> {
-        let abstr = |i, t: &Term, e: &Term| -> HashSet<Sym> {
-            let mut set = e.free_vars();
-            set.remove(i);
-            t.free_vars().union(&set).cloned().collect()
-        };
+    fn free_vars(&self) -> HashSet<Var> {
         match self {
-            Term::Var(s) => vec![s.clone()].into_iter().collect(),
-            Term::App(f, a) => f.free_vars().union(&a.free_vars()).cloned().collect(),
-            Term::Lam(i, t, e) => abstr(i, t, e),
-            Term::Pi(i, k, t) => abstr(i, k, t),
+            Term::Variable(s) => std::iter::once(s.clone()).collect(),
+            Term::Application(a1) => a1.free_vars(),
+            Term::Lambda(l1) => l1.free_vars(),
+            Term::Pi(p1) => p1.free_vars(),
             Term::Universe(_) => Default::default(),
         }
     }
@@ -277,45 +453,69 @@ impl<'a> Enved<'a, Term> {
     }
 
     fn spine(self, args: &[Term], is_deep: bool, is_strict: bool) -> Term {
-        use Term::*;
+        use Term as T;
 
         let Self { inner, env } = self;
 
         match (inner, args) {
-            (App(box f, a), _) => {
+            (T::Application(App { box f, box arg }), _) => {
                 let mut args_new = args.to_owned();
-                args_new.push(*a);
-                Self::from((f, env)).spine(&args_new, is_deep, is_strict)
+                args_new.push(arg);
+                Self::from((f.into_inner(), env)).spine(&args_new, is_deep, is_strict)
             }
-            (Lam(s, box t, box e), []) => Lam(
-                s,
-                box Self::from((t, env)).normalize(is_deep, is_strict),
-                box Self::from((e, env)).normalize_if_deep(is_deep, is_strict),
-            ),
-            (Lam(s, _, box e), [xs @ .., x]) => {
+            (
+                T::Lambda(Lam {
+                    arg_name,
+                    box arg_ty,
+                    box body,
+                }),
+                [],
+            ) => Lam {
+                arg_name,
+                arg_ty: Self::from((arg_ty, env))
+                    .normalize(is_deep, is_strict)
+                    .into(),
+                body: Self::from((body, env))
+                    .normalize_if_deep(is_deep, is_strict)
+                    .into(),
+            }
+            .into(),
+            (
+                T::Lambda(Lam {
+                    arg_name, box body, ..
+                }),
+                [xs @ .., x],
+            ) => {
                 let x = x.to_owned();
                 let arg = Self::from((x, env)).normalize_if_strict(is_deep, is_strict);
-                let ee = e.subst(&s, &arg);
+                let ee = body.subst(&arg_name, &arg);
                 let term = Self::from((ee, env)).normalize_if_deep(is_deep, is_strict);
                 Self::from((term, env)).spine(xs, is_deep, is_strict)
             }
-            (Pi(s, box k, box t), _) => {
+            (
+                T::Pi(Pi {
+                    argty_name,
+                    box argty_ty,
+                    box ty,
+                }),
+                _,
+            ) => {
                 // TODO: should we reverse args?
-                let pi = Pi(
-                    s,
-                    box Self::from((k, env)).normalize(false, false),
-                    box Self::from((t, env)).normalize(false, false),
-                );
-                Self::from((pi, env)).app(args)
+                let pi = Pi {
+                    argty_name,
+                    argty_ty: Self::from((argty_ty, env)).normalize(false, false).into(),
+                    ty: Self::from((ty, env)).normalize(false, false).into(),
+                };
+                Self::from((pi.into(), env)).app(args)
             }
-            (Var(v), args) => env
+            (T::Variable(v), args) => env
                 .get_decl(&v)
                 .cloned()
                 .map(|e| Self::from((e, env)).spine(args, is_deep, is_strict))
                 .unwrap_or_else(|| {
                     let mut xs = args.to_owned();
                     xs.reverse();
-                    Self::from((Var(v), env)).app(&xs)
+                    Self::from((v.into(), env)).app(&xs)
                 }),
             (f, _) => {
                 let mut xs = args.to_owned();
@@ -346,7 +546,13 @@ impl<'a> Enved<'a, Term> {
         args.iter()
             .cloned()
             .map(|x| Self::from((x, env)).nf())
-            .fold(f, |acc, e| Term::App(box acc, box e))
+            .fold(f, |f, arg| {
+                App {
+                    f: box ReducesTo::unchecked(f),
+                    arg: box arg,
+                }
+                .into()
+            })
     }
 
     pub fn normalize(self, is_deep: bool, is_strict: bool) -> Term {
@@ -361,14 +567,14 @@ impl<'a> Enved<'a, Term> {
     /// Example: `ensure_ret_type_eq(A -> B -> app (app Vec Nat) Nat), (lam a b : * => Vec a b)) == Ok
     pub fn ensure_ret_type_eq(
         self,
-        ty_name: &Sym,
+        ty_name: &Var,
         ty_args: &Vec<(Option<Sym>, Type)>,
     ) -> Result<()> {
         let env = self.env;
         match self.whnf_in() {
-            Term::Var(v) if v == *ty_name => Ok(()),
-            Term::Pi(_, _, box b) | Term::Lam(_, _, box b) => {
-                Self::from((b, env)).ensure_ret_type_eq(ty_name, ty_args)
+            Term::Variable(v) if v == *ty_name => Ok(()),
+            Term::Pi(Pi { ty: box body, .. }) | Term::Lambda(Lam { box body, .. }) => {
+                Self::from((body, env)).ensure_ret_type_eq(ty_name, ty_args)
             }
             e => Err(TCError::ExpectedVarLamPi(e)),
         }
@@ -377,12 +583,12 @@ impl<'a> Enved<'a, Term> {
 
 #[derive(Debug, Clone)]
 pub struct Param {
-    pub name: Option<Sym>,
+    pub name: Option<Var>,
     pub ty: Type,
 }
 
 impl Param {
-    pub fn new(name: Option<Sym>, ty: Type) -> Self {
+    pub fn new(name: Option<Var>, ty: Type) -> Self {
         Param { name, ty }
     }
 }
@@ -397,36 +603,12 @@ impl Display for Param {
     }
 }
 
-pub fn app(f: impl Into<BTerm>, a: impl Into<BTerm>) -> Term {
-    Term::App(f.into(), a.into())
-}
-
-pub fn app_many(f: impl Into<BTerm>, aa: impl IntoIterator<Item = impl Into<BTerm>>) -> Term {
-    aa.into_iter()
-        .map(Into::into)
-        .fold(*f.into(), |acc, e| Term::App(box acc, e))
-}
-
-#[allow(unused)]
-pub fn lam(s: impl Into<String>, t: impl Into<BType>, e: impl Into<BTerm>) -> BTerm {
-    box Term::Lam(s.into(), t.into(), e.into())
-}
-
-pub fn pi(s: impl Into<String>, t: impl Into<BType>, e: impl Into<BTerm>) -> Term {
-    Term::Pi(s.into(), t.into(), e.into())
-}
-
-pub fn arrow(f: impl Into<BType>, t: impl Into<BTerm>) -> Term {
-    pi("_", f, t)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::env::EnvedMut;
     use crate::parser::Parser;
     use crate::t;
-    use quickcheck::quickcheck;
 
     fn run_prog(s: impl AsRef<str>) -> Term {
         let prog = Parser::default().parse_prog(s.as_ref()).unwrap();
@@ -464,14 +646,14 @@ right: `{:?}`"#,
         assert_eq!(res.to_string(), "O");
     }
 
-    fn nat_def(val: Term) -> Term {
+    fn nat_def(_val: Term) -> Term {
         t! {
             lam nat: * => lam s: (nat -> nat) => lam z: nat => @val
         }
     }
 
-    fn mul(n: Term, m: Term) -> Term {
-        let plus_f = plus(m, nat(0));
+    fn mul(_n: Term, m: Term) -> Term {
+        let _plus_f = plus(m, nat(0));
         nat_def(t! {
             @n nat (@plus_f nat s) {nat_data(0)}
         })
@@ -490,7 +672,7 @@ right: `{:?}`"#,
         nat_def(nat_data(n))
     }
 
-    fn plus(n: Term, m: Term) -> Term {
+    fn plus(_n: Term, _m: Term) -> Term {
         nat_def(t! { @n nat s (@m nat s z) })
     }
 
