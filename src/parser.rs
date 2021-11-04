@@ -52,7 +52,7 @@ mod tests {
         let parser = Parser::default();
 
         assert_eq!(
-            parser.parse_term("forall T : A, T").unwrap(),
+            parser.parse_term("forall (T : A), T").unwrap(),
             Pi::new_many(
                 "T".parse().unwrap(),
                 vec![("T".into(), "A".parse().unwrap())].into_iter(),

@@ -1,5 +1,5 @@
 use crate::term::{self, Term, Sym, Param, Lam, Pi, App, Universe, Var};
-use crate::decl::{self, Decl, Constructor};
+use crate::decl::{self, Decl, Constructor, FnDecl};
 use crate::token::Token;
 
 grammar<'input>;
@@ -10,6 +10,7 @@ extern {
     enum Token<'input> {
         "ident" => Token::Ident(<&'input str>),
         "universe" => Token::Universe(<&'input str>),
+        "goal" => Token::Goal(<&'input str>),
         "forall" => Token::Pi,
         "exists" => Token::Sigma,
         "data" => Token::Data,
@@ -22,9 +23,10 @@ extern {
         "=>" => Token::DArrow,
         ":=" => Token::Assignment,
         "lam" => Token::Lam,
-        "let" => Token::Let,
+        "fn" => Token::Let,
         "|" => Token::Pipe,
         "->" => Token::RArrow,
+        "_" => Token::Hole,
 
         "{" => Token::LBrace,
         "[" => Token::LBracket,
@@ -46,7 +48,8 @@ AtomExpr: Term = {
         };
         Term::Universe(Universe(level))
     },
-    <var: Ident> => Term::Variable(var),
+    "_" => Term::Hole,
+    <var: Ident> => Term::Var(var),
     "(" <Term> ")",
 };
 
@@ -59,18 +62,26 @@ ForallParam : Vec<(Var, Term)> = {
     "(" <idents: Ident+> ":" <ty : Term> ")" => idents.into_iter().map(|ident| (ident, ty.clone())).collect()
 }
 
-ForallParams : Vec<(Var, Term)> = {
+LamParams : Vec<(Var, Term)> = {
     <ident: Ident> ":" <ty : Term> => vec![(ident, ty)],
-    <ForallParam+> => <>.into_iter().flatten().collect(),
+    <ForallParam+> => <>.into_iter().flatten().collect()
 }
 
-pub Lam : Term = {
-    "lam" <params: ForallParams> "=>" <body: Term> => Lam::new_many(body, params.into_iter()),
+Lam : Term = {
+    "lam" <params: LamParams> "=>" <body: Term> => {
+        Lam::new_many(body, params.into_iter()).into()
+    },
 }
 
-pub Pi : Term = {
+ForallParams : Vec<(Var, Term)> = {
+    <ForallParam+> => <>.into_iter().flatten().collect()
+}
+
+Pi : Term = {
     <l: AtomExpr> "->" <r: Term> => Pi::arrow(l, r).into(),
-    "forall" <params: ForallParams> "," <body: Term> => Pi::new_many(body, params.into_iter()),
+    "forall" <params: ForallParams> "," <body: Term> => {
+        Pi::new_many(body, params.into_iter()).into()
+    },
 }
 
 pub Term: Term = {
@@ -92,16 +103,12 @@ DataType: Term = {
     ":" <Term>
 }
 
-
 pub Decl: Decl = {
-    "let" <name: Ident> ":=" <body: Term> => {
-        Decl::Fn { name, return_ty: None, body }
-    },
-    "let" <name: Ident> ":" <ty: Term> "=>" <body: Term> => {
-        Decl::Fn { name, return_ty: Some(ty), body }
+    "fn" <name: Ident> <params: TypeParam*> <ret_ty: DataType?> ":=" <body: Term> => {
+       FnDecl { name, params: params.into(), ret_ty, body }.into()
     },
     "data" <name: Ident> <ty_params: TypeParam*> <universe: DataType?> <cons: Clause*> => {
-       Decl::Data { name, ty_params, universe, cons }
+       Decl::Data { name, ty_params: ty_params.into(), universe, cons }
     },
 }
 

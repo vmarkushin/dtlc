@@ -1,4 +1,5 @@
-use crate::term::{App, Param, Pi, Var};
+use crate::parser::Parser;
+use crate::term::{App, Lam, Param, Pi, Var};
 use crate::{
     env::Env,
     term::{TCError, Term, Type},
@@ -8,91 +9,146 @@ use std::{
     fmt::{Debug, Display, Formatter},
 };
 
+use derive_more::From;
+
 #[derive(Debug)]
 pub struct Constructor {
     pub name: Var,
-    pub params: Vec<Param>,
+    pub params: Params,
 }
 
 impl Constructor {
-    pub fn new(name: Var, params: Vec<Param>) -> Self {
-        Constructor { name, params }
+    pub fn new(name: Var, params: impl Into<Params>) -> Self {
+        Constructor {
+            name,
+            params: params.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, From)]
+pub struct Params(pub Vec<Param>);
+
+impl Params {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Converts type params (e.g. `(A B C : T)`) to `Pi` (i.e. `forall (A B: T), T`).
+    pub fn to_pi(mut self) -> Option<Type> {
+        let last = self.0.pop()?.ty;
+        Some(self.to_pi_with(last))
+        // Some(params.into_iter().rev().fold(last, |acc, p| match p.name {
+        //     Some(name) => Pi::new(name, box acc, box p.ty).into(),
+        //     None => Pi::arrow(acc, p.ty).into(),
+        // }))
+    }
+
+    /// Example: converting params `(A B C : T)` with `Term` to lambda will give `lam (A B C : T) => Term`
+    pub fn to_lam(self, body: Term) -> Term {
+        let params = self.0;
+        params.into_iter().rev().fold(body, |acc, p| {
+            let name = p.name.unwrap_or_else(|| "_".into());
+            Lam::new(name, p.ty, acc).into()
+        })
+    }
+
+    /// Example: applying params `(A B C : T)` to `Term` will give `Term A B C`
+    pub fn app(self, f: Term) -> Type {
+        let params = self.0;
+        let mut n = 0;
+        params.into_iter().fold(f, |acc, p| {
+            let name = match p.name {
+                Some(name) => name,
+                None => {
+                    n += 1;
+                    format!("__x{}", n).into()
+                }
+            };
+            App::new(acc, name.parse::<Term>().unwrap()).into()
+        })
+    }
+
+    /// Example: merging `(A B : T)` and `C` will give `forall (A B : T), C`
+    pub fn merge_pis(params: Vec<Param>, pi2: Term) -> Term {
+        let mut n = 0;
+        params.into_iter().rev().fold(pi2, |acc, p| {
+            let name = match p.name {
+                Some(name) => name,
+                None => {
+                    n += 1;
+                    format!("__x{}", n).into()
+                }
+            };
+            Pi::new(name, box p.ty, box acc).into()
+        })
+    }
+
+    /// Example: merging `(A B : T)` and `C` will give `forall (A B : T), C`
+    pub fn to_pi_with(self, term: Term) -> Term {
+        let params = self.0;
+        if params.is_empty() {
+            return term;
+        }
+        let mut n = 0;
+        params.into_iter().rev().fold(term, |acc, p| {
+            let name = match p.name {
+                Some(name) => name.to_string(),
+                None => {
+                    n += 1;
+                    format!("__x{}", n)
+                }
+            };
+            Pi::new(name, p.ty, acc).into()
+        })
+    }
+}
+
+impl Display for Params {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for p in &self.0 {
+            write!(f, " {}", p)?;
+        }
+        Ok(())
     }
 }
 
 #[derive(Debug)]
+pub struct FnDecl {
+    pub name: Var,
+    pub params: Params,
+    pub ret_ty: Option<Type>,
+    pub body: Term,
+}
+
+#[derive(Debug, From)]
 pub enum Decl {
-    Fn {
-        name: Var,
-        return_ty: Option<Type>,
-        body: Term,
-    },
+    Fn(FnDecl),
     Data {
         name: Var,
-        ty_params: Vec<Param>,
+        ty_params: Params,
         universe: Option<Type>,
         cons: Vec<Constructor>,
     },
 }
 
-/// Converts type params (e.g. `(A B C : T)`) to `Pi` (i.e. `forall (A B: T), T`).
-pub fn params_to_pi(mut params: Vec<Param>) -> Option<Type> {
-    let last = params.pop()?.ty;
-    Some(params.into_iter().fold(last, |acc, p| match p.name {
-        Some(name) => Pi::new(name, box acc, box p.ty).into(),
-        None => Pi::arrow(acc, p.ty).into(),
-    }))
-}
-
-/// Example `Term` and `(A B C : T)` will give `Term A B C`
-pub fn params_to_app(f: Term, params: Vec<Param>) -> Type {
-    let mut n = 0;
-    params.into_iter().fold(f, |acc, p| {
-        let name = match p.name {
-            Some(name) => name,
-            None => {
-                n += 1;
-                format!("__x{}", n).into()
-            }
-        };
-        App::new(acc, name.parse::<Term>().unwrap()).into()
-    })
-}
-
-/// Example: merging `(A B : T)` and `C` will give `forall (A B : T), C`
-pub fn merge_pis(params: Vec<Param>, pi2: Term) -> Term {
-    let mut n = 0;
-    params.into_iter().rev().fold(pi2, |acc, p| {
-        let name = match p.name {
-            Some(name) => name,
-            None => {
-                n += 1;
-                format!("__x{}", n).into()
-            }
-        };
-        Pi::new(name, box p.ty, box acc).into()
-    })
-}
-
 impl Decl {
     pub fn infer_or_check_type_in(&mut self, r: &mut Cow<Env>) -> Result<(), TCError> {
         match self {
-            Decl::Fn {
-                return_ty, body, ..
-            } => {
-                let got_ty = body.typeck(r)?;
-                match return_ty {
-                    Some(ty) if *ty == got_ty => Err(TCError::WrongType {
-                        expected: ty.clone(),
-                        got: got_ty,
-                    }),
-                    Some(_) => Ok(()),
-                    None => {
-                        *return_ty = Some(got_ty);
-                        Ok(())
-                    }
+            Decl::Fn(FnDecl {
+                ret_ty: return_ty,
+                body,
+                ..
+            }) => match return_ty {
+                Some(ty) => {
+                    body.typeck(r, ty.clone())?;
+                    Ok(())
                 }
-            }
+                None => {
+                    *return_ty = Some(r.to_mut().infer_type(body.clone())?);
+                    Ok(())
+                }
+            },
             Decl::Data {
                 name,
                 universe: ret_ty,
@@ -104,7 +160,7 @@ impl Decl {
                     None => ret_ty.insert(Term::Universe(Default::default())).clone(),
                 };
 
-                let params_pi = params_to_pi(ty_params.clone());
+                let params_pi = ty_params.clone().to_pi();
                 let data_ty = match params_pi {
                     Some(pi) => Pi::arrow(pi, ret_ty).into(),
                     None => ret_ty,
@@ -114,18 +170,10 @@ impl Decl {
 
                 // TODO: check for positivity
                 for con in cons {
-                    let data_app_ty = params_to_app(data_ident.clone(), ty_params.clone());
-                    let con_ty = if !con.params.is_empty() {
-                        merge_pis(con.params.clone(), data_app_ty)
-                    } else {
-                        data_app_ty
-                    };
-                    let con_ty = if !ty_params.is_empty() {
-                        merge_pis(ty_params.clone(), con_ty)
-                    } else {
-                        con_ty
-                    };
-                    con_ty.typeck(r)?;
+                    let data_app_ty = ty_params.clone().app(data_ident.clone());
+                    let con_ty = con.params.clone().to_pi_with(data_app_ty);
+                    let con_ty = ty_params.clone().to_pi_with(con_ty);
+                    r.to_mut().infer_type(con_ty)?;
                 }
                 Ok(())
             }
@@ -136,16 +184,20 @@ impl Decl {
 impl Display for Decl {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Decl::Fn {
+            Decl::Fn(FnDecl {
                 name,
-                return_ty,
+                params,
+                ret_ty: ty,
                 body,
-            } => {
-                if let Some(ty) = return_ty {
-                    write!(f, "let {} : {} => {}", name, ty, body)
-                } else {
-                    write!(f, "let {} => {}", name, body)
+            }) => {
+                write!(f, "fn {}", name)?;
+                if !params.is_empty() {
+                    write!(f, "{}", params)?;
                 }
+                if let Some(ty) = ty {
+                    write!(f, " : {}", ty)?;
+                }
+                write!(f, " => {}", body)
             }
             Decl::Data {
                 name,
@@ -154,19 +206,14 @@ impl Display for Decl {
                 cons,
             } => {
                 write!(f, "data {}", name)?;
-                for param in ty_params {
-                    write!(f, " {}", param)?;
-                }
+                write!(f, "{}", ty_params)?;
                 if let Some(t) = universe {
                     write!(f, " : {}", t)?;
                 }
                 f.write_str("\n")?;
                 for con in cons {
                     write!(f, "\t | {}", con.name)?;
-
-                    for param in &con.params {
-                        write!(f, " {}", param)?;
-                    }
+                    write!(f, "{}", con.params)?;
                     f.write_str("\n")?;
                 }
                 Ok(())
@@ -195,17 +242,14 @@ mod tests {
         | nil
         | cons T (List T)
 
-    let main := cons Nat (S (S O)) (cons Nat (S O) (cons Nat O (nil Nat)))
+    fn main := cons Nat (S (S O)) (cons Nat (S O) (cons Nat O (nil Nat)))
     "#,
         )?);
         assert_eq!(
             out,
             parser.parse_term("cons Nat (S (S O)) (cons Nat (S O) (cons Nat O (nil Nat)))")?
         );
-        assert_eq!(
-            out.typeck(&mut Cow::Borrowed(&env))?,
-            parser.parse_term("List Nat")?
-        );
+        assert_eq!(env.infer_type(out)?, parser.parse_term("List Nat")?);
         assert_eq!(
             *env.get_type(&Var("nil".to_owned())).unwrap(),
             parser.parse_term("forall (T : Type), List T")?

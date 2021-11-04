@@ -18,8 +18,12 @@ mod grammar {
     lalrpop_mod!(grammar);
 }
 
+#[macro_use]
+extern crate log;
+
 pub mod decl;
 mod env;
+mod infer;
 pub mod macros;
 pub mod parser;
 mod repl;
@@ -27,17 +31,14 @@ pub mod term;
 mod token;
 
 fn main() {
+    env_logger::init();
     repl::repl("> ", repl::run_repl);
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{
-        env::{EnvedMut},
-        parser::Parser,
-        term::{Term},
-    };
+    use crate::{env::EnvedMut, parser::Parser, term::Term};
 
     #[test]
     fn test_parser() {
@@ -58,11 +59,11 @@ mod test {
                 | O : Nat
                 | S : Nat -> Nat
 
-            let replicate := lam (A : Type) (n : Nat) => Vec n A
+            fn replicate := lam (A : Type) (n : Nat) => Vec n A
 
             data Vector | Vec : Nat -> Type -> Vector
 
-            let main := replicate Nat O
+            fn main := replicate Nat O
         "#,
         );
         assert_eq!(e, t! { Vec O Nat })

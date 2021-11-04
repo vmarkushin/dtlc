@@ -114,7 +114,7 @@ impl Helper {
             return Ok(ValidationResult::Valid(None));
         }
 
-        if input.starts_with("let") || input.starts_with("data") {
+        if input.starts_with("fn") || input.starts_with("data") {
             let res = self
                 .parser
                 .parse_decl(input)
@@ -122,7 +122,7 @@ impl Helper {
             let mut decl = validate_incomplete!(res);
             validate_incomplete!(decl
                 .infer_or_check_type_in(&mut Cow::Borrowed(&self.env))
-                .wrap_err("Failed to typecheck expression"));
+                .wrap_err("Failed to infer type for the expression"));
             return Ok(ValidationResult::Valid(None));
         }
         if let Some(input) = input.strip_prefix(":t ") {
@@ -130,9 +130,10 @@ impl Helper {
                 .parser
                 .parse_term(input)
                 .wrap_err("Failed to parse expression"));
-            let _t = validate_incomplete!(term
-                .typeck(&mut Cow::Borrowed(&self.env))
-                .wrap_err("Failed to typecheck expression"));
+            let _t = validate_incomplete!(self
+                .env
+                .infer_type(term)
+                .wrap_err("Failed to infer type for the expression"));
             return Ok(ValidationResult::Valid(None));
         }
 
@@ -140,9 +141,10 @@ impl Helper {
             .parser
             .parse_term(input)
             .wrap_err("Failed to parse expression"));
-        validate_incomplete!(term
-            .typeck(&mut Cow::Borrowed(&self.env))
-            .wrap_err("Failed to typecheck expression"));
+        validate_incomplete!(self
+            .env
+            .infer_type(term)
+            .wrap_err("Failed to infer type for the expression"));
         Ok(ValidationResult::Valid(None))
     }
 }
@@ -243,12 +245,12 @@ pub fn repl(prompt: &str, mut f: impl FnMut(&Parser, &mut Env, &'static str) -> 
 }
 
 pub fn run_repl(parser: &Parser, env: &mut Env, input: &'static str) -> Result<()> {
-    if input.starts_with("let") || input.starts_with("data") {
+    if input.starts_with("fn") || input.starts_with("data") {
         let mut decl = parser
             .parse_decl(input)
             .wrap_err("Failed to parse expression")?;
         decl.infer_or_check_type_in(&mut Cow::Borrowed(env))
-            .wrap_err("Failed to typecheck expression")?;
+            .wrap_err("Failed to infer type for the expression")?;
         env.add_decl(decl);
         return Ok(());
     }
@@ -256,18 +258,16 @@ pub fn run_repl(parser: &Parser, env: &mut Env, input: &'static str) -> Result<(
         let term = parser
             .parse_term(input)
             .wrap_err("Failed to parse expression")?;
-        let t = term
-            .typeck(&mut Cow::Borrowed(env))
-            .wrap_err("Failed to typecheck expression")?;
-        println!("{}", t);
+        let t = env
+            .infer_type(term)
+            .wrap_err("Failed to infer type for the expression")?;
         return Ok(());
     }
 
     let term = parser
         .parse_term(input)
         .wrap_err("Failed to parse expression")?;
-    println!("in: {}", &term);
-    term.typeck(&mut Cow::Borrowed(env))
+    env.infer_type(term.clone())
         .wrap_err("Failed to typecheck expression")?;
     println!("{}", Enved::from((term, &*env)).nf());
     Ok(())

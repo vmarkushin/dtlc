@@ -11,7 +11,7 @@ pub enum Token<'input> {
     #[token("exists")]
     #[token("Σ")]
     Sigma,
-    #[regex("[a-zA-Z_][a-zA-Z0-9_]*")]
+    #[regex("[a-zA-Z_][a-zA-Z0-9_']*")]
     Ident(&'input str),
     #[token("data")]
     Data,
@@ -30,13 +30,17 @@ pub enum Token<'input> {
     #[token("lam")]
     #[token("λ")]
     Lam,
-    #[token("let")]
+    #[token("fn")]
     Let,
     #[token("|")]
     Pipe,
     #[token("->")]
     #[token("→")]
     RArrow,
+    #[token("_")]
+    Hole,
+    #[regex("\\?[a-zA-Z0-9_]+")]
+    Goal(&'input str),
     #[token("{")]
     LBrace,
     #[token("}")]
@@ -77,7 +81,7 @@ impl<'a> Display for Token<'a> {
             Dot         => f.write_str("."),
             DArrow      => f.write_str("=>"),
             Lam         => f.write_str("lam"),
-            Let         => f.write_str("let"),
+            Let         => f.write_str("fn"),
             Pipe        => f.write_str("|"),
             RArrow      => f.write_str("->"),
             LBrace      => f.write_str("{"),
@@ -87,6 +91,8 @@ impl<'a> Display for Token<'a> {
             LParen      => f.write_str("("),
             RParen      => f.write_str(")"),
             Whitespace  => f.write_str(" "),
+            Hole        => f.write_str("_"),
+            Goal(s)     => f.write_str(s),
         }
     }
 }

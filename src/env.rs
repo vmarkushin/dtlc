@@ -1,7 +1,8 @@
-use crate::decl::{merge_pis, params_to_app, params_to_pi, Decl};
+use crate::decl::{Decl, FnDecl};
 use crate::term::{Pi, Term, Type, Var};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt::Formatter;
 
 use derive_more::{Deref, DerefMut, From};
 
@@ -31,23 +32,31 @@ pub struct EnvedMut<'a, T> {
 
 #[derive(Clone, Default, Debug)]
 pub struct Env {
-    types: HashMap<Var, Type>,
+    pub(crate) types: HashMap<Var, Type>,
     defs: HashMap<Var, Term>,
+}
+
+impl std::fmt::Display for Env {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for (name, def) in &self.defs {
+            writeln!(f, "{} := {}", name, def)?;
+        }
+        for (name, t) in &self.types {
+            writeln!(f, "{} : {}", name, t)?;
+        }
+        Ok(())
+    }
 }
 
 impl Env {
     pub(crate) fn get_decl(&self, sym: &Var) -> Option<&Term> {
         self.defs.get(sym)
     }
-}
 
-impl Env {
     pub(crate) fn get_type(&self, p0: &Var) -> Option<&Type> {
         self.types.get(p0)
     }
-}
 
-impl Env {
     pub fn new() -> Self {
         Env::default()
     }
@@ -57,20 +66,52 @@ impl Env {
     }
 
     pub fn add_type(&mut self, sym: Var, ty: Type) {
-        self.types.insert(sym, ty);
+        if sym.0 == "_" {
+            return;
+        }
+        let maybe_ty = self.types.get(&sym);
+        assert!(
+            maybe_ty.is_none() || maybe_ty == Some(&Term::Hole) || maybe_ty == Some(&ty),
+            "{} is already defined",
+            sym
+        );
+        // TODO: whnf in env?
+        self.types.insert(sym, ty.whnf());
+    }
+
+    pub fn get_def(&self, name: &Var) -> Option<&Term> {
+        self.defs.get(name)
+    }
+
+    pub fn add_def(&mut self, name: Var, term: Term) {
+        debug!("Inferring type for decl `{}`", name);
+        let term_ty = if let Some(ty) = self.get_type(&name) {
+            term.typeck(&mut Cow::Borrowed(&self), ty.clone()).unwrap()
+        } else {
+            EnvedMut::from((term.clone(), &mut self.clone()))
+                .infer_type()
+                .unwrap()
+        };
+        self.add_type(name.clone(), term_ty);
+        self.defs.insert(name, term);
     }
 
     pub fn add_decl(&mut self, decl: Decl) {
         match decl {
-            Decl::Fn {
+            Decl::Fn(FnDecl {
                 name,
-                return_ty,
+                params,
+                ret_ty: return_ty,
                 body,
-            } => {
-                if let Some(ty) = return_ty {
-                    self.add_type(name.clone(), ty);
-                }
-                self.defs.insert(name, body);
+            }) => {
+                // let ret_ty = ty.unwrap_or_else(|| {
+                //     // body.
+                //     Term::Hole
+                // });
+                // let gen_ty = params.clone().to_pi_with(ret_ty);
+                // self.add_type(name.clone(), gen_ty);
+                let gen_body = params.to_lam(body);
+                self.add_def(name, gen_body.whnf());
             }
             Decl::Data {
                 name,
@@ -84,7 +125,7 @@ impl Env {
                     Term::Universe(Default::default())
                 };
 
-                let params_pi = params_to_pi(ty_params.clone());
+                let params_pi = ty_params.clone().to_pi();
                 let data_ty = match params_pi {
                     Some(pi) => Pi::arrow(pi, ty).into(),
                     None => ty,
@@ -93,19 +134,11 @@ impl Env {
                 let data_ident = name.parse::<Term>().unwrap();
 
                 self.add_type(name, data_ty);
-
                 for con in cons {
-                    let data_app_ty = params_to_app(data_ident.clone(), ty_params.clone());
-                    let con_ty = if !con.params.is_empty() {
-                        merge_pis(con.params.clone(), data_app_ty)
-                    } else {
-                        data_app_ty
-                    };
-                    let con_ty = if !ty_params.is_empty() {
-                        merge_pis(ty_params.clone(), con_ty)
-                    } else {
-                        con_ty
-                    };
+                    let data_app_ty = ty_params.clone().app(data_ident.clone());
+                    let con_ty = ty_params
+                        .clone()
+                        .to_pi_with(con.params.clone().to_pi_with(data_app_ty));
                     self.add_type(con.name, con_ty);
                 }
             }
@@ -123,9 +156,10 @@ impl<'a> EnvedMut<'a, Prog> {
         let main = self
             .env
             .get_decl(&Var("main".to_owned()))
-            .expect("function 'main' not found");
-        main.typeck(&mut Cow::Borrowed(self.env)).unwrap();
-        Enved::from((main.clone(), &*self.env)).nf()
+            .expect("function 'main' not found")
+            .to_owned();
+        self.env.infer_type(main.clone()).unwrap();
+        Enved::from((main, &*self.env)).nf()
     }
 }
 
