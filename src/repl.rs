@@ -269,6 +269,6 @@ pub fn run_repl(parser: &Parser, env: &mut Env, input: &'static str) -> Result<(
         .wrap_err("Failed to parse expression")?;
     env.infer_type(term.clone())
         .wrap_err("Failed to typecheck expression")?;
-    println!("{}", Enved::from((term, &*env)).nf());
+    println!("{}", term.nf(&*env));
     Ok(())
 }

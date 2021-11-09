@@ -1,14 +1,17 @@
 use crate::decl::Params;
-use crate::dsp;
 use crate::ensure;
-use crate::env::{Env, Enved, EnvedMut};
-use crate::parser::Parser;
-use crate::term::{App, Lam, Param, Pi, Sym, TCError, Term, Type, Var};
+use crate::env::{Env, EnvedMut};
+use crate::term::{App, Lam, Param, Pi, TCError, Term, Type, Var};
 use derive_more::From;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::ops::Add;
+
+impl Term {
+    pub fn infer_type(self, env: &mut Env) -> Result<Type, TCError> {
+        EnvedMut::new(self, env).infer_type()
+    }
+}
 
 #[derive(Debug, From)]
 pub struct Arguments {
@@ -24,7 +27,6 @@ impl Arguments {
     }
 }
 
-// f a b c
 #[derive(Debug)]
 struct AppView {
     f: Term,
@@ -32,6 +34,14 @@ struct AppView {
 }
 
 impl AppView {
+    pub fn infer_holes(
+        self,
+        tele_view: TeleView,
+        env: &mut Env,
+    ) -> Result<(AppView, TeleView), TCError> {
+        EnvedMut::new(self, env).infer_holes(tele_view)
+    }
+
     pub(crate) fn to_app(mut self) -> Term {
         self.args.inner.reverse();
         self.args.app_to(self.f)
@@ -62,7 +72,7 @@ impl AppView {
     }
 }
 
-// (A B C : T) -> T
+/// Telescope view.
 struct TeleView {
     params: Params,
     ret: Term,
@@ -104,7 +114,7 @@ impl TeleView {
 }
 
 impl<'a> EnvedMut<'a, AppView> {
-    fn infer_holes(mut self, mut tele_view: TeleView) -> Result<(AppView, TeleView), TCError> {
+    fn infer_holes(self, tele_view: TeleView) -> Result<(AppView, TeleView), TCError> {
         let mut ctx: HashMap<Var, Term> = Default::default();
         // ident => expected type
         let mut need_to_infer: HashMap<Var, Term> = Default::default();
@@ -193,15 +203,13 @@ impl<'a> EnvedMut<'a, Term> {
                 .ok_or_else(|| TCError::UnknownVar(n.clone())),
             app @ Term::App(..) => {
                 let app_view = AppView::from_app(app.clone());
-                let f_ty =
-                    EnvedMut::from((app_view.f.clone(), &mut self.env.clone())).infer_type()?;
-                let f_ty_whnf = Enved::from((f_ty, &*self.env)).whnf_in();
+                let f_ty = app_view.f.clone().infer_type(&mut self.env.clone())?;
+                let f_ty_whnf = f_ty.whnf(&*self.env);
                 match f_ty_whnf {
                     pi @ Term::Pi(..) => {
                         let pi_view = TeleView::from_pi(pi);
                         let (app_view_new, pi_view_new) =
-                            EnvedMut::from((app_view, &mut self.env.clone()))
-                                .infer_holes(pi_view)?;
+                            app_view.infer_holes(pi_view, &mut self.env.clone())?;
                         let mut app = app_view_new.to_app();
                         let mut pi = pi_view_new.to_pi();
                         loop {
@@ -236,7 +244,7 @@ impl<'a> EnvedMut<'a, Term> {
             }) => {
                 let mut env_new = self.env.clone();
                 env_new.add_type(s.clone(), *t.clone());
-                let te = EnvedMut::from((*e.clone(), &mut env_new)).infer_type()?;
+                let te = e.clone().infer_type(&mut env_new)?;
 
                 // If we had something like `lam (x : _) => e`, then we may have infer x's type in the
                 // `new_env` and should use it in the construction of a Pi.
@@ -249,7 +257,7 @@ impl<'a> EnvedMut<'a, Term> {
                     t.clone()
                 };
                 let lt = Term::Pi(Pi::new(s.clone(), param_ty, box te));
-                EnvedMut::from((lt.clone(), &mut self.env.clone())).infer_type()?;
+                lt.clone().infer_type(&mut self.env.clone())?;
                 Ok(lt)
             }
             Term::Pi(Pi {
@@ -257,13 +265,13 @@ impl<'a> EnvedMut<'a, Term> {
                 param_ty: a,
                 ty: b,
             }) => {
-                let s = EnvedMut::from((*a.clone(), &mut self.env.clone())).infer_type()?;
+                let s = a.clone().infer_type(&mut self.env.clone())?;
                 if !s.is_kind() {
                     return Err(TCError::ExpectedKind(s));
                 }
                 let mut env_new = self.env.clone();
                 env_new.add_type(x.clone(), *a.clone());
-                let t = EnvedMut::from((*b.clone(), &mut env_new)).infer_type()?;
+                let t = b.clone().infer_type(&mut env_new)?;
                 if !t.is_kind() {
                     return Err(TCError::ExpectedKindReturn(t));
                 }
@@ -272,7 +280,6 @@ impl<'a> EnvedMut<'a, Term> {
             }
             Term::Universe(n) => Ok(Term::Universe((n.0 + 1).into())),
             Term::Hole => Ok(Term::Hole),
-            other => Err(TCError::CantInferType(other.clone())),
         }
     }
 }
@@ -297,60 +304,65 @@ impl Term {
     }
 }
 
-macro_rules! pt {
-    ($p:ident, $s:literal) => {
-        $p.parse_term($s)?
-    };
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::Parser;
 
-#[test]
-fn test_infer_type_basic() -> eyre::Result<()> {
-    let mut env = Env::default();
-    let p = Parser::default();
-    env.add_type("T".into(), Term::Universe(0.into()));
-    env.check_type(pt!(p, "T"), pt!(p, "Type"))?;
-    assert_eq!(env.infer_type(pt!(p, "T"))?, pt!(p, "Type"));
+    macro_rules! pt {
+        ($p:ident, $s:literal) => {
+            $p.parse_term($s)?
+        };
+    }
 
-    env.check_type(pt!(p, "lam (y : T) => y"), pt!(p, "forall (x : T), T"))?;
-    assert_eq!(
-        env.infer_type(pt!(p, "lam (y : T) => y"))?,
-        pt!(p, "forall (y : T), T")
-    );
-    env.check_type(
-        pt!(p, "lam (f : T -> T) (y : T) => f y"),
-        pt!(p, "forall (ff : T -> T) (x : T), T"),
-    )?;
-    assert_eq!(
-        env.infer_type(pt!(p, "lam (f : T -> T) (x : T) => f x"))?,
-        pt!(p, "forall (f : T -> T) (x : T), T")
-    );
-    env.check_type(pt!(p, "forall (ff : T -> T) (x : T), T"), pt!(p, "Type"))?;
-    assert_eq!(
-        env.infer_type(pt!(p, "forall (ff : T -> T) (x : T), T"))?,
-        pt!(p, "Type")
-    );
-    env.check_type(pt!(p, "Type0"), pt!(p, "Type1"))?;
-    assert_eq!(env.infer_type(pt!(p, "Type0"))?, pt!(p, "Type1"));
-    assert_eq!(
-        env.check_type(pt!(p, "forall (ff : T -> T) (x : T), x"), pt!(p, "T"))
-            .unwrap_err(),
-        TCError::ExpectedKind(pt!(p, "T"))
-    );
-    assert_eq!(
-        env.infer_type(pt!(p, "forall (ff : T -> T) (x : T), x"))
-            .unwrap_err(),
-        TCError::ExpectedKindReturn(pt!(p, "T"))
-    );
-    Ok(())
-}
+    #[test]
+    fn test_infer_type_basic() -> eyre::Result<()> {
+        let mut env = Env::default();
+        let p = Parser::default();
+        env.add_type("T".into(), Term::Universe(0.into()));
+        env.check_type(pt!(p, "T"), pt!(p, "Type"))?;
+        assert_eq!(env.infer_type(pt!(p, "T"))?, pt!(p, "Type"));
 
-#[test]
-fn test_infer_type() -> eyre::Result<()> {
-    env_logger::try_init();
-    let mut env = Env::default();
-    let p = Parser::default();
-    let prog = p.parse_prog(
-        r#"
+        env.check_type(pt!(p, "lam (y : T) => y"), pt!(p, "forall (x : T), T"))?;
+        assert_eq!(
+            env.infer_type(pt!(p, "lam (y : T) => y"))?,
+            pt!(p, "forall (y : T), T")
+        );
+        env.check_type(
+            pt!(p, "lam (f : T -> T) (y : T) => f y"),
+            pt!(p, "forall (ff : T -> T) (x : T), T"),
+        )?;
+        assert_eq!(
+            env.infer_type(pt!(p, "lam (f : T -> T) (x : T) => f x"))?,
+            pt!(p, "forall (f : T -> T) (x : T), T")
+        );
+        env.check_type(pt!(p, "forall (ff : T -> T) (x : T), T"), pt!(p, "Type"))?;
+        assert_eq!(
+            env.infer_type(pt!(p, "forall (ff : T -> T) (x : T), T"))?,
+            pt!(p, "Type")
+        );
+        env.check_type(pt!(p, "Type0"), pt!(p, "Type1"))?;
+        assert_eq!(env.infer_type(pt!(p, "Type0"))?, pt!(p, "Type1"));
+        assert_eq!(
+            env.check_type(pt!(p, "forall (ff : T -> T) (x : T), x"), pt!(p, "T"))
+                .unwrap_err(),
+            TCError::ExpectedKind(pt!(p, "T"))
+        );
+        assert_eq!(
+            env.infer_type(pt!(p, "forall (ff : T -> T) (x : T), x"))
+                .unwrap_err(),
+            TCError::ExpectedKindReturn(pt!(p, "T"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_infer_type() -> eyre::Result<()> {
+        env_logger::try_init()?;
+        let mut env = Env::default();
+        let p = Parser::default();
+        let prog = p.parse_prog(
+            r#"
     data Bool
         | true
         | false
@@ -359,25 +371,27 @@ fn test_infer_type() -> eyre::Result<()> {
     fn bool := true
     fn idb := id _ bool
     fn deep (f : forall (A : Type), A -> A -> A) (x : Bool) := (lam (y : _) => f _ y x) x
+    fn deep' (f : forall (A : Type), A -> A -> A) (x : Bool) := (lam (y : _) => f _ x y) x
     "#,
-    )?;
-    for decl in prog {
-        env.add_decl(decl);
-    }
-    assert_eq!(*env.get_type(&"bool".into()).unwrap(), pt!(p, "Bool"));
-    assert_eq!(*env.get_type(&"Bool".into()).unwrap(), pt!(p, "Type"));
+        )?;
+        for decl in prog {
+            env.add_decl(decl);
+        }
+        assert_eq!(*env.get_type(&"bool".into()).unwrap(), pt!(p, "Bool"));
+        assert_eq!(*env.get_type(&"Bool".into()).unwrap(), pt!(p, "Type"));
 
-    assert_eq!(
-        *env.get_type(&"id".into()).unwrap(),
-        pt!(p, "forall (A : Type) (a : A), A")
-    );
-    assert_eq!(*env.get_type(&"idb".into()).unwrap(), pt!(p, "Bool"));
-    assert_eq!(
-        *env.get_type(&"deep".into()).unwrap(),
-        pt!(
-            p,
-            "forall (f : forall (A : Type), A -> A -> A) (x : Bool), Bool"
-        )
-    );
-    Ok(())
+        assert_eq!(
+            *env.get_type(&"id".into()).unwrap(),
+            pt!(p, "forall (A : Type) (a : A), A")
+        );
+        assert_eq!(*env.get_type(&"idb".into()).unwrap(), pt!(p, "Bool"));
+        assert_eq!(
+            *env.get_type(&"deep".into()).unwrap(),
+            pt!(
+                p,
+                "forall (f : forall (A : Type), A -> A -> A) (x : Bool), Bool"
+            )
+        );
+        Ok(())
+    }
 }

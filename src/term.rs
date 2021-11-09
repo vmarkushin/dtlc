@@ -1,6 +1,6 @@
 #![allow(clippy::ptr_arg)]
 
-use crate::env::{Env, Enved, EnvedMut};
+use crate::env::{Env, Enved};
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
@@ -74,6 +74,12 @@ impl<T> ReducesTo<T> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Display, Deref, DerefMut, From)]
 pub struct Var(pub Sym);
+
+impl Var {
+    fn app(self, args: &[Term], env: &Env) -> Term {
+        Term::Var(self).app(args, env)
+    }
+}
 
 impl From<&str> for Var {
     fn from(v: &str) -> Self {
@@ -221,6 +227,10 @@ impl Pi {
         set.remove(param_name);
         param_ty.free_vars().into_iter().chain(set).collect()
     }
+
+    fn app(self, args: &[Term], env: &Env) -> Term {
+        Term::from(self).app(args, env)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display, Default, From, Add)]
@@ -237,8 +247,49 @@ pub enum Term {
 }
 
 impl Term {
+    pub(crate) fn normalize(self, is_deep: bool, is_strict: bool, env: &Env) -> Term {
+        Enved::new(self, env).normalize(is_deep, is_strict)
+    }
+
+    pub(crate) fn normalize_if_deep(self, is_deep: bool, is_strict: bool, env: &Env) -> Term {
+        Enved::new(self, env).normalize_if_deep(is_deep, is_strict)
+    }
+
+    pub(crate) fn normalize_if_strict(self, is_deep: bool, is_strict: bool, env: &Env) -> Term {
+        Enved::new(self, env).normalize_if_strict(is_deep, is_strict)
+    }
+
+    pub(crate) fn spine(self, args: &[Term], is_deep: bool, is_strict: bool, env: &Env) -> Term {
+        Enved::new(self, env).spine(args, is_deep, is_strict)
+    }
+
+    pub(crate) fn app(self, args: &[Term], env: &Env) -> Term {
+        Enved::new(self, env).app(args)
+    }
+
+    pub(crate) fn ensure_ret_type_eq(
+        self,
+        ty_name: &Var,
+        ty_args: &Vec<(Option<Sym>, Type)>,
+        env: &Env,
+    ) -> Result<()> {
+        Enved::new(self, env).ensure_ret_type_eq(ty_name, ty_args)
+    }
+
+    /// Evaluates the expression to Weak Head Normal Form.
+    pub(crate) fn whnf(self, env: &Env) -> Term {
+        Enved::new(self, env).whnf_in()
+    }
+
+    pub fn nf(self, env: &Env) -> Term {
+        Enved::new(self, env).nf()
+    }
+    pub(crate) fn beta_eq(self, term: Term, env: &Env) -> bool {
+        Enved::new(self, env).beta_eq(Enved::new(term, env))
+    }
+
     pub(crate) fn ensure_well_formed_type(&self, env: &mut Cow<Env>) -> Result<Type> {
-        let norm = Enved::from((self.clone(), &**env)).whnf_in();
+        let norm = self.clone().whnf(&**env);
         let t = env.to_mut().infer_type(norm)?;
         ensure!(t.is_kind(), TCError::ExpectedKind(t));
         Ok(t)
@@ -312,12 +363,7 @@ impl FromStr for BTerm {
 
 impl Term {
     pub(crate) fn typeck_whnf(&self, r: &mut Cow<Env>, exp_ty: Type) -> Result<Type> {
-        Ok(self.typeck(r, exp_ty)?.whnf())
-    }
-
-    #[allow(unused)]
-    pub(crate) fn typecheck(&self, exp_ty: Type) -> Result<Type> {
-        self.typeck(&mut Cow::Owned(Default::default()), exp_ty)
+        Ok(self.typeck(r, exp_ty)?.whnf(r.as_ref()))
     }
 
     pub fn typeck(&self, env: &mut Cow<Env>, exp_ty: Type) -> Result<Type> {
@@ -327,17 +373,12 @@ impl Term {
                 param_ty: t,
                 body: e,
             }) => {
-                let exp_ty = exp_ty.whnf();
+                let exp_ty = exp_ty.whnf(env.as_ref());
                 match exp_ty {
-                    Term::Pi(Pi {
-                        param_name: x,
-                        param_ty: box at,
-                        ty: box rt,
-                    }) => {
+                    Term::Pi(Pi { box ty, .. }) => {
                         // TODO: ensure t == at ?
                         env.to_mut().add_type(s.clone(), *t.clone());
-                        // env.to_mut().add_type(x.clone(), at.clone());
-                        Ok(e.typeck(env, rt)?)
+                        Ok(e.typeck(env, ty)?)
                     }
                     other => Err(TCError::ExpectedFunction(other)),
                 }
@@ -347,7 +388,7 @@ impl Term {
                 param_ty: a,
                 ty: b,
             }) => {
-                let exp_ty = exp_ty.whnf();
+                let exp_ty = exp_ty.whnf(env.as_ref());
                 match exp_ty {
                     uni @ Term::Universe(_) => {
                         a.typeck_whnf(env, uni.clone())?;
@@ -360,15 +401,14 @@ impl Term {
             }
             Term::Hole => Ok(exp_ty),
             other => {
-                let term_ty = EnvedMut::from((other.clone(), env.to_mut())).infer_type()?;
+                let term_ty = other.clone().infer_type(env.to_mut())?;
                 if exp_ty.is_hole() {
                     return Ok(term_ty);
                 } else if term_ty.is_hole() {
                     return Ok(exp_ty);
                 }
                 ensure!(
-                    Enved::from((term_ty.clone(), env.as_ref()))
-                        .beta_eq(Enved::from((exp_ty.clone(), env.as_ref()))),
+                    term_ty.clone().beta_eq(exp_ty.clone(), env.as_ref()),
                     TCError::WrongType {
                         expected: exp_ty,
                         got: term_ty
@@ -435,7 +475,7 @@ impl Term {
     }
 
     /// Compares expressions modulo α-conversions. That is, λx.x == λy.y.
-    pub(crate) fn alpha_eq(&self, other: &Term) -> bool {
+    pub fn alpha_eq(&self, other: &Term) -> bool {
         use Term as T;
 
         match (self, other) {
@@ -446,11 +486,6 @@ impl Term {
             (T::Universe(k1), T::Universe(k2)) if k1 == k2 => true,
             _ => false,
         }
-    }
-
-    /// Evaluates the expression to Weak Head Normal Form.
-    pub fn whnf(self) -> Term {
-        Enved::from((self, &Default::default())).whnf_in()
     }
 
     fn free_vars(&self) -> HashSet<Var> {
@@ -483,7 +518,7 @@ impl<'a> Enved<'a, Term> {
             (T::App(App { box f, box arg }), _) => {
                 let mut args_new = args.to_owned();
                 args_new.push(arg);
-                Self::from((f.into_inner(), env)).spine(&args_new, is_deep, is_strict)
+                f.into_inner().spine(&args_new, is_deep, is_strict, env)
             }
             (
                 T::Lam(Lam {
@@ -494,12 +529,8 @@ impl<'a> Enved<'a, Term> {
                 [],
             ) => Lam {
                 param_name,
-                param_ty: Self::from((param_ty, env))
-                    .normalize(is_deep, is_strict)
-                    .into(),
-                body: Self::from((body, env))
-                    .normalize_if_deep(is_deep, is_strict)
-                    .into(),
+                param_ty: param_ty.normalize(is_deep, is_strict, env).into(),
+                body: body.normalize_if_deep(is_deep, is_strict, env).into(),
             }
             .into(),
             (
@@ -511,10 +542,10 @@ impl<'a> Enved<'a, Term> {
                 [xs @ .., x],
             ) => {
                 let x = x.to_owned();
-                let arg = Self::from((x, env)).normalize_if_strict(is_deep, is_strict);
+                let arg = x.normalize_if_strict(is_deep, is_strict, env);
                 let ee = body.subst(&param_name, &arg);
-                let term = Self::from((ee, env)).normalize_if_deep(is_deep, is_strict);
-                Self::from((term, env)).spine(xs, is_deep, is_strict)
+                let term = ee.normalize_if_deep(is_deep, is_strict, env);
+                term.spine(xs, is_deep, is_strict, env)
             }
             (
                 T::Pi(Pi {
@@ -527,24 +558,24 @@ impl<'a> Enved<'a, Term> {
                 // TODO: should we reverse args?
                 let pi = Pi {
                     param_name,
-                    param_ty: Self::from((param_ty, env)).normalize(false, false).into(),
-                    ty: Self::from((ty, env)).normalize(false, false).into(),
+                    param_ty: param_ty.normalize(false, false, env).into(),
+                    ty: ty.normalize(false, false, env).into(),
                 };
-                Self::from((pi.into(), env)).app(args)
+                pi.app(args, env)
             }
             (T::Var(v), args) => env
                 .get_decl(&v)
                 .cloned()
-                .map(|e| Self::from((e, env)).spine(args, is_deep, is_strict))
+                .map(|e| e.spine(args, is_deep, is_strict, env))
                 .unwrap_or_else(|| {
                     let mut xs = args.to_owned();
                     xs.reverse();
-                    Self::from((v.into(), env)).app(&xs)
+                    v.app(&xs, env)
                 }),
             (f, _) => {
                 let mut xs = args.to_owned();
                 xs.reverse();
-                Self::from((f, env)).app(&xs)
+                f.app(&xs, env)
             }
         }
     }
@@ -567,16 +598,13 @@ impl<'a> Enved<'a, Term> {
 
     fn app(self, args: &[Term]) -> Term {
         let Self { inner: f, env } = self;
-        args.iter()
-            .cloned()
-            .map(|x| Self::from((x, env)).nf())
-            .fold(f, |f, arg| {
-                App {
-                    f: box ReducesTo::unchecked(f),
-                    arg: box arg,
-                }
-                .into()
-            })
+        args.iter().cloned().map(|x| x.nf(env)).fold(f, |f, arg| {
+            App {
+                f: box ReducesTo::unchecked(f),
+                arg: box arg,
+            }
+            .into()
+        })
     }
 
     pub fn normalize(self, is_deep: bool, is_strict: bool) -> Term {
@@ -599,7 +627,7 @@ impl<'a> Enved<'a, Term> {
         match self.whnf_in() {
             Term::Var(v) if v == *ty_name => Ok(()),
             Term::Pi(Pi { ty: box body, .. }) | Term::Lam(Lam { box body, .. }) => {
-                Self::from((body, env)).ensure_ret_type_eq(ty_name, ty_args)
+                body.ensure_ret_type_eq(ty_name, ty_args, env)
             }
             e => Err(TCError::ExpectedVarLamPi(e)),
         }
@@ -643,15 +671,13 @@ mod tests {
 
     #[track_caller]
     pub fn assert_beta_eq(e1: Term, e2: Term, env: &Env) {
-        let e1 = Enved::from((e1, env));
-        let e2 = Enved::from((e2, env));
-        if !e1.clone().beta_eq(e2.clone()) {
+        if !e1.clone().beta_eq(e2.clone(), env) {
             panic!(
                 r#"assertion failed: `(left != right)`
 left: `{:?}`,
 right: `{:?}`"#,
-                e1.nf(),
-                e2.nf(),
+                e1.nf(env),
+                e2.nf(env),
             )
         }
     }
@@ -663,8 +689,8 @@ right: `{:?}`"#,
         match t {
             Term::Lam(Lam {
                 param_name: n,
-                param_ty: t,
                 body: b,
+                ..
             }) => {
                 assert_beta_eq(
                     b.subst_var(&n, "x".to_owned()),
@@ -678,12 +704,10 @@ right: `{:?}`"#,
         let t = p.parse_term("forall (A : Type) (a : A), A").unwrap();
         match t {
             Term::Pi(Pi {
-                param_name: n,
-                param_ty: a,
-                ty: b,
+                param_name: n, ty, ..
             }) => {
                 assert_beta_eq(
-                    b.subst_var(&n, "Bool"),
+                    ty.subst_var(&n, "Bool"),
                     p.parse_term("forall (a : Bool), Bool")?,
                     &Default::default(),
                 );
@@ -744,7 +768,11 @@ right: `{:?}`"#,
     fn test_nat() {
         let n = nat(4);
         let env = Env::default();
-        n.typecheck(t!(forall t : *, (t -> t) -> (t -> t))).unwrap();
+        n.typeck(
+            &mut Cow::Owned(Default::default()),
+            t!(forall t : *, (t -> t) -> (t -> t)),
+        )
+        .unwrap();
         assert_beta_eq(
             n,
             t!(lam nat:* => (lam s:(forall _:nat, nat) => lam z:nat => s (s (s (s z))))),
@@ -765,9 +793,7 @@ right: `{:?}`"#,
         let x = x as u32 % 10;
         let y = y as u32 % 10;
         eprintln!("{} * {}", x, y);
-        let a = Enved::from((mul(nat(x), nat(y)), &env));
-        let b = Enved::from((nat(x * y), &env));
-        a.beta_eq(b)
+        mul(nat(x), nat(y)).beta_eq(nat(x * y), &env)
     }
 
     #[test]

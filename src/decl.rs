@@ -1,4 +1,3 @@
-use crate::parser::Parser;
 use crate::term::{App, Lam, Param, Pi, Var};
 use crate::{
     env::Env,
@@ -38,10 +37,6 @@ impl Params {
     pub fn to_pi(mut self) -> Option<Type> {
         let last = self.0.pop()?.ty;
         Some(self.to_pi_with(last))
-        // Some(params.into_iter().rev().fold(last, |acc, p| match p.name {
-        //     Some(name) => Pi::new(name, box acc, box p.ty).into(),
-        //     None => Pi::arrow(acc, p.ty).into(),
-        // }))
     }
 
     /// Example: converting params `(A B C : T)` with `Term` to lambda will give `lam (A B C : T) => Term`

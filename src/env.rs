@@ -14,6 +14,12 @@ pub struct Enved<'a, T> {
     pub env: &'a Env,
 }
 
+impl<'a, T> Enved<'a, T> {
+    pub fn new(inner: T, env: &'a Env) -> Self {
+        Enved { inner, env }
+    }
+}
+
 impl<'a, T: Clone> Clone for Enved<'a, T> {
     fn clone(&self) -> Self {
         let inner = self.inner.clone();
@@ -28,6 +34,12 @@ pub struct EnvedMut<'a, T> {
     #[deref_mut]
     pub inner: T,
     pub env: &'a mut Env,
+}
+
+impl<'a, T> EnvedMut<'a, T> {
+    pub fn new(inner: T, env: &'a mut Env) -> Self {
+        EnvedMut { inner, env }
+    }
 }
 
 #[derive(Clone, Default, Debug)]
@@ -76,7 +88,7 @@ impl Env {
             sym
         );
         // TODO: whnf in env?
-        self.types.insert(sym, ty.whnf());
+        self.types.insert(sym, ty.whnf(&*self));
     }
 
     pub fn get_def(&self, name: &Var) -> Option<&Term> {
@@ -88,9 +100,7 @@ impl Env {
         let term_ty = if let Some(ty) = self.get_type(&name) {
             term.typeck(&mut Cow::Borrowed(&self), ty.clone()).unwrap()
         } else {
-            EnvedMut::from((term.clone(), &mut self.clone()))
-                .infer_type()
-                .unwrap()
+            term.clone().infer_type(&mut self.clone()).unwrap()
         };
         self.add_type(name.clone(), term_ty);
         self.defs.insert(name, term);
@@ -101,17 +111,15 @@ impl Env {
             Decl::Fn(FnDecl {
                 name,
                 params,
-                ret_ty: return_ty,
+                ret_ty,
                 body,
             }) => {
-                // let ret_ty = ty.unwrap_or_else(|| {
-                //     // body.
-                //     Term::Hole
-                // });
-                // let gen_ty = params.clone().to_pi_with(ret_ty);
-                // self.add_type(name.clone(), gen_ty);
+                if let Some(ty) = ret_ty {
+                    let gen_ty = params.clone().to_pi_with(ty);
+                    self.add_type(name.clone(), gen_ty);
+                }
                 let gen_body = params.to_lam(body);
-                self.add_def(name, gen_body.whnf());
+                self.add_def(name, gen_body.whnf(&*self));
             }
             Decl::Data {
                 name,
@@ -159,7 +167,7 @@ impl<'a> EnvedMut<'a, Prog> {
             .expect("function 'main' not found")
             .to_owned();
         self.env.infer_type(main.clone()).unwrap();
-        Enved::from((main, &*self.env)).nf()
+        main.nf(&*self.env)
     }
 }
 

@@ -19,12 +19,13 @@ impl Parser {
         self.decl.parse(tokens).map_err(|x| x.map_location(|_| 0))
     }
 
-    pub(crate) fn parse_term<'a>(&self, input: &'a str) -> Result<Term, ParseError<'a>> {
+    pub fn parse_term<'a>(&self, input: &'a str) -> Result<Term, ParseError<'a>> {
         let tokens = Token::lexer(input);
         self.term.parse(tokens).map_err(|x| x.map_location(|_| 0))
     }
 
-    pub(crate) fn parse_prog<'a>(&self, input: &'a str) -> Result<Prog, ParseError<'a>> {
+    #[allow(unused)]
+    pub fn parse_prog<'a>(&self, input: &'a str) -> Result<Prog, ParseError<'a>> {
         let tokens = Token::lexer(input);
         self.prog.parse(tokens).map_err(|x| x.map_location(|_| 0))
     }

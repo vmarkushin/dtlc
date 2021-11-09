@@ -1,7 +1,7 @@
 #[macro_export]
 macro_rules! t {
     ($($it:tt)+) => {
-        crate::parser::Parser::default()
+        $crate::parser::Parser::default()
             .parse_term(stringify!($($it)+))
             .unwrap()
     };
