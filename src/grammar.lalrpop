@@ -1,16 +1,19 @@
-use crate::term::{self, Term, Sym, Param, Lam, Pi, App, Universe, Var};
-use crate::decl::{self, Decl, Constructor, FnDecl};
+use crate::syntax::surf::{Expr, Decl, Param, Data, Func, NamedTele};
+use crate::syntax::{Ident, Universe, Loc, Plicitness::*};
 use crate::token::Token;
+use vec1::Vec1;
 
 grammar<'input>;
 
-Ident: Var = <s:"ident"> => Var(Sym::from(s));
+Ident: Ident = <l: @L> <s: "ident"> <r: @R> => Ident::new(s, Loc::new(l, r));
 
 extern {
+    type Location = usize;
+
     enum Token<'input> {
         "ident" => Token::Ident(<&'input str>),
         "universe" => Token::Universe(<&'input str>),
-        "goal" => Token::Goal(<&'input str>),
+        "metaident" => Token::MetaIdent(<&'input str>),
         "forall" => Token::Pi,
         "exists" => Token::Sigma,
         "data" => Token::Data,
@@ -26,7 +29,7 @@ extern {
         "fn" => Token::Let,
         "|" => Token::Pipe,
         "->" => Token::RArrow,
-        "_" => Token::Hole,
+        "_" => Token::Underscore,
 
         "{" => Token::LBrace,
         "[" => Token::LBracket,
@@ -38,7 +41,15 @@ extern {
     }
 }
 
-AtomExpr: Term = {
+#[inline]
+Sp<Rule>: (Rule, Loc) =
+    <l: @L> <rule: Rule> <r: @R> => (rule, Loc::new(l, r));
+
+#[inline]
+Sp_<Rule>: Loc =
+    <sp: Sp<Rule>> => match sp { (_, loc) => loc };
+
+Universe: Universe =
     <uni: "universe"> => {
         let uni_lvl = &uni[4..]; // Skip "Type" prefix
         let level = if !uni_lvl.is_empty() {
@@ -46,69 +57,84 @@ AtomExpr: Term = {
         } else {
             0
         };
-        Term::Universe(Universe(level))
+        Universe(level)
+    };
+
+AtomExpr: Expr = {
+    <uni: Sp<Universe>> => {
+        let (uni, loc) = uni;
+        Expr::Universe(loc, uni)
     },
-    "_" => Term::Hole,
-    <var: Ident> => Term::Var(var),
-    "(" <Term> ")",
+    Sp_<"_"> => Expr::Hole(<>),
+    <var: Ident> => Expr::Var(var),
+    "(" <Expr> ")",
 };
 
-AppExpr : Term = {
+AppExpr : Expr = {
     AtomExpr,
-    <f: AtomExpr> <args: AtomExpr+> => App::new_many(f, args.into_iter()),
+    <f: AtomExpr> <args: AtomExpr+> => Expr::App(Box::new(f), Vec1::try_from_vec(args).unwrap()),
 }
 
-ForallParam : Vec<(Var, Term)> = {
-    "(" <idents: Ident+> ":" <ty : Term> ")" => idents.into_iter().map(|ident| (ident, ty.clone())).collect()
+ForallParam : Vec1<Param> = {
+    "(" <idents: Ident+> ":" <ty : Expr> ")" => Vec1::try_from_vec(idents.into_iter().map(|ident| Param::new(ident, ty.clone(), Explicit)).collect()).unwrap()
 }
 
-LamParams : Vec<(Var, Term)> = {
-    <ident: Ident> ":" <ty : Term> => vec![(ident, ty)],
-    <ForallParam+> => <>.into_iter().flatten().collect()
+LamParam : Vec1<Param> = {
+    <ident: Ident> => Vec1::new(Param::from_ident(ident, Explicit)),
+    "(" <idents: Ident+> ":" <ty : Expr> ")" => Vec1::try_from_vec(idents.into_iter().map(|ident| Param::new(ident, ty.clone(), Explicit)).collect()).unwrap()
 }
 
-Lam : Term = {
-    "lam" <params: LamParams> "=>" <body: Term> => {
-        Lam::new_many(body, params.into_iter()).into()
+LamParams : Vec1<Param> = {
+    <ident: Ident> ":" <ty : Expr> => Vec1::new(Param::new(ident, ty, Explicit)),
+    <LamParam+> => Vec1::try_from_vec(<>.into_iter().flatten().collect()).unwrap()
+}
+
+Lam : Expr = {
+    "lam" <params: LamParams> "=>" <body: Expr> => {
+        Expr::Lam(params, box body)
     },
 }
 
-ForallParams : Vec<(Var, Term)> = {
-    <ForallParam+> => <>.into_iter().flatten().collect()
+ForallParams : Vec1<Param> = {
+    <ForallParam+> => Vec1::try_from_vec(<>.into_iter().flatten().collect()).unwrap()
 }
 
-Pi : Term = {
-    <l: AtomExpr> "->" <r: Term> => Pi::arrow(l, r).into(),
-    "forall" <params: ForallParams> "," <body: Term> => {
-        Pi::new_many(body, params.into_iter()).into()
+Pi : Expr = {
+    <l: AtomExpr> "->" <r: Expr> => Expr::Pi(Vec1::new(Param::from_type(l, Explicit)), Box::new(r)),
+    "forall" <params: ForallParams> "," <body: Expr> => {
+        Expr::Pi(params, Box::new(body))
     },
 }
 
-pub Term: Term = {
+pub Expr: Expr = {
     Pi,
     Lam,
     AppExpr,
 }
 
 TypeParam: Param = {
-    "(" <name: Ident> ":" <e: Term> ")" => Param::new(Some(name), e),
-    <AtomExpr> => Param::new(None, <>),
+    "(" <name: Ident> ":" <e: Expr> ")" => Param::new(name, e, Explicit),
+    <AtomExpr> => Param::from_type(<>, Explicit),
 }
 
-Clause: Constructor = {
-    "|" <name: Ident> <params: TypeParam*> => Constructor::new(name, params),
+Constructor: NamedTele = {
+    "|" <name: Ident> <params: TypeParam*> => NamedTele::new(name, params.into()),
 }
 
-DataType: Term = {
-    ":" <Term>
+FnType: Expr = {
+    ":" <Expr>
+}
+
+DataType: Universe = {
+    ":" <Universe>
 }
 
 pub Decl: Decl = {
-    "fn" <name: Ident> <params: TypeParam*> <ret_ty: DataType?> ":=" <body: Term> => {
-       FnDecl { name, params: params.into(), ret_ty, body }.into()
+    "fn" <name: Ident> <params: TypeParam*> <ret_ty: FnType?> ":=" <body: Expr> => {
+       Func { name, params: params.into(), ret_ty, body }.into()
     },
-    "data" <name: Ident> <ty_params: TypeParam*> <universe: DataType?> <cons: Clause*> => {
-       Decl::Data { name, ty_params: ty_params.into(), universe, cons }
+    "data" <name: Ident> <ty_params: TypeParam*> <universe: DataType?> <cons: Constructor*> => {
+      Data { sig: NamedTele::new(name, ty_params.into()), universe, cons }.into()
     },
 }
 

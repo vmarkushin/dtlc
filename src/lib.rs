@@ -1,4 +1,6 @@
-#![feature(box_syntax, box_patterns)]
+#![feature(box_syntax, box_patterns, type_alias_impl_trait)]
+#![feature(cell_update)]
+#![feature(generic_associated_types)]
 
 #[allow(
     clippy::needless_lifetimes,
@@ -21,11 +23,9 @@ mod grammar {
 #[macro_use]
 extern crate log;
 
-pub mod decl;
-pub mod env;
-pub mod infer;
+mod check;
 pub mod macros;
 pub mod parser;
 pub mod repl;
-pub mod term;
+pub mod syntax;
 pub mod token;

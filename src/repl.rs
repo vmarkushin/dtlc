@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 use std::{borrow::Cow, fmt};
 
-use crate::env::{Env, Enved};
+use crate::check::TypeCheckState;
 use crate::parser::Parser;
-
+use crate::syntax::desugar::DesugarState;
 use eyre::{Result, WrapErr};
 use rustyline::{
     completion::Completer,
@@ -88,25 +88,17 @@ struct Helper {
     highlighter: Highlighter,
     hinter: Hinter,
 
-    parser: Parser,
-    env: Env,
+    parser: Parser<'static>,
+    des: DesugarState,
+    env: TypeCheckState,
 }
 
 impl Helper {
-    pub fn typecheck(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
-        macro_rules! validate_incomplete {
-            ( $e:expr ) => {
-                match $e {
-                    Ok(ok) => ok,
-                    Err(err) => {
-                        return Ok(ValidationResult::Invalid(Some(
-                            "\n".to_owned() + &Report(err).to_string(),
-                        )))
-                    }
-                }
-            };
-        }
-
+    #[allow(unused)]
+    pub fn typecheck(
+        &mut self,
+        ctx: &mut ValidationContext,
+    ) -> rustyline::Result<ValidationResult> {
         // SAFETY: We convert every error to string, so we dont keep them longer than input.
         let input: &'static str = unsafe { std::mem::transmute(ctx.input()) };
 
@@ -114,65 +106,48 @@ impl Helper {
             return Ok(ValidationResult::Valid(None));
         }
 
-        if input.starts_with("fn") || input.starts_with("data") {
-            let res = self
-                .parser
-                .parse_decl(input)
-                .wrap_err("Failed to parse expression");
-            let mut decl = validate_incomplete!(res);
-            validate_incomplete!(decl
-                .infer_or_check_type_in(&mut Cow::Borrowed(&self.env))
-                .wrap_err("Failed to infer type for the expression"));
-            return Ok(ValidationResult::Valid(None));
+        match run_repl(&mut self.parser, &mut self.des, &mut self.env, input) {
+            Ok(_) => Ok(ValidationResult::Valid(None)),
+            Err(err) => Ok(ValidationResult::Invalid(Some(
+                "\n".to_owned() + &Report(err).to_string(),
+            ))),
         }
-        if let Some(input) = input.strip_prefix(":t ") {
-            let term = validate_incomplete!(self
-                .parser
-                .parse_term(input)
-                .wrap_err("Failed to parse expression"));
-            let _t = validate_incomplete!(self
-                .env
-                .infer_type(term)
-                .wrap_err("Failed to infer type for the expression"));
-            return Ok(ValidationResult::Valid(None));
-        }
-
-        let term = validate_incomplete!(self
-            .parser
-            .parse_term(input)
-            .wrap_err("Failed to parse expression"));
-        validate_incomplete!(self
-            .env
-            .infer_type(term)
-            .wrap_err("Failed to infer type for the expression"));
-        Ok(ValidationResult::Valid(None))
     }
 }
 
 impl Default for Helper {
     fn default() -> Self {
+        let mut des = DesugarState::default();
+        des.enter_local_scope();
+        des.cur_meta_id.push(Default::default());
+
         Self {
             validator: Default::default(),
             highlighter: Default::default(),
             hinter: HistoryHinter {},
 
             parser: Parser::default(),
-            env: Env::default(),
+            des,
+            env: TypeCheckState::default(),
         }
     }
 }
 
 impl Help for Helper {}
+
 impl Validate for Helper {
-    fn validate(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
-        self.validator
-            .validate(ctx)
-            .and_then(|_| self.typecheck(ctx))
+    fn validate(&self, _ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
+        // self.validator
+        //     .validate(ctx)
+        //     .and_then(|_| self.typecheck(ctx))
+        Ok(ValidationResult::Valid(None))
     }
+
     fn validate_while_typing(&self) -> bool {
         self.validator.validate_while_typing()
     }
 }
+
 impl Highlight for Helper {
     fn highlight<'l>(&self, line: &'l str, pos: usize) -> Cow<'l, str> {
         self.highlighter.highlight(line, pos)
@@ -208,7 +183,15 @@ impl Completer for Helper {
     type Candidate = String;
 }
 
-pub fn repl(prompt: &str, mut f: impl FnMut(&Parser, &mut Env, &'static str) -> Result<()>) {
+pub fn repl(
+    prompt: &str,
+    mut f: impl FnMut(
+        &mut Parser<'static>,
+        &mut DesugarState,
+        &mut TypeCheckState,
+        &'static str,
+    ) -> Result<()>,
+) {
     let mut rl = Editor::with_config(
         config::Config::builder()
             .auto_add_history(true)
@@ -236,7 +219,7 @@ pub fn repl(prompt: &str, mut f: impl FnMut(&Parser, &mut Env, &'static str) -> 
         // repl function.
         let input: &'static str = unsafe { std::mem::transmute(input) };
 
-        if let Err(e) = f(&helper.parser, &mut helper.env, input) {
+        if let Err(e) = f(&mut helper.parser, &mut helper.des, &mut helper.env, input) {
             eprintln!("\n{}", Report(e));
         }
     }
@@ -244,31 +227,78 @@ pub fn repl(prompt: &str, mut f: impl FnMut(&Parser, &mut Env, &'static str) -> 
     rl.save_history(&history).unwrap();
 }
 
-pub fn run_repl(parser: &Parser, env: &mut Env, input: &'static str) -> Result<()> {
-    if input.starts_with("fn") || input.starts_with("data") {
-        let mut decl = parser
+pub fn run_repl(
+    parser: &mut Parser<'static>,
+    des: &mut DesugarState,
+    env: &mut TypeCheckState,
+    input: &'static str,
+) -> Result<()> {
+    if input.starts_with("fn ") || input.starts_with("data ") {
+        let decl = parser
             .parse_decl(input)
             .wrap_err("Failed to parse expression")?;
-        decl.infer_or_check_type_in(&mut Cow::Borrowed(env))
-            .wrap_err("Failed to infer type for the expression")?;
-        env.add_decl(decl);
-        return Ok(());
-    }
-    if let Some(input) = input.strip_prefix(":t ") {
-        let term = parser
-            .parse_term(input)
+        let len = des.decls.len();
+        let _ = des
+            .desugar_decl(decl)
             .wrap_err("Failed to parse expression")?;
-        let t = env
-            .infer_type(term)
-            .wrap_err("Failed to infer type for the expression")?;
+        env.check_decls(des.decls[len..].iter().cloned(), des.cur_meta_id.clone())
+            .wrap_err("Failed to parse expression")?;
         return Ok(());
     }
 
-    let term = parser
-        .parse_term(input)
+    let infer_type;
+    let input = if let Some(input) = input.strip_prefix(":t ") {
+        infer_type = true;
+        input
+    } else {
+        infer_type = false;
+        input
+    };
+
+    let expr = parser
+        .parse_expr(input)
         .wrap_err("Failed to parse expression")?;
-    env.infer_type(term.clone())
-        .wrap_err("Failed to typecheck expression")?;
-    println!("{}", term.nf(&*env));
+    let expr = des
+        .desugar_expr(expr)
+        .wrap_err("Failed to parse expression")?;
+    if !infer_type {
+        let term = env
+            .infer(&expr)
+            .map(|x| x.0.ast)
+            .wrap_err("Failed to infer type for the expression")?;
+        println!(
+            "{}",
+            env.simplify(term)
+                .wrap_err("Failed to infer type for the expression")?
+        );
+    } else {
+        let _t = env
+            .infer(&expr)
+            .map(|x| x.1)
+            .wrap_err("Failed to infer type for the expression")?;
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::repl::{run_repl, Helper};
+
+    #[test]
+    fn test_adding_new_decls() -> eyre::Result<()> {
+        let mut helper = Helper::default();
+        run_repl(
+            &mut helper.parser,
+            &mut helper.des,
+            &mut helper.env,
+            "fn id (T : Type) := T",
+        )?;
+        run_repl(
+            &mut helper.parser,
+            &mut helper.des,
+            &mut helper.env,
+            "data B : Type | t | f",
+        )?;
+        Ok(())
+    }
 }

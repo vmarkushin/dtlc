@@ -1,7 +1,7 @@
 use logos::Logos;
 use std::fmt::{Display, Formatter};
 
-#[derive(Clone, Debug, Logos)]
+#[derive(Clone, Debug, Logos, PartialEq, Eq)]
 pub enum Token<'input> {
     #[regex("Type[0-9]*")]
     Universe(&'input str),
@@ -38,9 +38,9 @@ pub enum Token<'input> {
     #[token("→")]
     RArrow,
     #[token("_")]
-    Hole,
+    Underscore,
     #[regex("\\?[a-zA-Z0-9_]+")]
-    Goal(&'input str),
+    MetaIdent(&'input str),
     #[token("{")]
     LBrace,
     #[token("}")]
@@ -67,32 +67,31 @@ impl<'a> Display for Token<'a> {
         use Token::*;
 
         match self {
-            Universe(n) => write!(f, "Type{}", n),
-            Ident(s)    => f.write_str(s),
-
-            Pi          => f.write_str("forall"),
-            Sigma       => f.write_str("exists"),
-            Data        => f.write_str("data"),
-            Codata      => f.write_str("codata"),
-            At          => f.write_str("@"),
-            Colon       => f.write_str(":"),
-            Assignment  => f.write_str(":="),
-            Comma       => f.write_str(","),
-            Dot         => f.write_str("."),
-            DArrow      => f.write_str("=>"),
-            Lam         => f.write_str("lam"),
-            Let         => f.write_str("fn"),
-            Pipe        => f.write_str("|"),
-            RArrow      => f.write_str("->"),
-            LBrace      => f.write_str("{"),
-            RBrace      => f.write_str("}"),
-            LBracket    => f.write_str("["),
-            RBracket    => f.write_str("]"),
-            LParen      => f.write_str("("),
-            RParen      => f.write_str(")"),
-            Whitespace  => f.write_str(" "),
-            Hole        => f.write_str("_"),
-            Goal(s)     => f.write_str(s),
+            Universe(n)  => write!(f, "Type{}", n),
+            Ident(s)     => f.write_str(s),
+            Pi                  => f.write_str("forall"),
+            Sigma               => f.write_str("exists"),
+            Data                => f.write_str("data"),
+            Codata              => f.write_str("codata"),
+            At                  => f.write_str("@"),
+            Colon               => f.write_str(":"),
+            Assignment          => f.write_str(":="),
+            Comma               => f.write_str(","),
+            Dot                 => f.write_str("."),
+            DArrow              => f.write_str("=>"),
+            Lam                 => f.write_str("lam"),
+            Let                 => f.write_str("fn"),
+            Pipe                => f.write_str("|"),
+            RArrow              => f.write_str("->"),
+            LBrace              => f.write_str("{"),
+            RBrace              => f.write_str("}"),
+            LBracket            => f.write_str("["),
+            RBracket            => f.write_str("]"),
+            LParen              => f.write_str("("),
+            RParen              => f.write_str(")"),
+            Whitespace          => f.write_str(" "),
+            Underscore          => f.write_str("_"),
+            MetaIdent(s) => f.write_str(s),
         }
     }
 }

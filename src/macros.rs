@@ -1,10 +1,17 @@
 #[macro_export]
-macro_rules! t {
-    ($($it:tt)+) => {
-        $crate::parser::Parser::default()
-            .parse_term(stringify!($($it)+))
-            .unwrap()
+macro_rules! pt {
+    ($p:ident, $d:ident, $s:literal) => {
+        $d.desugar_expr($p.parse_expr($s)?)?
     };
+}
+
+#[macro_export]
+macro_rules! ptis {
+    ($p:ident, $d:ident, $e:ident, $s:literal) => {{
+        let term = $e.infer(&$d.desugar_expr($p.parse_expr($s)?)?)?.0.ast;
+        let val = $e.simplify(term)?;
+        val
+    }};
 }
 
 /// Return Err of the expression: `return Err($expression);`.
@@ -22,6 +29,14 @@ macro_rules! ensure {
         if !$x {
             $crate::fail!($y);
         }
+    }};
+}
+
+/// Evaluate `$x:expr` and if not true return `Err($y:expr)`.
+#[macro_export]
+macro_rules! assert_err {
+    ( $x:expr, $y:expr $(,)? ) => {{
+        assert_eq!($x, Err($y.into()));
     }};
 }
 
