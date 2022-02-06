@@ -79,13 +79,15 @@ mod tests {
 
     #[test]
     fn test_type_check() -> Result<()> {
-        // lambda
+        // lambda `\x:B. x : B→B`
         assert_eq!(typeck_empty(&lam("x", Base, "x"))?, arrow(Base, Base));
 
-        // application
-        assert_eq!(typeck_empty(&lam("x", Base, "x"))?, arrow(Base, Base));
+        // application `y:B`, `(\x:B. x) y : B`
+        let mut ctx = HashMap::default();
+        ctx.insert("y".to_owned(), Base);
+        assert_eq!(typeck(&mut ctx, &app(lam("x", Base, "x"), "y"))?, Base);
 
-        // var in context
+        // var in context `f : B→B`
         let mut ctx = HashMap::default();
         let arrow_t = arrow(Base, Base);
         ctx.insert("f".to_owned(), arrow_t.clone());
