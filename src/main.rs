@@ -19,11 +19,7 @@ mod tests {
     #[test]
     fn test_nat() {
         fn nat_def(val: BExpr) -> BExpr {
-            lam(
-                "nat",
-                Base,
-                lam("s", arrow(Base, Base), lam("z", Base, val)),
-            )
+            lam("nat", "T", lam("s", arrow("T", "T"), lam("z", "T", val)))
         }
 
         fn nat_data(n: u32) -> BExpr {
@@ -41,7 +37,7 @@ mod tests {
         let n = church_nat(11);
         assert_eq!(
             typeck(&mut Default::default(), &n).unwrap(),
-            arrow(Base, arrow(arrow(Base, Base), arrow(Base, Base)))
+            arrow("T", arrow(arrow("T", "T"), arrow("T", "T")))
         );
 
         fn plus(n: BExpr, m: BExpr) -> BExpr {

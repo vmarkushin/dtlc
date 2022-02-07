@@ -9,15 +9,15 @@ pub type Result<T> = std::result::Result<T, TCError>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
-    Base,
+    Base(Sym),
     Arrow(BType, BType),
 }
 
 impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Type::Base => {
-                write!(f, "B")
+            Type::Base(s) => {
+                write!(f, "{s}")
             }
             Type::Arrow(t0, t1) => {
                 write!(f, "{}→{}", t0, t1)
@@ -71,25 +71,34 @@ pub fn arrow(t0: impl Into<BType>, t1: impl Into<BType>) -> Type {
     Type::Arrow(t0.into(), t1.into())
 }
 
+pub fn base(s: impl Into<String>) -> Type {
+    Type::Base(s.into())
+}
+
+impl<T: Into<String>> From<T> for BType {
+    fn from(s: T) -> Self {
+        box Type::Base(s.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::expr::*;
-    use crate::typeck::Type::Base;
 
     #[test]
     fn test_type_check() -> Result<()> {
-        // lambda `\x:B. x : B→B`
-        assert_eq!(typeck_empty(&lam("x", Base, "x"))?, arrow(Base, Base));
+        // lambda `\x:T. x : T→T`
+        assert_eq!(typeck_empty(&lam("x", "T", "x"))?, arrow("T", "T"));
 
-        // application `y:B`, `(\x:B. x) y : B`
+        // application `y:T`, `(\x:T. x) y : T`
         let mut ctx = HashMap::default();
-        ctx.insert("y".to_owned(), Base);
-        assert_eq!(typeck(&mut ctx, &app(lam("x", Base, "x"), "y"))?, Base);
+        ctx.insert("y".to_owned(), base("T"));
+        assert_eq!(typeck(&mut ctx, &app(lam("x", "T", "x"), "y"))?, base("T"));
 
-        // var in context `f : B→B`
+        // var in context `f : T→T`
         let mut ctx = HashMap::default();
-        let arrow_t = arrow(Base, Base);
+        let arrow_t = arrow("T", "T");
         ctx.insert("f".to_owned(), arrow_t.clone());
         assert_eq!(typeck(&mut ctx, &var("f"))?, arrow_t);
 
@@ -99,15 +108,23 @@ mod tests {
     #[test]
     fn test_type_check_fail() {
         assert_eq!(
-            typeck_empty(&var("x")).unwrap_err(),
-            "Cannot find variable x".to_owned()
+            &typeck_empty(&var("x")).unwrap_err(),
+            "Cannot find variable x"
         );
 
         let mut ctx = HashMap::default();
-        ctx.insert("x".to_owned(), Base);
+        ctx.insert("x".to_owned(), base("T"));
         assert_eq!(
-            typeck(&mut ctx, &app("x", "x")).unwrap_err(),
-            "'x' is not a function".to_owned()
+            &typeck(&mut ctx, &app("x", "x")).unwrap_err(),
+            "'x' is not a function"
+        );
+
+        // application `y:A`, `(\x:B. x) y`
+        let mut ctx = HashMap::default();
+        ctx.insert("y".to_owned(), base("A"));
+        assert_eq!(
+            &typeck(&mut ctx, &app(lam("x", "B", "x"), "y")).unwrap_err(),
+            "Argument type A != B"
         );
     }
 }
