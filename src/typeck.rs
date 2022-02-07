@@ -55,8 +55,14 @@ pub fn typeck(ctx: &mut Env, e: &Expr) -> Result<Type> {
         // type of lambda argument (`α`) is always known by construction. If the body has type `β`,
         // then type of the lambda is `α -> β`.
         Expr::Lam(s, t, e) => {
+            let maybe_shadowed_var_ty = ctx.get(s).cloned();
             ctx.insert(s.clone(), *t.clone());
             let te = typeck(ctx, e)?;
+            if let Some(shadowed_ty) = maybe_shadowed_var_ty {
+                ctx.insert(s.clone(), shadowed_ty);
+            } else {
+                ctx.remove(s);
+            }
             Ok(Type::Arrow(t.clone(), box te))
         }
     }
