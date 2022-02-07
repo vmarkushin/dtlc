@@ -45,7 +45,7 @@ pub fn typeck(ctx: &mut Env, e: &Expr) -> Result<Type> {
                     if ta != *at {
                         return Err(string);
                     }
-                    return Ok(*rt);
+                    Ok(*rt)
                 }
                 _ => {
                     return Err(format!("'{}' is not a function", f));
@@ -57,7 +57,7 @@ pub fn typeck(ctx: &mut Env, e: &Expr) -> Result<Type> {
         Expr::Lam(s, t, e) => {
             ctx.insert(s.clone(), *t.clone());
             let te = typeck(ctx, e)?;
-            return Ok(Type::Arrow(t.clone(), box te));
+            Ok(Type::Arrow(t.clone(), box te))
         }
     }
 }

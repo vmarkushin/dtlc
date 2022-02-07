@@ -1,5 +1,5 @@
 #![feature(box_syntax)]
-#![allow(unused)]
+#![allow(unused, clippy::boxed_local)]
 
 mod expr;
 mod norm;
@@ -59,7 +59,7 @@ mod tests {
                     app(n, "nat"),
                     app(app(plus(m.clone(), church_nat(0)), "nat"), "s"),
                 ),
-                nat_data(0),
+                "z",
             ))
         }
 

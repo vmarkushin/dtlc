@@ -7,7 +7,7 @@ fn subst_var(s: &Sym, v: Sym, e: &Expr) -> BExpr {
 
 /// Replaces all *free* occurrences of `v` by `x` in `b`, i.e. `b[v:=x]`.
 pub(crate) fn subst(v: &Sym, x: &Expr, b: &Expr) -> BExpr {
-    let res = box match b {
+    box match b {
         // if the expression is variable `v`, replace it with `e` and we're done
         e @ Expr::Var(i) => {
             if i == v {
@@ -20,13 +20,13 @@ pub(crate) fn subst(v: &Sym, x: &Expr, b: &Expr) -> BExpr {
         Expr::App(f, a) => Expr::App(subst(v, x, f), subst(v, x, a)),
         // the lambda case is more subtle...
         Expr::Lam(i, t, e) => {
-            let fvx = free_vars(x);
+            let mut fvs = free_vars(x);
             // if we encountered a lambda with the same argument name as `v`,
             // we can't substitute anything inside of it, because the new argument shadows
             // the previous one, the one we need to replace
             if v == i {
                 Expr::Lam(i.clone(), t.clone(), e.clone())
-            } else if fvx.contains(i) {
+            } else if fvs.contains(i) {
                 // if our new expression's (`x`) free variables contain the encountered
                 // argument name, it will bind the free variables, which can lead to wrong evaluation.
                 // In this case, we just need to rename the argument and all the underlying
@@ -34,23 +34,23 @@ pub(crate) fn subst(v: &Sym, x: &Expr, b: &Expr) -> BExpr {
                 // have any intersecting names)
 
                 // also, we should consider other free free variables in the lambda body
-                let vars = {
-                    let mut set = fvx.clone();
-                    set.extend(free_vars(e));
-                    set
-                };
-                let mut i_new = i.clone();
-                while vars.contains(&i_new) {
-                    i_new.push('\'');
-                }
-                let e_new = subst_var(i, i_new.clone(), &e);
+                fvs.extend(free_vars(e));
+                let i_new = gen_fresh_name(i, fvs);
+                let e_new = subst_var(i, i_new.clone(), e);
                 Expr::Lam(i_new, t.clone(), subst(v, x, &*e_new))
             } else {
-                Expr::Lam(i.clone(), t.clone(), subst(v, x, &e))
+                Expr::Lam(i.clone(), t.clone(), subst(v, x, e))
             }
         }
-    };
-    res
+    }
+}
+
+fn gen_fresh_name(i: &Sym, vars: HashSet<Sym>) -> String {
+    let mut i_new = i.clone();
+    while vars.contains(&i_new) {
+        i_new.push('\'');
+    }
+    i_new
 }
 
 /// Compares expressions modulo α-conversions. For example, λx.x == λy.y.
@@ -113,7 +113,7 @@ fn free_vars(e: &Expr) -> HashSet<Sym> {
 fn nf(e: BExpr) -> BExpr {
     return spine(e, Vec::new());
     fn spine(e: BExpr, args: Vec<Expr>) -> BExpr {
-        let res = match *e {
+        match *e {
             Expr::App(f, a) => spine(f, cons(*a, args)),
             Expr::Lam(s, t, e) => {
                 if args.is_empty() {
@@ -126,8 +126,7 @@ fn nf(e: BExpr) -> BExpr {
                 .into_iter()
                 .map(|x| nf(box x))
                 .fold(box f, |acc, e| box Expr::App(acc, e)),
-        };
-        res
+        }
     }
 }
 
@@ -222,7 +221,7 @@ mod tests {
     fn test_whnf() {
         // x ~whnf~> x
         let e = var("x");
-        assert_eq!(nf(e.clone()), e);
+        assert_eq!(whnf(e.clone()), e);
 
         // \x:B. x ~whnf~> \x:B. x
         let e = lam("x", Base, "x");
