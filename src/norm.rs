@@ -8,7 +8,7 @@ fn subst_var(s: &Sym, v: Sym, e: &Expr) -> BExpr {
 /// Replaces all *free* occurrences of `v` by `x` in `b`, i.e. `b[v:=x]`.
 pub(crate) fn subst(v: &Sym, x: &Expr, b: &Expr) -> BExpr {
     box match b {
-        // if the expression is variable `v`, replace it with `e` and we're done
+        // if the expression is variable `v`, replace it with `x` and we're done
         e @ Expr::Var(i) => {
             if i == v {
                 x.clone()
