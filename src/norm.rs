@@ -5,41 +5,41 @@ fn subst_var(s: &Sym, v: Sym, e: &Expr) -> BExpr {
     subst(s, &Expr::Var(v), e)
 }
 
-/// Replaces all *free* occurrences of `v` by `x` in `b`, i.e. `b[v:=x]`.
-pub(crate) fn subst(v: &Sym, x: &Expr, b: &Expr) -> BExpr {
-    box match b {
-        // if the expression is variable `v`, replace it with `x` and we're done
+/// Replaces all *free* occurrences of `v` (`var`) by `x` (`to`) in `e` (`in_expr`), i.e. `e[v:=x]`.
+pub(crate) fn subst(var: &Sym, to: &Expr, in_expr: &Expr) -> BExpr {
+    box match in_expr {
+        // if the expression is variable `var`, replace it with `to` and we're done
         e @ Expr::Var(i) => {
-            if i == v {
-                x.clone()
+            if i == var {
+                to.clone()
             } else {
                 e.clone()
             }
         }
         // substitute in both branches of application
-        Expr::App(f, a) => Expr::App(subst(v, x, f), subst(v, x, a)),
+        Expr::App(f, a) => Expr::App(subst(var, to, f), subst(var, to, a)),
         // the lambda case is more subtle...
-        Expr::Lam(i, t, e) => {
-            let mut fvs = free_vars(x);
-            // if we encountered a lambda with the same argument name as `v`,
+        Expr::Lam(p, t, b) => {
+            let mut fvs = free_vars(to);
+            // if we encountered a lambda with the same parameter name as `var`,
             // we can't substitute anything inside of it, because the new argument shadows
             // the previous one, the one we need to replace
-            if v == i {
-                Expr::Lam(i.clone(), t.clone(), e.clone())
-            } else if fvs.contains(i) {
+            if var == p {
+                Expr::Lam(p.clone(), t.clone(), b.clone())
+            } else if fvs.contains(p) {
                 // if our new expression's (`x`) free variables contain the encountered
-                // argument name, it will bind the free variables, which can lead to wrong evaluation.
-                // In this case, we just need to rename the argument and all the underlying
+                // parameter name, it will bind the free variables, which can lead to wrong evaluation.
+                // In this case, we just need to rename the parameter and all the underlying
                 // variables bound to it. (we just appending symbol `'` to the name until we don't
                 // have any intersecting names)
 
                 // also, we should consider other free free variables in the lambda body
-                fvs.extend(free_vars(e));
-                let i_new = gen_fresh_name(i, fvs);
-                let e_new = subst_var(i, i_new.clone(), e);
-                Expr::Lam(i_new, t.clone(), subst(v, x, &*e_new))
+                fvs.extend(free_vars(b));
+                let p_new = gen_fresh_name(p, fvs);
+                let b_new = subst_var(p, p_new.clone(), b);
+                Expr::Lam(p_new, t.clone(), subst(var, to, &*b_new))
             } else {
-                Expr::Lam(i.clone(), t.clone(), subst(v, x, e))
+                Expr::Lam(p.clone(), t.clone(), subst(var, to, b))
             }
         }
     }
@@ -81,9 +81,9 @@ pub fn whnf(ee: BExpr) -> BExpr {
                 // collect application arguments
                 spine(f, cons(*a, args))
             }
-            Expr::Lam(s, _, e) if !args.is_empty() => {
+            Expr::Lam(p, _, b) if !args.is_empty() => {
                 // substitute the last collected argument in the lambda, if had some (removing the abstraction)
-                spine(subst(&s, &args[0], &e), args.clone()[1..].to_vec())
+                spine(subst(&p, &args[0], &b), args.clone()[1..].to_vec())
             }
             f => {
                 // place all the unsubstituted arguments back (form applications from them)
@@ -115,11 +115,11 @@ fn nf(e: BExpr) -> BExpr {
     fn spine(e: BExpr, args: Vec<Expr>) -> BExpr {
         match *e {
             Expr::App(f, a) => spine(f, cons(*a, args)),
-            Expr::Lam(s, t, e) => {
+            Expr::Lam(p, t, b) => {
                 if args.is_empty() {
-                    box Expr::Lam(s, t, nf(e))
+                    box Expr::Lam(p, t, nf(b))
                 } else {
-                    spine(subst(&s, &args[0], &e), args.clone()[1..].to_vec())
+                    spine(subst(&p, &args[0], &b), args.clone()[1..].to_vec())
                 }
             }
             f => args

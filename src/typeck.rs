@@ -41,33 +41,33 @@ pub fn typeck(ctx: &mut Env, e: &Expr) -> Result<Type> {
         // type of a function should be arrow `α -> β`. Then, type of the argument should be `α`,
         // and, finally, type of the application will be `β`.
         Expr::App(f, a) => {
-            let tf = typeck(ctx, f)?;
-            match tf {
-                Type::Arrow(at, rt) => {
-                    let ta = typeck(ctx, a)?;
-                    let string = format!("Argument type {} != {}", ta, at);
-                    if ta != *at {
+            let f_ty = typeck(ctx, f)?;
+            match f_ty {
+                Type::Arrow(from, to) => {
+                    let a_ty = typeck(ctx, a)?;
+                    let string = format!("Argument type {} != {}", a_ty, from);
+                    if a_ty != *from {
                         return Err(string);
                     }
-                    Ok(*rt)
+                    Ok(*to)
                 }
                 _ => {
                     return Err(format!("'{}' is not a function", f));
                 }
             }
         }
-        // type of lambda argument (`α`) is always known by construction. If the body has type `β`,
+        // type of lambda parameter (`α`) is always known by construction. If the body has type `β`,
         // then type of the lambda is `α -> β`.
-        Expr::Lam(s, t, e) => {
-            let maybe_shadowed_var_ty = ctx.get(s).cloned();
-            ctx.insert(s.clone(), *t.clone());
-            let te = typeck(ctx, e)?;
+        Expr::Lam(p, ty, b) => {
+            let maybe_shadowed_var_ty = ctx.get(p).cloned();
+            ctx.insert(p.clone(), *ty.clone());
+            let b_ty = typeck(ctx, b)?;
             if let Some(shadowed_ty) = maybe_shadowed_var_ty {
-                ctx.insert(s.clone(), shadowed_ty);
+                ctx.insert(p.clone(), shadowed_ty);
             } else {
-                ctx.remove(s);
+                ctx.remove(p);
             }
-            Ok(Type::Arrow(t.clone(), box te))
+            Ok(arrow(ty.clone(), b_ty))
         }
     }
 }
