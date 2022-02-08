@@ -108,7 +108,7 @@ fn free_vars(e: &Expr) -> HashSet<Sym> {
     }
 }
 
-/// Reduces the given expression to normal form. Will perform all possible substitutions along
+/// Reduces the given expression to normal form. Will perform all possible reductions along
 /// with reducing arguments of all applications.
 fn nf(e: BExpr) -> BExpr {
     return spine(e, Vec::new());

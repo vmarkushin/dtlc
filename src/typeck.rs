@@ -20,7 +20,11 @@ impl Display for Type {
                 write!(f, "{s}")
             }
             Type::Arrow(t0, t1) => {
-                write!(f, "{}→{}", t0, t1)
+                if matches!(**t0, Self::Arrow(_, _)) {
+                    write!(f, "({})→{}", t0, t1)
+                } else {
+                    write!(f, "{}→{}", t0, t1)
+                }
             }
         }
     }
