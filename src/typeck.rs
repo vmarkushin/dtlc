@@ -211,6 +211,24 @@ mod tests {
             forall("b'", arrow(tvar("b'"), arrow(tvar("b"), tvar("b"))))
         );
 
+        // ⊥≡Πα:∗. α
+        let bot = || forall("a", "a");
+        // λx:⊥. x (⊥→⊥→⊥) (x (⊥→⊥) x) (x (⊥→⊥→⊥) x x)
+        assert_eq!(
+            typeck_empty(&lam(
+                "x",
+                bot(),
+                app(
+                    app(
+                        tapp("x", arrow(bot(), arrow(bot(), bot()))),
+                        app(tapp("x", arrow(bot(), bot())), "x")
+                    ),
+                    app(app(tapp("x", arrow(bot(), arrow(bot(), bot()))), "x"), "x")
+                ),
+            ))?,
+            arrow(bot(), bot())
+        );
+
         Ok(())
     }
 
