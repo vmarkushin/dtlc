@@ -8,79 +8,84 @@ fn subst_var(s: &Sym, v: Sym, e: &Expr) -> BExpr {
     subst(s, &Expr::Var(v), e)
 }
 
-/// Replaces all *free* occurrences of `v` by `x` in `b`, i.e. `b[v:=x]`.
+/// Replaces all *free* occurrences of `v` (`var`) by `x` (`to`) in `e` (`in_expr`), i.e. `e[v:=x]`.
 ///
 /// Note: expression should be type-checked before calling the function.
-pub(crate) fn subst(v: &Sym, x: &Expr, b: &Expr) -> BExpr {
-    box match b {
-        // if the expression is variable `v`, replace it with `x` and we're done
+pub(crate) fn subst(var: &Sym, to: &Expr, in_expr: &Expr) -> BExpr {
+    box match in_expr {
+        // if the expression is variable `var`, replace it with `to` and we're done
         e @ Expr::Var(i) => {
-            if i == v {
-                x.clone()
+            if i == var {
+                to.clone()
             } else {
                 e.clone()
             }
         }
         // substitute in both branches of application
-        Expr::App(f, a) => Expr::App(subst(v, x, f), subst(v, x, a)),
+        Expr::App(f, a) => Expr::App(subst(var, to, f), subst(var, to, a)),
         // the lambda case is more subtle...
-        Expr::Lam(i, t, e) => {
-            let mut fvs = free_vars(x);
-            // if we encountered a lambda with the same argument name as `v`,
+        Expr::Lam(p, t, b) => {
+            let mut fvs = free_vars(to);
+            // if we encountered a lambda with the same parameter name as `var`,
             // we can't substitute anything inside of it, because the new argument shadows
             // the previous one, the one we need to replace
-            if v == i {
-                Expr::Lam(i.clone(), t.clone(), e.clone())
-            } else if fvs.contains(i) {
-                // if our new expression's (`x`) free variables contain the encountered
-                // argument name, it will bind the free variables, which can lead to wrong evaluation.
-                // In this case, we just need to rename the argument and all the underlying
+            if var == p {
+                Expr::Lam(p.clone(), t.clone(), b.clone())
+            } else if fvs.contains(p) {
+                // if our new expression's (`to`) free variables contain the encountered
+                // parameter name, it will bind the free variables, which can lead to wrong evaluation.
+                // In this case, we just need to rename the parameter and all the underlying
                 // variables bound to it. (we just appending symbol `'` to the name until we don't
                 // have any intersecting names)
 
                 // also, we should consider other free free variables in the lambda body
-                fvs.extend(free_vars(e));
-                let i_new = gen_fresh_name(i, fvs);
-                let e_new = subst_var(i, i_new.clone(), e);
-                Expr::Lam(i_new, t.clone(), subst(v, x, &*e_new))
+                fvs.extend(free_vars(b));
+                let p_new = gen_fresh_name(p, fvs);
+                let b_new = subst_var(p, p_new.clone(), b);
+                Expr::Lam(p_new, t.clone(), subst(var, to, &*b_new))
             } else {
-                Expr::Lam(i.clone(), t.clone(), subst(v, x, e))
+                Expr::Lam(p.clone(), t.clone(), subst(var, to, b))
             }
         }
         // we don't substitute in types here, because the function is working on expression (term) level
-        Expr::TApp(e, t) => Expr::TApp(subst(v, x, e), t.clone()),
+        Expr::TApp(e, t) => Expr::TApp(subst(var, to, e), t.clone()),
         // since expression is type-checked, `s` won't clash with another variable
-        Expr::TLam(s, e) => Expr::TLam(s.clone(), subst(v, x, e)),
+        Expr::TLam(s, e) => Expr::TLam(s.clone(), subst(var, to, e)),
     }
 }
 
 /// Replaces all *free* occurrences of type variable `v` by type `x` in expression `b`, i.e. `b[v:=x]`.
 ///
 /// Note: expression should be type-checked before calling the function.
-pub(crate) fn subst_type_in_expr(v: &Sym, x: &Type, b: &Expr) -> BExpr {
-    box match b {
+pub(crate) fn subst_type_in_expr(var: &Sym, to: &Type, in_expr: &Expr) -> BExpr {
+    box match in_expr {
         // the expression is not _type_ variable, skip it
         e @ Expr::Var(_) => e.clone(),
         // substitute in both branches of application
-        Expr::App(f, a) => Expr::App(subst_type_in_expr(v, x, f), subst_type_in_expr(v, x, a)),
+        Expr::App(f, a) => Expr::App(
+            subst_type_in_expr(var, to, f),
+            subst_type_in_expr(var, to, a),
+        ),
         // and in both branches of lambda
-        Expr::Lam(i, t, e) => {
-            Expr::Lam(i.clone(), subst_type(v, x, t), subst_type_in_expr(v, x, e))
-        }
+        Expr::Lam(i, t, e) => Expr::Lam(
+            i.clone(),
+            subst_type(var, to, t),
+            subst_type_in_expr(var, to, e),
+        ),
         // and in both branches of type application
-        Expr::TApp(e, t) => Expr::TApp(subst_type_in_expr(v, x, e), subst_type(v, x, t)),
+        Expr::TApp(e, t) => Expr::TApp(subst_type_in_expr(var, to, e), subst_type(var, to, t)),
         // do the same trick with renaming as in `subst`
-        Expr::TLam(i, e) => {
-            let mut fvs = type_free_vars(x);
-            if v == i {
-                Expr::TLam(i.clone(), e.clone())
-            } else if fvs.contains(i) {
-                fvs.extend(free_vars(e));
-                let i_new = gen_fresh_name(i, fvs);
-                let e_new = subst_type_in_expr(i, &Type::Var(i_new.clone()), e);
-                Expr::TLam(i_new, subst_type_in_expr(v, x, &*e_new))
+        Expr::TLam(p, b) => {
+            let mut fvs = type_free_vars(to);
+            if var == p {
+                Expr::TLam(p.clone(), b.clone())
+            } else if fvs.contains(p) {
+                fvs.extend(free_vars(b));
+                let p_new = gen_fresh_name(p, fvs);
+                let b_new = subst_type_in_expr(p, &Type::Var(p_new.clone()), b);
+                Expr::TLam(p_new, subst_type_in_expr(var, to, &*b_new))
             } else {
-                Expr::TLam(i.clone(), subst_type_in_expr(v, x, e))
+                Expr::TLam(p.clone(), subst_type_in_expr(var, to, b))
             }
         }
     }
@@ -172,10 +177,10 @@ pub fn whnf(ee: Expr) -> BExpr {
                 // collect type application arguments
                 spine(*f, cons(t.into(), args))
             }
-            Expr::TLam(i, b) if !args.is_empty() => {
+            Expr::TLam(p, b) if !args.is_empty() => {
                 // same flow with type lambda as with basic lambda
                 spine(
-                    *subst_type_in_expr(&i, args[0].as_type(), &b),
+                    *subst_type_in_expr(&p, args[0].as_type(), &b),
                     args[1..].to_vec(),
                 )
             }
@@ -213,20 +218,20 @@ fn nf(e: Expr) -> BExpr {
     fn spine(e: Expr, args: Vec<Arg>) -> BExpr {
         let res = match e {
             Expr::App(f, a) => spine(*f, cons(a.into(), args)),
-            Expr::Lam(s, t, e) => {
+            Expr::Lam(p, t, e) => {
                 if args.is_empty() {
-                    box Expr::Lam(s, t, nf(*e))
+                    box Expr::Lam(p, t, nf(*e))
                 } else {
-                    spine(*subst(&s, args[0].as_expr(), &e), args[1..].to_vec())
+                    spine(*subst(&p, args[0].as_expr(), &e), args[1..].to_vec())
                 }
             }
             Expr::TApp(f, t) => spine(*f, cons(t.into(), args)),
-            Expr::TLam(i, b) => {
+            Expr::TLam(p, b) => {
                 if args.is_empty() {
-                    box Expr::TLam(i, nf(*b))
+                    box Expr::TLam(p, nf(*b))
                 } else {
                     spine(
-                        *subst_type_in_expr(&i, args[0].as_type(), &b),
+                        *subst_type_in_expr(&p, args[0].as_type(), &b),
                         args[1..].to_vec(),
                     )
                 }

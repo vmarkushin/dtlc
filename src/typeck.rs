@@ -46,30 +46,30 @@ pub(crate) fn free_vars(e: &Type) -> HashSet<Sym> {
 }
 
 /// Replaces all *free* occurrences of type variable `v` by type `x` in type `b`, i.e. `b[v:=x]`.
-pub(crate) fn subst(v: &Sym, x: &Type, b: &Type) -> BType {
-    box match b {
-        // if the expression is variable `v`, replace it with `e` and we're done
-        e @ Type::Var(i) => {
-            if i == v {
-                x.clone()
+pub(crate) fn subst(var: &Sym, to: &Type, in_type: &Type) -> BType {
+    box match in_type {
+        // if the expression is variable `var`, replace it with `to` and we're done
+        e @ Type::Var(p) => {
+            if p == var {
+                to.clone()
             } else {
                 e.clone()
             }
         }
         // substitute in both branches of the →
-        Type::Arrow(f, a) => Type::Arrow(subst(v, x, f), subst(v, x, a)),
+        Type::Arrow(f, a) => Type::Arrow(subst(var, to, f), subst(var, to, a)),
         // rename the variable to avoid name clash (see `norm::subst` for more info)
-        Type::Forall(i, t) => {
-            let mut fvs = free_vars(x);
-            if v == i {
-                Type::Forall(i.clone(), t.clone())
-            } else if fvs.contains(i) {
+        Type::Forall(p, t) => {
+            let mut fvs = free_vars(to);
+            if var == p {
+                Type::Forall(p.clone(), t.clone())
+            } else if fvs.contains(p) {
                 fvs.extend(free_vars(t));
-                let i_new = gen_fresh_name(i, fvs);
-                let t_new = subst(i, &Type::Var(i_new.clone()), t);
-                Type::Forall(i_new, subst(v, x, &*t_new))
+                let p_new = gen_fresh_name(p, fvs);
+                let t_new = subst(p, &Type::Var(p_new.clone()), t);
+                Type::Forall(p_new, subst(var, to, &*t_new))
             } else {
-                Type::Forall(i.clone(), subst(v, x, t))
+                Type::Forall(p.clone(), subst(var, to, t))
             }
         }
     }
@@ -87,12 +87,12 @@ pub fn typeck(ctx: &mut Env, e: &Expr) -> Result<Type> {
         // type of a function should be arrow `α -> β`. Then, type of the argument should be `α`,
         // and, finally, type of the application will be `β`.
         Expr::App(f, a) => {
-            let tf = typeck(ctx, f)?;
-            match tf {
+            let f_ty = typeck(ctx, f)?;
+            match f_ty {
                 Type::Arrow(t0, t1) => {
-                    let ta = typeck(ctx, a)?;
-                    let string = format!("Argument type {} != {}", ta, t0);
-                    if ta != *t0 {
+                    let a_ty = typeck(ctx, a)?;
+                    let string = format!("Argument type {} != {}", a_ty, t0);
+                    if a_ty != *t0 {
                         return Err(string);
                     }
                     Ok(*t1)
@@ -104,11 +104,11 @@ pub fn typeck(ctx: &mut Env, e: &Expr) -> Result<Type> {
         }
         // type of lambda argument (`α`) is always known by construction. If the body has type `β`,
         // then type of the lambda is `α -> β`.
-        Expr::Lam(s, t, e) => {
+        Expr::Lam(p, p_ty, b) => {
             let mut ctx_new = ctx.clone();
-            ctx_new.insert(s.clone(), *t.clone());
-            let te = typeck(&mut ctx_new, e)?;
-            Ok(Type::Arrow(t.clone(), box te))
+            ctx_new.insert(p.clone(), *p_ty.clone());
+            let b_ty = typeck(&mut ctx_new, b)?;
+            Ok(Type::Arrow(p_ty.clone(), box b_ty))
         }
         Expr::TApp(f, ta) => {
             let tf = typeck(ctx, f)?;
@@ -117,13 +117,13 @@ pub fn typeck(ctx: &mut Env, e: &Expr) -> Result<Type> {
                 _ => Err(format!("'{}' is not a type function", f)),
             }
         }
-        Expr::TLam(s, e) => {
-            // `s` should not occur in the context
-            if ctx.contains_key(s) {
-                return Err(format!("`{s}` is already defined"));
+        Expr::TLam(p, b) => {
+            // `p` should not occur in the context
+            if ctx.contains_key(p) {
+                return Err(format!("`{p}` is already defined"));
             }
-            let te = typeck(ctx, e)?;
-            Ok(Type::Forall(s.clone(), box te))
+            let b_ty = typeck(ctx, b)?;
+            Ok(Type::Forall(p.clone(), box b_ty))
         }
     }
 }
