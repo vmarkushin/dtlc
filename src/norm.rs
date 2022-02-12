@@ -258,120 +258,83 @@ pub fn beta_eq(e1: Expr, e2: Expr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::e;
     use crate::expr::*;
     use crate::typeck::{arrow, forall, tvar};
 
     #[test]
     fn test_alpha_eq() {
         // \x:B. x α= \y:B. y
-        assert!(alpha_eq(
-            &lam("x", tvar("B"), "x"),
-            &lam("y", tvar("B"), "y")
-        ));
+        assert!(alpha_eq(&e!(lam x:B. x), &e!(lam y:B. y)));
         // x α/= y
-        assert!(!alpha_eq(&var("x"), &var("y")));
+        assert!(!alpha_eq(&e!(x), &e!(y)));
 
         // \x:B. x α/= \y:B. z
-        assert!(!alpha_eq(
-            &lam("x", tvar("B"), "x"),
-            &lam("y", tvar("B"), var("z"))
-        ));
+        assert!(!alpha_eq(&e!(lam x:B. x), &e!(lam y:B. z)));
 
         // \x:B. x α/= \x:B->B. x
-        assert!(!alpha_eq(
-            &lam("x", tvar("B"), "x"),
-            &lam("x", arrow(tvar("B"), tvar("B")), "x")
-        ));
+        assert!(!alpha_eq(&e!(lam x:B. x), &e!(lam x:(B->B). x)));
 
-        // (\x:B. x) z α= (\y:B->B. y) z
-        assert!(alpha_eq(
-            &app(lam("x", tvar("B"), "x"), var("z")),
-            &app(lam("y", tvar("B"), "y"), var("z")),
-        ));
+        // (\x:B. x) z α= (\y:B. y) z
+        assert!(alpha_eq(&e!((lam x:B. x) z), &e!((lam y:B. y) z)));
 
         // (\x:B. x) z α/= (\y:B->B. y) w
-        assert!(!alpha_eq(
-            &app(lam("x", tvar("B"), "x"), var("z")),
-            &app(lam("y", tvar("B"), "y"), var("w")),
-        ));
+        assert!(!alpha_eq(&e!((lam x:B. x) z), &e!((lam y:(B->B). y) w)));
     }
 
     #[test]
     fn test_normalization() {
         // x ~nf~> x
-        let e = var("x");
+        let e = e!(x);
         assert_eq!(*nf(e.clone()), e);
 
         // \x:B. x ~nf~> \x:B. x
-        let e = lam("x", tvar("B"), "x");
+        let e = e!(lam x:B. x);
         assert_eq!(*nf(e.clone()), e);
 
         // (\x:B. x) z ~nf~> z
-        assert_eq!(*nf(app(lam("x", tvar("B"), "x"), var("z"))), var("z"));
+        assert_eq!(*nf(e!((lam x:B. x) z)), e!(z));
 
         // variable substitution with renaming (type isn't checked)
         // (\x:B. \y:B. x y) y ~nf~> \y':B. y y'
         assert_eq!(
-            *nf(app(
-                lam("x", tvar("B"), lam("y", tvar("B"), app("x", "y"))),
-                "y"
-            )),
+            *nf(e!((lam x:B. lam y: B. x y) y)),
             lam("y'", tvar("B"), app("y", "y'")),
         );
 
         // arguments should not reduce
         // (\x:B. \y:B. x y) ((\x:B. x) z) ~whnf~> \y:B. z y
         assert_eq!(
-            *nf(app(
-                lam("x", tvar("B"), lam("y", tvar("B"), app("x", "y"))),
-                app(lam("x", tvar("B"), "x"), "z")
-            )),
-            lam("y", tvar("B"), app("z", "y")),
+            *nf(e!((lam x:B. lam y:B. x y) ((lam x:B. x) z))),
+            e!(lam y:B. z y)
         );
 
         // inner (deep) applications should reduce
         // (\x:B. \y:B. x ((\x:B. x) y)) z ~whnf~> \y:B. z y
         assert_eq!(
-            *nf(app(
-                lam(
-                    "x",
-                    tvar("B"),
-                    lam("y", tvar("B"), app("x", app(lam("x", tvar("B"), "x"), "y")))
-                ),
-                "z"
-            )),
-            lam("y", tvar("B"), app("z", "y")),
+            *nf(e!((lam x:B. lam y:B. x ((lam x:B. x) y)) z)),
+            e!(lam y:B. z y)
         );
 
         // type functions should reduce
         // (Λ a. \x:a. x) z ~nf~> \x: z. x
-        assert_eq!(
-            *nf(tapp(tlam("a", lam("x", "a", "x")), "z")),
-            lam("x", "z", "x"),
-        );
+        assert_eq!(*nf(e!((lam a. lam x:a. x)[z])), e!(lam x:z. x));
 
         // inner (deep) type function applications should reduce
         // (\y:B. (Λ a. \x:a. x) z) ~whnf~> \y:B. \x: z. x
         assert_eq!(
-            *nf(lam(
-                "y",
-                tvar("B"),
-                tapp(tlam("a", lam("x", "a", "x")), "z")
-            )),
-            lam("y", tvar("B"), lam("x", "z", "x"),),
+            *nf(e!(lam y:B. (lam a. lam x:a. x)[z])),
+            e!(lam y:B. lam x:z. x)
         );
 
         // type functions should reduce
         // (Λ a. \x:a. x) z ~nf~> \x: z. x
-        assert_eq!(
-            *nf(tapp(tlam("a", lam("x", "a", "x")), "z")),
-            lam("x", "z", "x"),
-        );
+        assert_eq!(*nf(e!((lam a. lam x:a. x)[z])), e!(lam x:z. x));
 
         // type function parameters renaming
         // (Λ a. Λb. \x:a. x) b ~nf~> Λb'. \x:b. x
         assert_eq!(
-            *nf(tapp(tlam("a", tlam("b", lam("x", "a", "x"))), "b")),
+            *nf(e!((lam a. lam b. lam x:a. x)[b])),
             tlam("b'", lam("x", "b", "x")),
         );
     }
@@ -379,40 +342,34 @@ mod tests {
     #[test]
     fn test_whnf() {
         // x ~whnf~> x
-        let e = var("x");
+        let e = e!(x);
         assert_eq!(*whnf(e.clone()), e);
 
         // \x:B. x ~whnf~> \x:B. x
-        let e = lam("x", tvar("B"), "x");
+        let e = e!(lam x:B. x);
         assert_eq!(*whnf(e.clone()), e);
 
         // (\x:B. x) z ~whnf~> z
-        assert_eq!(*whnf(app(lam("x", tvar("B"), "x"), var("z"))), var("z"));
+        assert_eq!(*whnf(e!((lam x:B. x) z)), e!(z));
 
         // variable substitution with renaming (type isn't checked)
         // (\x:B. \y:B. x y) y ~whnf~> \y':B. y y'
         assert_eq!(
-            *whnf(app(
-                lam("x", tvar("B"), lam("y", tvar("B"), app("x", "y"))),
-                "y"
-            )),
+            *whnf(e!((lam x:B. lam y: B. x y) y)),
             lam("y'", tvar("B"), app("y", "y'")),
         );
 
         // arguments should *not* reduce
         // (\x:B. \y:B. x y) ((\x:B. x) z) ~whnf~> \y:B. z y
-        let arg = app(lam("x", tvar("B"), "x"), "z");
+        let arg = e!((lam x:B. x) z);
         assert_eq!(
-            *whnf(app(
-                lam("x", tvar("B"), lam("y", tvar("B"), app("x", "y"))),
-                arg.clone()
-            )),
+            *whnf(app(e!(lam x:B. lam y:B. x y), arg.clone())),
             lam("y", tvar("B"), app(arg, "y")),
         );
 
         // inner (deep) applications should *not* reduce
         // (\x:B. \y:B. x ((\x:B. x) y)) z ~whnf~> \y:B. z y
-        let app_term = app(lam("x", tvar("B"), "x"), "y");
+        let app_term = e!((lam x:B. x) y);
         assert_eq!(
             *whnf(app(
                 lam(
@@ -427,20 +384,11 @@ mod tests {
 
         // type function applications should reduce
         // (Λ a. \x:a. x) z ~whnf~> \x: z. x
-        assert_eq!(
-            *whnf(tapp(tlam("a", lam("x", "a", "x")), "z")),
-            lam("x", "z", "x"),
-        );
+        assert_eq!(*whnf(e!((lam a. lam x:a. x)[z])), e!(lam x:z. x));
 
         // inner (deep) type function applications should *not* reduce
         // \y:B. (Λ a. \x:a. x) z ~whnf~> \y:B. (Λ a. \x:a. x) z)
-        assert_eq!(
-            *whnf(lam(
-                "y",
-                tvar("B"),
-                tapp(tlam("a", lam("x", "a", "x")), "z")
-            )),
-            lam("y", tvar("B"), tapp(tlam("a", lam("x", "a", "x")), "z")),
-        );
+        let e = e!(lam y:B. (lam a. lam x:a. x)[z]);
+        assert_eq!(*whnf(e.clone()), e);
     }
 }

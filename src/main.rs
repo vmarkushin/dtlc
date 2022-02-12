@@ -2,6 +2,7 @@
 #![allow(unused)]
 
 mod expr;
+mod macros;
 mod norm;
 mod typeck;
 

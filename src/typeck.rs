@@ -167,52 +167,38 @@ impl<T: Into<String>> From<T> for BType {
 mod tests {
     use super::*;
     use crate::expr::*;
+    use crate::{e, ty};
 
     #[test]
     fn test_type_check() -> Result<()> {
         // lambda `\x:B. x : B→B`
-        assert_eq!(
-            typeck_empty(&lam("x", tvar("B"), "x"))?,
-            arrow(tvar("B"), tvar("B"))
-        );
+        assert_eq!(typeck_empty(&e!(lam x:B. x))?, ty!(B->B));
 
         // application `y:B`, `(\x:B. x) y : B`
         let mut ctx = HashMap::default();
-        ctx.insert("y".to_owned(), tvar("B"));
-        assert_eq!(
-            typeck(&mut ctx, &app(lam("x", tvar("B"), "x"), "y"))?,
-            tvar("B")
-        );
+        ctx.insert("y".to_owned(), ty!(B));
+        assert_eq!(typeck(&mut ctx, &e!((lam x:B. x) y))?, ty!(B));
 
         // var in context `f : B→B`
         let mut ctx = HashMap::default();
-        let arrow_t = arrow(tvar("B"), tvar("B"));
+        let arrow_t = ty!(B->B);
         ctx.insert("f".to_owned(), arrow_t.clone());
-        assert_eq!(typeck(&mut ctx, &var("f"))?, arrow_t);
+        assert_eq!(typeck(&mut ctx, &e!(f))?, arrow_t);
 
         // type function
-        assert_eq!(
-            typeck_empty(&tlam("a", lam("x", tvar("a"), "x")))?,
-            forall("a", arrow(tvar("a"), tvar("a")))
-        );
+        assert_eq!(typeck_empty(&e!(lam a. lam x:a. x))?, ty!(forall a. a->a));
 
         // type function application
-        assert_eq!(
-            typeck_empty(&tapp(tlam("a", lam("x", tvar("a"), "x")), tvar("T")))?,
-            arrow(tvar("T"), tvar("T"))
-        );
+        assert_eq!(typeck_empty(&e!((lam a. lam x:a. x)[T]))?, ty!(T->T));
 
         // type parameter renaming
         assert_eq!(
-            typeck_empty(&tapp(
-                tlam("a", tlam("b", lam("y", "b", lam("x", tvar("a"), "x")))),
-                tvar("b")
-            ))?,
-            forall("b'", arrow(tvar("b'"), arrow(tvar("b"), tvar("b"))))
+            typeck_empty(&e!((lam a. lam b. lam y:b. lam x:a. x)[b]))?,
+            forall("b'", arrow(tvar("b'"), ty!(b->b)))
         );
 
         // ⊥≡Πα:∗. α
-        let bot = || forall("a", "a");
+        let bot = || ty!(forall a.a);
         // λx:⊥. x (⊥→⊥→⊥) (x (⊥→⊥) x) (x (⊥→⊥→⊥) x x)
         assert_eq!(
             typeck_empty(&lam(
@@ -234,29 +220,22 @@ mod tests {
 
     #[test]
     fn test_type_check_fail() {
-        assert_eq!(
-            &typeck_empty(&var("x")).unwrap_err(),
-            "Cannot find variable x"
-        );
+        assert_eq!(&typeck_empty(&e!(x)).unwrap_err(), "Cannot find variable x");
 
         let mut ctx = HashMap::default();
-        ctx.insert("x".to_owned(), tvar("B"));
+        ctx.insert("x".to_owned(), ty!(B));
         assert_eq!(
-            &typeck(&mut ctx, &app("x", "x")).unwrap_err(),
+            &typeck(&mut ctx, &e!(x x)).unwrap_err(),
             "'x' is not a function"
         );
 
         assert_eq!(
-            &typeck_empty(&lam("a", tvar("B"), tlam("a", lam("x", tvar("a"), "x")))).unwrap_err(),
+            &typeck_empty(&e!(lam a:B. lam a. lam x:a. x)).unwrap_err(),
             "`a` is already defined"
         );
 
         assert_eq!(
-            &typeck_empty(&tapp(
-                lam("a", tvar("B"), lam("x", tvar("a"), "x")),
-                tvar("T")
-            ))
-            .unwrap_err(),
+            &typeck_empty(&e!((lam a:B. lam x:a. x)[T])).unwrap_err(),
             "'(λa:B. (λx:a. x))' is not a type function"
         );
     }

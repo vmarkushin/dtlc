@@ -1,4 +1,4 @@
-# Simply-Typed Lambda Calculus
+# Polymorphic Lambda Calculus
 
 ## Run tests
 
