@@ -95,45 +95,43 @@ impl<T: Into<String>> From<T> for BType {
 mod tests {
     use super::*;
     use crate::expr::*;
+    use crate::{e, ty};
 
     #[test]
     fn test_type_check() -> Result<()> {
         // lambda `\x:T. x : T→T`
-        assert_eq!(typeck_empty(&lam("x", "T", "x"))?, arrow("T", "T"));
+        assert_eq!(typeck_empty(&e!(lam x:T. x))?, ty!(T->T));
 
         // application `y:T`, `(\x:T. x) y : T`
         let mut ctx = HashMap::default();
-        ctx.insert("y".to_owned(), base("T"));
-        assert_eq!(typeck(&mut ctx, &app(lam("x", "T", "x"), "y"))?, base("T"));
+        ctx.insert("y".to_owned(), ty!(T));
+        assert_eq!(typeck(&mut ctx, &e!((lam x:T. x) y))?, ty!(T));
 
         // var in context `f : T→T`
         let mut ctx = HashMap::default();
-        let arrow_t = arrow("T", "T");
+        let arrow_t = ty!(T->T);
         ctx.insert("f".to_owned(), arrow_t.clone());
-        assert_eq!(typeck(&mut ctx, &var("f"))?, arrow_t);
+        assert_eq!(typeck(&mut ctx, &e!(f))?, arrow_t);
 
         Ok(())
     }
 
     #[test]
     fn test_type_check_fail() {
-        assert_eq!(
-            &typeck_empty(&var("x")).unwrap_err(),
-            "Cannot find variable x"
-        );
+        assert_eq!(&typeck_empty(&e!(x)).unwrap_err(), "Cannot find variable x");
 
         let mut ctx = HashMap::default();
-        ctx.insert("x".to_owned(), base("T"));
+        ctx.insert("x".to_owned(), ty!(T));
         assert_eq!(
-            &typeck(&mut ctx, &app("x", "x")).unwrap_err(),
+            &typeck(&mut ctx, &e!(x x)).unwrap_err(),
             "'x' is not a function"
         );
 
         // application `y:A`, `(\x:B. x) y`
         let mut ctx = HashMap::default();
-        ctx.insert("y".to_owned(), base("A"));
+        ctx.insert("y".to_owned(), ty!(A));
         assert_eq!(
-            &typeck(&mut ctx, &app(lam("x", "B", "x"), "y")).unwrap_err(),
+            &typeck(&mut ctx, &e!((lam x:B. x) y)).unwrap_err(),
             "Argument type A != B"
         );
     }

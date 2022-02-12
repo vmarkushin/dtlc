@@ -2,6 +2,7 @@
 #![allow(unused, clippy::boxed_local)]
 
 mod expr;
+mod macros;
 mod norm;
 mod typeck;
 
