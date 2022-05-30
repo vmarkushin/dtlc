@@ -351,6 +351,12 @@ mod tests {
         let ty = pct!(p, des, env, "Type");
         env.check(&pe!(p, des, "forall (ff : T -> T) (x : T), T"), &ty)?;
 
+        let ty = pct!(p, des, env, "Type2");
+        env.check(
+            &pe!(p, des, "forall (T : Type1) (ff : T -> T) (x : T), T"),
+            &ty,
+        )?;
+
         let ty = pct!(p, des, env, "Type1");
         env.check(&pe!(p, des, "Type0"), &ty)?;
 
@@ -493,6 +499,10 @@ mod tests {
             | O
             | S Nat
 
+        data Bool : Type
+            | true
+            | false
+
         data Error : Type
             | err1
             | err2
@@ -500,12 +510,13 @@ mod tests {
         data Result (T : Type) (E : Type) : Type1
             | ok T
             | err E
+
+        data Sigma (A : Type) (B : A -> Type) : Type1
+            | mkSigma (x : A) (y : B x)
        "#,
         )?)?;
-
         env.check_prog(des.clone())?;
 
-        debug!("{}", env.infer(&pe!(p, des, "ok"))?.1);
         typeck!(
             p,
             des,
@@ -513,13 +524,28 @@ mod tests {
             "ok",
             "forall (T : Type) (E : Type), T -> Result T E"
         );
-        debug!("{}", env.infer(&pe!(p, des, "ok"))?.1);
         typeck!(
             p,
             des,
             env,
             "err",
             "forall (T : Type) (E : Type), E -> Result T E"
+        );
+
+        typeck!(
+            p,
+            des,
+            env,
+            "mkSigma",
+            "forall (A : Type) (B : A -> Type) (x : A) (y : B x), Sigma A B"
+        );
+
+        typeck!(
+            p,
+            des,
+            env,
+            "mkSigma Nat (lam (x : Nat) => Bool) (S O) false",
+            "Sigma Nat (lam (x : Nat) => Bool)"
         );
         Ok(())
     }

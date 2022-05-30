@@ -6,8 +6,8 @@ Features:
 + Terms unification
 
 TO-DO:
-+ (Higher) Inductive types
 + Pattern-matching
++ (Higher) Inductive types
 + [Higher Observational Type Theory](https://ncatlab.org/nlab/show/higher+observational+type+theory)
 + More powerful universes
 

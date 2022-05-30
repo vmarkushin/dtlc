@@ -197,8 +197,9 @@ impl TypeCheckState {
                 Unify::unify(self, &a.ty, &b.ty)?;
                 Unify::unify(self, c0, c1)
             }
-            (Lam(Lambda(a, _c0)), Lam(Lambda(b, _c1))) if a.licit == b.licit => {
-                todo!("lambda unification")
+            (Lam(Lambda(a, c0)), Lam(Lambda(b, c1))) if a.licit == b.licit => {
+                Unify::unify(self, &a.ty, &b.ty)?;
+                Unify::unify(self, c0, c1)
             }
             (Cons(c0, a), Cons(c1, b)) if c0.cons_ix == c1.cons_ix => {
                 Unify::unify(self, a.as_slice(), b.as_slice())
