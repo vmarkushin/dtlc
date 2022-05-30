@@ -1,4 +1,5 @@
 use crate::syntax;
+use crate::syntax::core::pretty_application;
 use crate::syntax::{Ident, Loc, Plicitness, Universe, GI, MI, UID};
 use std::fmt::{Display, Formatter};
 use vec1::Vec1;
@@ -10,11 +11,12 @@ pub struct Param {
     pub plic: Plicitness,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct NamedTele {
-    pub name: Ident,
-    pub tele: Vec<Param>,
-}
+// #[derive(Debug, PartialEq, Eq, Clone)]
+// pub struct NamedTele {
+//     pub name: Ident,
+//     pub tele: Vec<Param>,
+//     pub ret_ty: Option<Type>,
+// }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Data {
@@ -274,13 +276,7 @@ impl Display for Expr {
                 }
                 write!(f, ". {}", body)
             }
-            App(ff, args) => {
-                write!(f, "{ff}")?;
-                for arg in args.iter() {
-                    write!(f, " {}", arg)?;
-                }
-                write!(f, "")
-            }
+            App(ff, args) => pretty_application(f, ff, args),
             Pi(_loc, bind, body) => {
                 write!(f, "Π{}", bind.name)?;
                 if let Some(ty) = &*bind.ty {

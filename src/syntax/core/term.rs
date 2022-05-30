@@ -63,6 +63,20 @@ pub enum Term {
 }
 
 impl Term {
+    #[allow(unused)]
+    pub(crate) fn tele_len(&self) -> usize {
+        match self {
+            Self::Whnf(v) => match v {
+                Val::Pi(_, Closure::Plain(t)) => t.tele_len() + 1,
+                Val::Lam(Lambda(_, Closure::Plain(t))) => t.tele_len() + 1,
+                _ => 0,
+            },
+            Self::Redex(..) => 0,
+        }
+    }
+}
+
+impl Term {
     pub(crate) fn lam(p0: Bind<Box<Term>>, p1: Term) -> Term {
         Term::Whnf(Val::Lam(Lambda(p0, Closure::Plain(box p1))))
     }

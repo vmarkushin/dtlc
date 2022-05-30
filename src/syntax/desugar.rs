@@ -22,7 +22,10 @@ pub struct DesugarState {
 
 impl DesugarState {
     pub fn lookup_by_name(&self, name: &str) -> Option<(&DeclA, GI)> {
-        let gi = self.decls_map[name];
+        let gi = *self
+            .decls_map
+            .get(name)
+            .unwrap_or_else(|| panic!("{} not found", name));
         self.decls.get(gi).map(|decl| (decl, gi))
     }
 

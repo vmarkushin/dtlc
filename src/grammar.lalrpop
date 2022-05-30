@@ -117,12 +117,12 @@ TypeParam: Param = {
     <AtomExpr> => Param::from_type(<>, Explicit),
 }
 
-Constructor: NamedTele = {
-    "|" <name: Ident> <params: TypeParam*> => NamedTele::new(name, params.into()),
-}
-
 FnType: Expr = {
     ":" <Expr>
+}
+
+Constructor: NamedTele = {
+    "|" <name: Ident> <params: TypeParam*> => NamedTele::new(name, params.into()),
 }
 
 DataType: Universe = {

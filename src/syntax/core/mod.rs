@@ -12,6 +12,7 @@ pub use dbi::DeBruijn;
 pub use decl::{ConsInfo, DataInfo, Decl, FuncInfo, ProjInfo};
 pub use fold::FoldVal;
 pub use pats::Simpl;
+pub use pretty::pretty_application;
 pub use redex::Subst;
 pub use subst::{build_subst, PrimSubst, Substitution};
 pub use term::{Bind, Closure, Elim, Func, Lambda, Term, Val, ValData};
@@ -52,7 +53,7 @@ mod tests {
 
     use crate::check::{TypeCheckState, Unify};
     use crate::parser::Parser;
-    use crate::ptis;
+    use crate::pct;
     use crate::syntax::desugar::desugar_prog;
 
     #[test]
@@ -72,8 +73,8 @@ mod tests {
         let mut env = TypeCheckState::default();
         env.check_prog(des.clone())?;
 
-        let val = ptis!(p, des, env, "main");
-        let val1 = ptis!(p, des, env, "O");
+        let val = pct!(p, des, env, "main");
+        let val1 = pct!(p, des, env, "O");
         Unify::unify(&mut env, &val, &val1)?;
         Ok(())
     }

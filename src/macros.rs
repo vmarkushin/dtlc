@@ -1,16 +1,43 @@
+/// Parse expression.
 #[macro_export]
-macro_rules! pt {
+macro_rules! pe {
     ($p:ident, $d:ident, $s:literal) => {
         $d.desugar_expr($p.parse_expr($s)?)?
     };
 }
 
+/// Parse core term.
 #[macro_export]
-macro_rules! ptis {
+macro_rules! pct {
     ($p:ident, $d:ident, $e:ident, $s:literal) => {{
-        let term = $e.infer(&$d.desugar_expr($p.parse_expr($s)?)?)?.0.ast;
+        let term = $e.infer(&$crate::pe!($p, $d, $s))?.0.ast;
         let val = $e.simplify(term)?;
         val
+    }};
+}
+
+/// Parse expression and infer its type.
+#[macro_export]
+macro_rules! peit {
+    ($p:ident, $d:ident, $e:ident, $s:literal) => {{
+        let term = $e.infer(&$crate::pe!($p, $d, $s))?.1;
+        let val = $e.simplify(term)?;
+        val
+    }};
+}
+
+/// Check type.
+#[macro_export]
+macro_rules! typeck {
+    ($p:ident, $d:ident, $e:ident, $expr:expr, $ty:expr) => {{
+        let ty = pct!($p, $d, $e, $ty);
+        $d.cur_meta_id.push(Default::default());
+        let expr = pe!($p, $d, $expr);
+        $e.enter_def($e.sigma.len(), *$d.cur_meta_id.last().unwrap());
+        $e.check(&expr, &ty)?;
+        $e.exit_def();
+        $e.meta_ctx.pop();
+        $d.cur_meta_id.pop();
     }};
 }
 

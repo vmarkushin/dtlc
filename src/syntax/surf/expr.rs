@@ -17,6 +17,32 @@ pub enum Expr {
 }
 
 impl Expr {
+    /// `forall (T : Type), (T -> T) -> T` will be desugared to `([T : Type, (forall T, T)], T)`
+    #[allow(unused)]
+    pub(crate) fn into_tele(self) -> (Vec<Param>, Box<Expr>) {
+        let mut params = vec![];
+        let mut expr = box self;
+        loop {
+            expr = match *expr {
+                Expr::Lam(ps, e) => {
+                    params.extend(ps);
+                    e
+                }
+                Expr::Pi(ps, e) => {
+                    params.extend(ps);
+                    e
+                }
+                e => {
+                    expr = box e;
+                    break;
+                }
+            };
+        }
+        (params, expr)
+    }
+}
+
+impl Expr {
     pub fn app_many(f: impl Into<Expr>, args: impl IntoIterator<Item = impl Into<Expr>>) -> Expr {
         Expr::App(
             Box::new(f.into()),

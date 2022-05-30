@@ -31,7 +31,7 @@ pub enum Error {
     MetaUnsolved(MI),
     #[error("Different universe: `{1}` and `{2}`")]
     DifferentUniverse(Loc, Universe, Universe),
-    #[error("Different term: `{0}` and `{1}`")]
+    #[error("Expected `{0}`, got `{1}`")]
     DifferentTerm(Box<Term>, Box<Term>),
     #[error("Different elim: `{0}` and `{1}`")]
     DifferentElim(Box<Elim>, Box<Elim>),
@@ -41,6 +41,8 @@ pub enum Error {
     InvalidPi(Box<Val>, Box<Val>),
     #[error("Blocked: `{0}`")]
     Blocked(Box<Blocked<Term>>),
+    #[error("Expected universe for data declaration `{0}`")]
+    ExpectedUniverseForData(Ident),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

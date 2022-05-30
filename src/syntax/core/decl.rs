@@ -1,4 +1,4 @@
-use crate::syntax::core::{Tele, Term, TermInfo, Val};
+use crate::syntax::core::{Tele, Term, TermInfo};
 use crate::syntax::{Ident, Loc, Universe, GI};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -34,6 +34,7 @@ pub struct DataInfo {
     /// References to its constructors.
     pub conses: Vec<GI>,
     pub universe: Universe,
+    pub signature: Term,
 }
 
 /// Declaration.
@@ -72,7 +73,7 @@ impl Decl {
     pub fn def_type(&self) -> Term {
         match self {
             Decl::Proj(i) => i.ty.clone(),
-            Decl::Data(i) => Val::Universe(i.universe).into(), // TODO: consider params
+            Decl::Data(i) => i.signature.clone(),
             Decl::Cons(i) => i.signature.clone(),
             Decl::Func(i) => i.signature.clone(),
         }

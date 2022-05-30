@@ -1,8 +1,8 @@
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
 use crate::syntax::abs::Expr;
+use crate::syntax::core::Closure;
 use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, Val, ValData};
-use crate::syntax::core::{Closure, DeBruijn};
 use crate::syntax::{ConHead, Universe, GI};
 
 impl TypeCheckState {
@@ -57,25 +57,100 @@ impl TypeCheckState {
         };
         let view = abs.into_app_view();
         let (head, mut ty) = self.infer_head(&view.fun)?;
-        let mut elims = Vec::with_capacity(view.args.len());
-        for arg in view.args {
-            let ty_val = self.simplify(ty)?;
-            match {
-                let (param, clos) = match ty_val {
-                    Val::Pi(param, clos) => (param, clos),
-                    e => return Err(Error::NotPi(Term::Whnf(e), arg.loc())),
+
+        match &head.ast {
+            Term::Whnf(Val::Data(ValData { def, args })) => {
+                debug_assert!(args.is_empty());
+                let info = match &self.sigma[*def] {
+                    Decl::Data(data) => data,
+                    _ => {
+                        unreachable!()
+                    }
                 };
-                let param_ty = self.simplify(*param.ty)?;
-                (param_ty, clos)
-            } {
-                (param, clos) => {
-                    let arg = self.check(&arg, &param)?;
-                    ty = clos.instantiate(arg.ast.clone());
-                    elims.push(Elim::app(arg.ast));
+                // debug_assert_eq!(info.params.len(), view.args.len());
+                let mut ty = Term::pi_from_tele(info.params.clone(), Term::universe(info.universe));
+                let mut args = vec![];
+                for arg in view.args {
+                    let ty_val = self.simplify(ty)?;
+                    match {
+                        let (param, clos) = match ty_val {
+                            Val::Pi(param, clos) => (param, clos),
+                            e => return Err(Error::NotPi(Term::Whnf(e), arg.loc())),
+                        };
+                        let param_ty = self.simplify(*param.ty)?;
+                        (param_ty, clos)
+                    } {
+                        (param, clos) => {
+                            let arg = self.check(&arg, &param)?;
+                            ty = clos.instantiate(arg.ast.clone());
+                            args.push(arg.ast);
+                        }
+                    }
                 }
+
+                Ok((
+                    head.clone()
+                        .map_ast(|_| Term::data(ValData::new(*def, args))),
+                    ty,
+                ))
+            }
+            Term::Whnf(Val::Cons(ConHead { name, cons_ix: def }, args)) => {
+                debug_assert!(args.is_empty());
+                let info = match &self.sigma[*def] {
+                    Decl::Cons(cons) => cons,
+                    _ => {
+                        unreachable!()
+                    }
+                };
+                // debug_assert_eq!(dsp!(&info.signature).tele_len(), dbg!(&view.args).len());
+                let mut ty = info.signature.clone();
+                let mut args = vec![];
+                for arg in view.args {
+                    let ty_val = self.simplify(ty)?;
+                    match {
+                        let (param, clos) = match ty_val {
+                            Val::Pi(param, clos) => (param, clos),
+                            e => return Err(Error::NotPi(Term::Whnf(e), arg.loc())),
+                        };
+                        let param_ty = self.simplify(*param.ty)?;
+                        (param_ty, clos)
+                    } {
+                        (param, clos) => {
+                            let arg = self.check(&arg, &param)?;
+                            ty = clos.instantiate(arg.ast.clone());
+                            args.push(arg.ast);
+                        }
+                    }
+                }
+
+                Ok((
+                    head.clone()
+                        .map_ast(|_| Term::cons(ConHead::new(name.clone(), *def), args)),
+                    ty,
+                ))
+            }
+            _ => {
+                let mut elims = Vec::with_capacity(view.args.len());
+                for arg in view.args {
+                    let ty_val = self.simplify(ty)?;
+                    match {
+                        let (param, clos) = match ty_val {
+                            Val::Pi(param, clos) => (param, clos),
+                            e => return Err(Error::NotPi(Term::Whnf(e), arg.loc())),
+                        };
+                        let param_ty = self.simplify(*param.ty)?;
+                        (param_ty, clos)
+                    } {
+                        (param, clos) => {
+                            let arg = self.check(&arg, &param)?;
+                            ty = clos.instantiate(arg.ast.clone());
+                            elims.push(Elim::app(arg.ast));
+                        }
+                    }
+                }
+                Ok((head.map_ast(|t| t.apply_elim(elims)), ty))
             }
         }
-        Ok((head.map_ast(|t| t.apply_elim(elims)), ty))
     }
 
     pub fn type_of_decl(&self, decl: GI) -> Result<TermInfo> {
@@ -88,24 +163,25 @@ impl TypeCheckState {
                 ..
             }) => Ok(Term::pi_from_tele(params.clone(), Term::universe(*level)).at(*loc)),
             Decl::Cons(cons) => {
-                let params = &cons.params;
-                let data = cons.data;
-                let data_tele = match self.def(data) {
-                    Decl::Data(i) => &i.params,
-                    _ => unreachable!(),
-                };
-                let params_len = params.len();
-                let range = params_len..params_len + data_tele.len();
-                let tele = data_tele
-                    .iter()
-                    .cloned()
-                    .map(Bind::into_implicit)
-                    .chain(params.iter().cloned())
-                    .collect();
-                let _ident = self.def(data).def_name().clone();
-                let elims = range.rev().map(Term::from_dbi).collect();
-                let ret = Term::data(ValData::new(data, elims));
-                Ok(Term::pi_from_tele(tele, ret).at(cons.loc()))
+                Ok(cons.signature.clone().at(cons.loc()))
+                // let params = &cons.params;
+                // let data = cons.data;
+                // let data_tele = match self.def(data) {
+                //     Decl::Data(i) => &i.params,
+                //     _ => unreachable!(),
+                // };
+                // let params_len = params.len();
+                // let range = params_len..params_len + data_tele.len();
+                // let tele = data_tele
+                //     .iter()
+                //     .cloned()
+                //     // .map(Bind::into_implicit)
+                //     .chain(params.iter().cloned())
+                //     .collect();
+                // let _ident = self.def(data).def_name().clone();
+                // let elims = range.rev().map(Term::from_dbi).collect();
+                // let ret = Term::data(ValData::new(data, elims));
+                // Ok(Term::pi_from_tele(tele, ret).at(cons.loc()))
             }
             Decl::Proj(_proj) => {
                 unimplemented!()
@@ -250,7 +326,7 @@ mod tests {
     use crate::syntax::core::ValData;
     use crate::syntax::desugar::desugar_prog;
     use crate::syntax::Loc;
-    use crate::{assert_err, pt, ptis};
+    use crate::{assert_err, dsp, pct, pe, typeck};
 
     #[test]
     fn test_check_basic() -> eyre::Result<()> {
@@ -266,27 +342,27 @@ mod tests {
         env.trace_tc = true;
         env.indentation_size(2);
 
-        let ty = ptis!(p, des, env, "T -> T");
-        env.check(&pt!(p, des, "lam (y : T) => y"), &ty)?;
+        let ty = pct!(p, des, env, "T -> T");
+        env.check(&pe!(p, des, "lam (y : T) => y"), &ty)?;
 
-        let ty = ptis!(p, des, env, "forall (ff : T -> T) (x : T), T");
-        env.check(&pt!(p, des, "lam (f : T -> T) (y : T) => f y"), &ty)?;
+        let ty = pct!(p, des, env, "forall (ff : T -> T) (x : T), T");
+        env.check(&pe!(p, des, "lam (f : T -> T) (y : T) => f y"), &ty)?;
 
-        let ty = ptis!(p, des, env, "Type");
-        env.check(&pt!(p, des, "forall (ff : T -> T) (x : T), T"), &ty)?;
+        let ty = pct!(p, des, env, "Type");
+        env.check(&pe!(p, des, "forall (ff : T -> T) (x : T), T"), &ty)?;
 
-        let ty = ptis!(p, des, env, "Type1");
-        env.check(&pt!(p, des, "Type0"), &ty)?;
+        let ty = pct!(p, des, env, "Type1");
+        env.check(&pe!(p, des, "Type0"), &ty)?;
 
-        let ty = ptis!(p, des, env, "Type0");
+        let ty = pct!(p, des, env, "Type0");
         assert_err!(
-            env.check(&pt!(p, des, "Type1"), &ty),
+            env.check(&pe!(p, des, "Type1"), &ty),
             Error::DifferentUniverse(Loc::new(0, 5), Universe(2), Universe(0))
         );
 
-        let ty = ptis!(p, des, env, "T");
+        let ty = pct!(p, des, env, "T");
         assert_err!(
-            env.check(&pt!(p, des, "forall (ff : T -> T) (x : T), x"), &ty),
+            env.check(&pe!(p, des, "forall (ff : T -> T) (x : T), x"), &ty),
             Error::InvalidPi(
                 box Val::Universe(Universe(0)),
                 box Val::Data(ValData::new(0, vec![]))
@@ -318,61 +394,133 @@ mod tests {
 
         env.check_prog(des.clone())?;
 
-        let ty = ptis!(p, des, env, "Bool");
-        env.check(&pt!(p, des, "bool"), &ty)?;
+        let ty = pct!(p, des, env, "Bool");
+        env.check(&pe!(p, des, "bool"), &ty)?;
 
-        let ty = ptis!(p, des, env, "Type");
-        env.check(&pt!(p, des, "Bool"), &ty)?;
+        let ty = pct!(p, des, env, "Type");
+        env.check(&pe!(p, des, "Bool"), &ty)?;
 
-        let ty = ptis!(p, des, env, "forall (A : Type) (a : A), A");
-        env.check(&pt!(p, des, "id"), &ty)?;
+        let ty = pct!(p, des, env, "forall (A : Type) (a : A), A");
+        env.check(&pe!(p, des, "id"), &ty)?;
 
-        let ty = ptis!(p, des, env, "Bool");
-        env.check(&pt!(p, des, "idb"), &ty)?;
+        let ty = pct!(p, des, env, "Bool");
+        env.check(&pe!(p, des, "idb"), &ty)?;
 
-        let ty = ptis!(
+        let ty = pct!(
             p,
             des,
             env,
             "forall (f : forall (A : Type), A -> A -> A) (x : Bool), Bool"
         );
-        env.check(&pt!(p, des, "deep"), &ty)?;
-        env.check(&pt!(p, des, "deep'"), &ty)?;
+        env.check(&pe!(p, des, "deep"), &ty)?;
+        env.check(&pe!(p, des, "deep'"), &ty)?;
 
         Ok(())
     }
 
     #[test]
-    #[ignore]
     fn test_data() -> eyre::Result<()> {
-        let _parser = Parser::default();
-        /*
-            let out = env.run(parser.parse_prog(
-                r#"
-        data Nat
+        let _ = env_logger::try_init();
+        let mut p = Parser::default();
+        let mut env = TypeCheckState::default();
+        let mut des = desugar_prog(p.parse_prog(
+            r#"
+        data Nat : Type
             | O
             | S Nat
 
-        data List (T : Type)
+        data List (T : Type) : Type1
             | nil
             | cons T (List T)
 
         fn main := cons Nat (S (S O)) (cons Nat (S O) (cons Nat O (nil Nat)))
-        "#,
-            )?);
-            assert_eq!(
-                out,
-                parser.parse_term("cons Nat (S (S O)) (cons Nat (S O) (cons Nat O (nil Nat)))")?
-            );
-            assert_eq!(env.infer_type(out)?, parser.parse_term("List Nat")?);
-            assert_eq!(
-                *env.get_type(&Ident("nil".to_owned())).unwrap(),
-                parser.parse_term("forall (T : Type), List T")?
-            );
-            let x = env.get_type(&Ident("cons".to_owned())).unwrap();
-            let term = parser.parse_term("forall (T : Type) (__x2 : T) (__x1 : List T), (List T)")?;
-            assert_eq!(*x, term);
-             */
+       "#,
+        )?)?;
+
+        env.check_prog(des.clone())?;
+        env.indentation_size(2);
+
+        let ty = pct!(p, des, env, "Type -> Type1");
+        env.check(&pe!(p, des, "List"), &ty)?;
+        dsp!(env.infer(&pe!(p, des, "List"))?.1);
+
+        let ty = pct!(p, des, env, "forall (T : Type), List T");
+        env.check(&pe!(p, des, "nil"), &ty)?;
+
+        let ty = pct!(
+            p,
+            des,
+            env,
+            "forall (T : Type) (x : T) (xs : List T), (List T)"
+        );
+        env.check(&pe!(p, des, "cons"), &ty)?;
+
+        let ty = pct!(p, des, env, "List Nat");
+        env.check(&pe!(p, des, "nil Nat"), &ty)?;
+
+        let ty = pct!(p, des, env, "List Nat");
+        env.check(
+            &pe!(
+                p,
+                des,
+                "cons Nat (S (S O)) (cons Nat (S O) (cons Nat O (nil Nat)))"
+            ),
+            &ty,
+        )?;
+
+        env.trace_tc = true;
+
+        typeck!(
+            p,
+            des,
+            env,
+            "cons _ (S (S O)) (cons _ (S O) (cons _ O (nil _)))",
+            "List Nat"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_complex_data() -> eyre::Result<()> {
+        let _ = env_logger::try_init();
+        let mut p = Parser::default();
+        let mut env = TypeCheckState::default();
+        env.indentation_size(2);
+        let mut des = desugar_prog(p.parse_prog(
+            r#"
+        data Nat : Type
+            | O
+            | S Nat
+
+        data Error : Type
+            | err1
+            | err2
+
+        data Result (T : Type) (E : Type) : Type1
+            | ok T
+            | err E
+       "#,
+        )?)?;
+
+        env.check_prog(des.clone())?;
+
+        debug!("{}", env.infer(&pe!(p, des, "ok"))?.1);
+        typeck!(
+            p,
+            des,
+            env,
+            "ok",
+            "forall (T : Type) (E : Type), T -> Result T E"
+        );
+        debug!("{}", env.infer(&pe!(p, des, "ok"))?.1);
+        typeck!(
+            p,
+            des,
+            env,
+            "err",
+            "forall (T : Type) (E : Type), E -> Result T E"
+        );
         Ok(())
     }
 }

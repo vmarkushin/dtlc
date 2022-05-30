@@ -1,10 +1,13 @@
 use super::Result;
 use crate::check::meta::HasMeta;
 use crate::check::state::TypeCheckState;
+use crate::check::Error;
 use crate::syntax::abs::{
     ConsInfo as AConsInfo, DataInfo as ADataInfo, Decl as ADecl, Expr, Tele as ATele,
 };
-use crate::syntax::core::{Closure, ConsInfo, DataInfo, Decl, FuncInfo, Tele, Term, Val, ValData};
+use crate::syntax::core::{
+    Closure, ConsInfo, DataInfo, DeBruijn, Decl, FuncInfo, Tele, Term, Val, ValData,
+};
 use crate::syntax::desugar::DesugarState;
 use crate::syntax::{Universe, GI};
 use itertools::Either::*;
@@ -43,7 +46,7 @@ impl TypeCheckState {
                     self.check_data(i, cs)?;
                 }
                 ADecl::Cons(_) => {
-                    // TODO: check cons decl
+                    // Cons is checked in the Data case above.
                 }
                 ADecl::Fn(f) => {
                     let signature = self.check(
@@ -85,9 +88,14 @@ impl TypeCheckState {
         let param_len = self.gamma.len();
         self.check_tele(cons.tele, ty)?;
         let params = self.gamma.split_off(param_len);
-        let mut tele = params.clone();
-        tele.append(&mut data.params.clone());
-        let signature = Term::pi_from_tele(tele, Term::data(ValData::new(cons.data_ix, vec![])));
+        let mut tele = data.params.clone();
+        tele.append(&mut params.clone());
+        let args = (0..data.params.len())
+            .rev()
+            .map(|x| Term::from_dbi(x + params.len()))
+            .collect();
+        let ret = Term::data(ValData::new(cons.data_ix, args));
+        let signature = Term::pi_from_tele(tele, ret);
         let info = ConsInfo {
             loc: cons.loc,
             name: cons.name,
@@ -99,15 +107,20 @@ impl TypeCheckState {
     }
 
     pub fn check_data(&mut self, data: ADataInfo, conses: Vec<AConsInfo>) -> Result<()> {
-        let t = Val::Universe(data.uni.unwrap());
+        let universe1 = data
+            .uni
+            .ok_or_else(|| Error::ExpectedUniverseForData(data.ident().clone()))?;
+        let t = Val::Universe(universe1);
         self.check_tele(data.tele, &t)?;
         let param_len = self.gamma.len();
+        let signature = Term::pi_from_tele(self.gamma.clone(), Term::universe(universe1));
         let info = DataInfo {
             params: self.gamma.clone(),
             loc: data.loc,
             name: data.name,
             universe: data.uni.unwrap(),
             conses: data.conses,
+            signature,
         };
         self.sigma.push(Decl::Data(info.clone()));
 

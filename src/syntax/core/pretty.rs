@@ -86,7 +86,7 @@ impl Display for TermInfo {
     }
 }
 
-fn pretty_application(
+pub fn pretty_application(
     f: &mut Formatter,
     fun: &impl Display,
     a: &[impl Display],
