@@ -216,11 +216,19 @@ impl TypeCheckState {
                 }
             }
             (Meta(i, a), b) | (b, Meta(i, a)) if a.is_empty() => self.unify_meta_with(b, *i),
+            (Meta(_, a), _) | (_, Meta(_, a)) if !a.is_empty() => {
+                // TODO: figure out how to handle this case
+                Ok(())
+            }
             (Var(i, a), Var(j, b)) if i == j => Unify::unify(self, a.as_slice(), b.as_slice()),
-            (a, b) => Err(Error::DifferentTerm(
-                box Term::Whnf(a.clone()),
-                box Term::Whnf(b.clone()),
-            )),
+            (a, b) => {
+                debug!("here2 {} {}", a, b);
+
+                Err(Error::DifferentTerm(
+                    box Term::Whnf(a.clone()),
+                    box Term::Whnf(b.clone()),
+                ))
+            }
         }
     }
 }

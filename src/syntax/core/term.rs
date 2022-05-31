@@ -82,10 +82,7 @@ impl Term {
     }
 
     pub fn is_meta(&self) -> bool {
-        match self {
-            Term::Whnf(Val::Meta(_, _)) => true,
-            _ => false,
-        }
+        matches!(self, Term::Whnf(Val::Meta(_, _)))
     }
 
     pub fn as_meta(&self) -> Option<(MI, &Vec<Elim>)> {

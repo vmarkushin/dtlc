@@ -259,7 +259,7 @@ impl TypeCheckState {
         debug!("{}⊢ {} ↓ {}", depth_ws, input_term, against);
         self.tc_deeper();
         let a = self.check_impl(input_term, against).map_err(|e| {
-            debug!("{}Checking {} : {}", depth_ws, input_term, against);
+            debug!("{}Error checking {} : {}", depth_ws, input_term, against);
             e
         })?;
         debug!("{}⊢ {} : {} ↑ {}", depth_ws, input_term, against, a.ast);
@@ -524,6 +524,9 @@ mod tests {
             "ok",
             "forall (T : Type) (E : Type), T -> Result T E"
         );
+
+        typeck!(p, des, env, "ok _ Nat true", "Result Bool Nat");
+
         typeck!(
             p,
             des,
@@ -544,7 +547,7 @@ mod tests {
             p,
             des,
             env,
-            "mkSigma Nat (lam (x : Nat) => Bool) (S O) false",
+            "mkSigma _ _ (S O) false",
             "Sigma Nat (lam (x : Nat) => Bool)"
         );
         Ok(())
