@@ -1,9 +1,9 @@
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
-use crate::syntax::abs::Expr;
+use crate::syntax::abs::{AppView, Expr};
 use crate::syntax::core::Closure;
 use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, Val, ValData};
-use crate::syntax::{ConHead, Universe, GI};
+use crate::syntax::{ConHead, Ident, Loc, Universe, GI};
 
 impl TypeCheckState {
     /// Infer the type of the expression.
@@ -67,32 +67,14 @@ impl TypeCheckState {
                         unreachable!()
                     }
                 };
-                // debug_assert_eq!(info.params.len(), view.args.len());
-                let mut ty = Term::pi_from_tele(info.params.clone(), Term::universe(info.universe));
-                let mut args = vec![];
-                for arg in view.args {
-                    let ty_val = self.simplify(ty)?;
-                    match {
-                        let (param, clos) = match ty_val {
-                            Val::Pi(param, clos) => (param, clos),
-                            e => return Err(Error::NotPi(Term::Whnf(e), arg.loc())),
-                        };
-                        let param_ty = self.simplify(*param.ty)?;
-                        (param_ty, clos)
-                    } {
-                        (param, clos) => {
-                            let arg = self.check(&arg, &param)?;
-                            ty = clos.instantiate(arg.ast.clone());
-                            args.push(arg.ast);
-                        }
-                    }
-                }
-
-                Ok((
-                    head.clone()
-                        .map_ast(|_| Term::data(ValData::new(*def, args))),
-                    ty,
-                ))
+                self.infer_decl(
+                    view,
+                    &head,
+                    *def,
+                    Ident::new("<data>", Loc::default()),
+                    info.signature.clone(),
+                    |_, gi, args| Term::data(ValData::new(gi, args)),
+                )
             }
             Term::Whnf(Val::Cons(ConHead { name, cons_ix: def }, args)) => {
                 debug_assert!(args.is_empty());
@@ -102,54 +84,70 @@ impl TypeCheckState {
                         unreachable!()
                     }
                 };
-                // debug_assert_eq!(dsp!(&info.signature).tele_len(), dbg!(&view.args).len());
-                let mut ty = info.signature.clone();
-                let mut args = vec![];
-                for arg in view.args {
-                    let ty_val = self.simplify(ty)?;
-                    match {
-                        let (param, clos) = match ty_val {
-                            Val::Pi(param, clos) => (param, clos),
-                            e => return Err(Error::NotPi(Term::Whnf(e), arg.loc())),
-                        };
-                        let param_ty = self.simplify(*param.ty)?;
-                        (param_ty, clos)
-                    } {
-                        (param, clos) => {
-                            let arg = self.check(&arg, &param)?;
-                            ty = clos.instantiate(arg.ast.clone());
-                            args.push(arg.ast);
-                        }
-                    }
-                }
-
-                Ok((
-                    head.clone()
-                        .map_ast(|_| Term::cons(ConHead::new(name.clone(), *def), args)),
-                    ty,
-                ))
+                self.infer_decl(
+                    view,
+                    &head,
+                    *def,
+                    name.clone(),
+                    info.signature.clone(),
+                    |name, gi, args| Term::cons(ConHead::new(name, gi), args),
+                )
             }
             _ => {
                 let mut elims = Vec::with_capacity(view.args.len());
                 for arg in view.args {
                     let ty_val = self.simplify(ty)?;
-                    match {
-                        let (param, clos) = match ty_val {
-                            Val::Pi(param, clos) => (param, clos),
-                            e => return Err(Error::NotPi(Term::Whnf(e), arg.loc())),
-                        };
-                        let param_ty = self.simplify(*param.ty)?;
-                        (param_ty, clos)
-                    } {
-                        (param, clos) => {
-                            let arg = self.check(&arg, &param)?;
-                            ty = clos.instantiate(arg.ast.clone());
-                            elims.push(Elim::app(arg.ast));
-                        }
-                    }
+                    let res: Result<_> = ty_val
+                        .into_pi()
+                        .map_left(|e| Error::NotPi(Term::Whnf(e), arg.loc()))
+                        .into();
+                    let (param, clos) = res?;
+                    let param_ty = self.simplify(*param.ty)?;
+                    let arg = self.check(&arg, &param_ty)?;
+                    ty = clos.instantiate(arg.ast.clone());
+                    elims.push(Elim::app(arg.ast));
                 }
                 Ok((head.map_ast(|t| t.apply_elim(elims)), ty))
             }
+        }
+    }
+
+    fn infer_decl(
+        &mut self,
+        view: AppView,
+        head: &TermInfo,
+        def: GI,
+        ident: Ident,
+        decl_signature: Term,
+        decl_cons: impl FnOnce(Ident, GI, Vec<Term>) -> Term,
+    ) -> Result<(TermInfo, Term)> {
+        let params_len = decl_signature.tele_len();
+        let mut ty = decl_signature;
+
+        let args_len = view.args.len();
+
+        let mut args = vec![];
+        for arg in view.args {
+            let ty_val = self.simplify(ty)?;
+            let res: Result<_> = ty_val
+                .into_pi()
+                .map_left(|e| Error::NotPi(Term::Whnf(e), arg.loc()))
+                .into();
+            let (param, clos) = res?;
+            let param_ty = self.simplify(*param.ty)?;
+            let arg = self.check(&arg, &param_ty)?;
+            ty = clos.instantiate(arg.ast.clone());
+            args.push(arg.ast);
+        }
+
+        if params_len == args_len {
+            Ok((head.clone().map_ast(|_| decl_cons(ident, def, args)), ty))
+        } else {
+            Ok((
+                head.clone()
+                    .map_ast(|_| Term::def(def, ident, args.into_iter().map(Elim::app).collect())),
+                ty,
+            ))
         }
     }
 

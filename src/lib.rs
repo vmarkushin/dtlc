@@ -10,6 +10,7 @@
     clippy::type_complexity,
     clippy::unit_arg,
     clippy::extra_unused_lifetimes,
+    clippy::match_single_binding,
     dead_code,
     unused_imports
 )]

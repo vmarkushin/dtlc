@@ -30,7 +30,7 @@ impl fmt::Display for Report {
         }
 
         err.map(|e| e.to_string())
-            .map(|e| e.replace("\n", ". "))
+            .map(|e| e.replace('\n', ". "))
             .enumerate()
             .try_for_each(|(i, err)| writeln!(f, "\t{}: {}", i, err))
     }

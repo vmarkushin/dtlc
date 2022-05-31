@@ -161,11 +161,11 @@ impl TypeCheckState {
         let len = abs.len();
         for bind in abs {
             let target_ty = match val.into_pi() {
-                Left((target_bind, Closure::Plain(cl))) => {
+                Right((target_bind, Closure::Plain(cl))) => {
                     val = self.simplify(*cl.clone())?;
                     self.simplify(*target_bind.ty.clone())?
                 }
-                Right(v) => {
+                Left(v) => {
                     panic!("Expected Π, but got: {}", v);
                 }
             };

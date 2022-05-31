@@ -41,10 +41,10 @@ pub enum Val {
 
 impl Val {
     #[allow(unused)]
-    pub(crate) fn into_pi(self) -> Either<(Bind<Box<Term>>, Closure), Val> {
+    pub(crate) fn into_pi(self) -> Either<Val, (Bind<Box<Term>>, Closure)> {
         match self {
-            Val::Pi(b, c) => Left((b, c)),
-            v => Right(v),
+            Val::Pi(b, c) => Right((b, c)),
+            v => Left(v),
         }
     }
 }
@@ -68,7 +68,7 @@ impl Term {
         match self {
             Self::Whnf(v) => match v {
                 Val::Pi(_, Closure::Plain(t)) => t.tele_len() + 1,
-                Val::Lam(Lambda(_, Closure::Plain(t))) => t.tele_len() + 1,
+                // Val::Lam(Lambda(_, Closure::Plain(t))) => t.tele_len() + 1,
                 _ => 0,
             },
             Self::Redex(..) => 0,
@@ -146,10 +146,7 @@ impl Term {
     }
 
     pub fn is_universe(&self) -> bool {
-        match self {
-            Term::Whnf(Val::Universe(..)) => true,
-            _ => false,
-        }
+        matches!(self, Term::Whnf(Val::Universe(..)))
     }
 
     pub fn cons(name: ConHead, params: Vec<Self>) -> Self {

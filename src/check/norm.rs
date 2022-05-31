@@ -2,7 +2,7 @@ use crate::check::block::{Blocked, Stuck};
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
 use crate::syntax::core::{build_subst, Closure, Decl, Elim, Func, Simpl, Subst, Term, Val};
-use crate::syntax::{ConHead, Ident, DBI, GI};
+use crate::syntax::{ConHead, Ident, GI};
 use std::collections::HashMap;
 
 fn elims_to_terms(elims: Vec<Elim>) -> Result<Vec<Term>> {
@@ -45,9 +45,7 @@ impl TypeCheckState {
                                 .1,
                         );
                     }
-                    let term = match term {
-                        Closure::Plain(x) => x,
-                    };
+                    let Closure::Plain(term) = term;
                     self.simplify(*term)
                 }
             },
@@ -68,11 +66,7 @@ impl TypeCheckState {
 
         let pat_len = tele.len();
         let rest = es.split_off(pat_len);
-        let patterns = tele
-            .iter()
-            .enumerate()
-            .map(|(i, _)| i)
-            .collect::<Vec<DBI>>();
+        let patterns = tele.iter().enumerate().map(|(i, _)| i);
         let vs = patterns
             .into_iter()
             .rev()
@@ -89,6 +83,6 @@ impl TypeCheckState {
         let s = Simpl::No;
         let subst = build_subst(vs, pat_len);
 
-        return Ok((s, body.subst(subst).apply_elim(rest)));
+        Ok((s, body.subst(subst).apply_elim(rest)))
     }
 }

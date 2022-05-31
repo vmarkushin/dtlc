@@ -104,7 +104,7 @@ impl TypeCheckState {
 
     pub fn local_by_id(&self, id: UID) -> (Bind<Term>, Term) {
         self.local_by_id_safe(id)
-            .expect(&format!("unresolved local {}", id))
+            .unwrap_or_else(|| panic!("unresolved local {}", id))
     }
 
     pub fn local_by_id_safe(&self, id: UID) -> Option<(Bind<Term>, Term)> {

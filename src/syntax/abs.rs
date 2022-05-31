@@ -165,14 +165,9 @@ impl Expr {
     pub fn into_tele_view(self) -> (Tele, Expr) {
         let mut expr = self;
         let mut tele = vec![];
-        loop {
-            match expr {
-                Self::Lam(_loc, bind, body) => {
-                    tele.push(bind.map_term(|x| *x));
-                    expr = *body;
-                }
-                _ => break,
-            }
+        while let Self::Lam(_loc, bind, body) = expr {
+            tele.push(bind.map_term(|x| *x));
+            expr = *body;
         }
         (tele, expr)
     }
@@ -247,8 +242,8 @@ pub enum Decl {
 impl Decl {
     pub fn ident(&self) -> &Ident {
         match self {
-            Decl::Data(data) => &data.ident(),
-            Decl::Fn(f) => &f.ident(),
+            Decl::Data(data) => data.ident(),
+            Decl::Fn(f) => f.ident(),
             Decl::Cons(i) => i.ident(),
         }
     }

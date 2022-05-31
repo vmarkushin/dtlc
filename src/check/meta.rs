@@ -142,7 +142,7 @@ impl HasMeta for ValData {
 impl HasMeta for Elim {
     fn inline_meta(self, tcs: &mut TypeCheckState) -> Result<Self> {
         match self {
-            Elim::App(a) => a.inline_meta(tcs).map(|a| Elim::App(a)),
+            Elim::App(a) => a.inline_meta(tcs).map(Elim::App),
             Elim::Proj(p) => Ok(Elim::Proj(p)),
         }
     }
@@ -174,7 +174,7 @@ impl HasMeta for Term {
         match self {
             // Prefer not to simplify
             Term::Whnf(Val::Meta(mi, elims)) => solve_meta(tcs, mi, elims),
-            Term::Whnf(w) => w.inline_meta(tcs).map(|w| Term::Whnf(w)),
+            Term::Whnf(w) => w.inline_meta(tcs).map(Term::Whnf),
             Term::Redex(gi, id, elims) => {
                 let elims = elims.inline_meta(tcs)?;
                 Ok(Term::Redex(gi, id, elims))
@@ -227,7 +227,7 @@ impl HasMeta for Val {
         use Val::*;
         match self {
             Universe(l) => Ok(Universe(l)),
-            Data(info) => info.inline_meta(tcs).map(|i| Data(i)),
+            Data(info) => info.inline_meta(tcs).map(Data),
             Pi(t, clos) => {
                 let t = t.unboxed().inline_meta(tcs)?;
                 let clos = clos.inline_meta(tcs)?;

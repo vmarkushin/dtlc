@@ -16,9 +16,9 @@ impl From<bool> for Simpl {
     }
 }
 
-impl Into<bool> for Simpl {
-    fn into(self) -> bool {
-        match self {
+impl From<Simpl> for bool {
+    fn from(v: Simpl) -> Self {
+        match v {
             Simpl::Yes => true,
             Simpl::No => false,
         }
