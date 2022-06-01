@@ -1,6 +1,7 @@
 #![feature(box_syntax, box_patterns, type_alias_impl_trait)]
 #![feature(cell_update)]
 #![feature(generic_associated_types)]
+#![feature(try_blocks)]
 
 #[allow(
     clippy::needless_lifetimes,

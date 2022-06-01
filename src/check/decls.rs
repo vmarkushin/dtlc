@@ -28,22 +28,22 @@ impl TypeCheckState {
         let take = |decls: &mut [Option<ADecl>], i: usize| decls[i].take().unwrap();
 
         for i in 0..decls.len() {
-            self.enter_def(i, meta_ids[i]);
+            self.enter_def(i + curr_decl_len, meta_ids[i + curr_decl_len]);
             if decls[i].is_none() {
                 continue;
             }
             let decl = take(&mut decls, i);
             self.tc_reset_depth();
             match decl {
-                ADecl::Data(i) => {
-                    let cs = (i.conses.iter())
+                ADecl::Data(info) => {
+                    let cs = (info.conses.iter())
                         .map(|j| match take(&mut decls, *j - curr_decl_len) {
                             ADecl::Cons(i) => i,
                             _ => unreachable!(),
                         })
                         .collect();
                     // TODO: Inline meta??
-                    self.check_data(i, cs)?;
+                    self.check_data(info, cs)?;
                 }
                 ADecl::Cons(_) => {
                     // Cons is checked in the Data case above.

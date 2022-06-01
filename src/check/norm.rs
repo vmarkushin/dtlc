@@ -61,13 +61,18 @@ impl TypeCheckState {
         elims: Vec<Elim>,
     ) -> Result<(Simpl, Term), Blocked<Term>> {
         let mut es = elims;
-        let (tele, body) = body.tele_view();
-        debug_assert!(tele.len() >= es.len());
+        let es_len = es.len();
+        // dsp!(&body);
+        let (tele, body) = body.tele_view_n(es_len);
+        // dsp!(&body);
+        // dbg!(&tele);
+        // dbg!(&es);
+        // debug_assert!(es.len() <= tele.len());
 
-        let pat_len = tele.len();
-        let rest = es.split_off(pat_len);
-        let patterns = tele.iter().enumerate().map(|(i, _)| i);
-        let vs = patterns
+        let tele_len = tele.len();
+        let rest = es.split_off(tele_len);
+        let vs = (0..es_len)
+            // let vs = ((tele_len - es_len)..tele_len)
             .into_iter()
             .rev()
             .zip(&es)
@@ -80,9 +85,9 @@ impl TypeCheckState {
                 })
             })
             .collect::<HashMap<_, _>>();
-        let s = Simpl::No;
-        let subst = build_subst(vs, pat_len);
+        let subst = build_subst(vs, tele_len);
 
+        let s = Simpl::No;
         Ok((s, body.subst(subst).apply_elim(rest)))
     }
 }

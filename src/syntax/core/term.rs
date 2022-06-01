@@ -183,14 +183,19 @@ impl Term {
     ///
     /// The telescope and the return type.
     pub fn tele_view(self) -> (Tele, Self) {
+        self.tele_view_n(usize::MAX)
+    }
+
+    /// Returns telescope with _at most_ `n` members.
+    pub fn tele_view_n(self, n: usize) -> (Tele, Self) {
         match self {
-            Term::Whnf(Val::Pi(bind, Closure::Plain(r))) => {
-                let (mut view, r) = r.tele_view();
+            Term::Whnf(Val::Pi(bind, Closure::Plain(r))) if n != 0 => {
+                let (mut view, r) = r.tele_view_n(n - 1);
                 view.insert(0, bind.unboxed());
                 (view, r)
             }
-            Term::Whnf(Val::Lam(Lambda(bind, Closure::Plain(r)))) => {
-                let (mut view, r) = r.tele_view();
+            Term::Whnf(Val::Lam(Lambda(bind, Closure::Plain(r)))) if n != 0 => {
+                let (mut view, r) = r.tele_view_n(n - 1);
                 view.insert(0, bind.unboxed());
                 (view, r)
             }

@@ -240,9 +240,16 @@ pub fn run_repl(
         let len = des.decls.len();
         let _ = des
             .desugar_decl(decl)
-            .wrap_err("Failed to parse expression")?;
-        env.check_decls(des.decls[len..].iter().cloned(), des.cur_meta_id.clone())
-            .wrap_err("Failed to parse expression")?;
+            .wrap_err("Failed to desugar expression")?;
+        let check_res = env
+            .check_decls(des.decls[len..].iter().cloned(), des.cur_meta_id.clone())
+            .wrap_err("Failed to type-check expression");
+        if check_res.is_err() {
+            let decl = des.decls.pop().unwrap();
+            des.decls_map.remove(&decl.ident().text);
+            des.cur_meta_id.pop();
+        }
+        check_res?;
         return Ok(());
     }
 
@@ -260,22 +267,33 @@ pub fn run_repl(
         .wrap_err("Failed to parse expression")?;
     let expr = des
         .desugar_expr(expr)
-        .wrap_err("Failed to parse expression")?;
+        .wrap_err("Failed to desugar expression")?;
     if !infer_type {
-        let term = env
+        let infer_res = env
             .infer(&expr)
             .map(|x| x.0.ast)
-            .wrap_err("Failed to infer type for the expression")?;
+            .wrap_err("Failed to infer type for the expression");
+        if infer_res.is_err() {
+            des.cur_meta_id.pop();
+        }
+        let term = infer_res?;
         println!(
             "{}",
             env.simplify(term)
-                .wrap_err("Failed to infer type for the expression")?
+                .wrap_err("Failed to simplify the expression")?
         );
     } else {
-        let _t = env
+        des.cur_meta_id.push(Default::default());
+        env.enter_def(env.sigma.len(), *des.cur_meta_id.last().unwrap());
+        let res = env
             .infer(&expr)
             .map(|x| x.1)
-            .wrap_err("Failed to infer type for the expression")?;
+            .wrap_err("Failed to infer type for the expression");
+        env.exit_def();
+        env.meta_ctx.pop();
+        des.cur_meta_id.pop();
+        let t = res?;
+        println!("{}", t);
     }
     Ok(())
 }
@@ -291,14 +309,60 @@ mod tests {
             &mut helper.parser,
             &mut helper.des,
             &mut helper.env,
+            "data B : Type | t | f",
+        )?;
+        run_repl(
+            &mut helper.parser,
+            &mut helper.des,
+            &mut helper.env,
             "fn id (T : Type) := T",
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_adding_new_decls_intermediate_steps_failed() -> eyre::Result<()> {
+        let mut helper = Helper::default();
+        assert!(run_repl(
+            &mut helper.parser,
+            &mut helper.des,
+            &mut helper.env,
+            "data Nat : Type | O Type1",
+        )
+        .is_err());
+        assert!(run_repl(
+            &mut helper.parser,
+            &mut helper.des,
+            &mut helper.env,
+            "data Nat : Type | O Type2",
+        )
+        .is_err());
         run_repl(
             &mut helper.parser,
             &mut helper.des,
             &mut helper.env,
             "data B : Type | t | f",
         )?;
+        run_repl(
+            &mut helper.parser,
+            &mut helper.des,
+            &mut helper.env,
+            "fn id (T : Type) := T",
+        )?;
+        assert!(run_repl(
+            &mut helper.parser,
+            &mut helper.des,
+            &mut helper.env,
+            "id t _",
+        )
+        .is_err());
+        assert!(run_repl(
+            &mut helper.parser,
+            &mut helper.des,
+            &mut helper.env,
+            "id Type1 _",
+        )
+        .is_err());
         Ok(())
     }
 }

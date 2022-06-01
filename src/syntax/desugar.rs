@@ -67,6 +67,14 @@ impl DesugarState {
         Ok(gi)
     }
 
+    /// Removes last added declaration.
+    pub fn remove_last_decl(&mut self) -> DeclA {
+        self.cur_meta_id.pop();
+        let decl = self.decls.pop().unwrap();
+        self.decls_map.remove(&decl.ident().text);
+        decl
+    }
+
     pub fn lookup_local(&self, ident: &Ident) -> Option<UID> {
         self.local
             .iter()
@@ -77,6 +85,7 @@ impl DesugarState {
     /// Note: this function will not clear the local scope.
     pub fn desugar_params(&mut self, params: Vec<Param>) -> Result<TeleA> {
         let mut tele = TeleA::with_capacity(params.len() + 1);
+        // TODO: track locals changes?
         for param in params {
             let ty = param.ty.clone().map(|t| self.desugar_expr(t)).transpose()?;
             let mut intros = |name: Ident, licit: Plicitness, ty: Option<ExprA>| {
@@ -159,9 +168,13 @@ impl DesugarState {
             }
             Expr::Lam(params, body) => {
                 self.enter_local_scope();
-                let tele = self.desugar_params(params.into_vec())?;
-                let ret = self.desugar_expr(*body)?;
+                let res: Result<_> = try {
+                    let tele = self.desugar_params(params.into_vec())?;
+                    let ret = self.desugar_expr(*body)?;
+                    (tele, ret)
+                };
                 self.exit_local_scope();
+                let (tele, ret) = res?;
                 let lam = tele.into_iter().rfold(ret, |ret, bind| {
                     let loc = bind.loc + ret.loc();
                     ExprA::Lam(loc, bind.boxed(), Box::new(ret))
@@ -176,9 +189,13 @@ impl DesugarState {
             Expr::Universe(loc, u) => Ok(ExprA::Universe(loc, u)),
             Expr::Pi(params, ret) => {
                 self.enter_local_scope();
-                let tele = self.desugar_params(params.into_vec())?;
-                let ret = self.desugar_expr(*ret)?;
+                let res: Result<_> = try {
+                    let tele = self.desugar_params(params.into_vec())?;
+                    let ret = self.desugar_expr(*ret)?;
+                    (tele, ret)
+                };
                 self.exit_local_scope();
+                let (tele, ret) = res?;
                 let pi = tele.into_iter().rfold(ret, |ret, bind| {
                     let loc = bind
                         .ty
@@ -197,17 +214,43 @@ impl DesugarState {
         }
     }
 
+    pub fn desugar_cons(&mut self, data_ix: GI, mut cons: Vec<NamedTele>) -> Result<()> {
+        if let Some(con) = cons.pop() {
+            self.enter_local_scope();
+            let res = self.desugar_con(data_ix, con);
+            self.exit_local_scope();
+            res?;
+            let res = self.desugar_cons(data_ix, cons);
+            if res.is_err() {
+                self.remove_last_decl();
+            }
+            res
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn desugar_con(&mut self, data_ix: GI, con: NamedTele) -> Result<()> {
+        let (tele, ident) = self.desugar_telescope(con)?;
+        self.insert_decl(DeclA::Cons(ConsInfoA::new(ident.loc, ident, tele, data_ix)))?;
+        Ok(())
+    }
+
     pub fn desugar_decl(&mut self, decl: Decl) -> Result<DeclA> {
         match decl {
             Decl::Data(Data {
                 sig,
-                cons,
+                mut cons,
                 universe,
             }) => {
                 self.decls.reserve(cons.len() + 1);
                 self.ensure_no_local_scopes();
                 self.enter_local_scope();
-                let (tele, ident) = self.desugar_telescope(sig)?;
+                let res = self.desugar_telescope(sig);
+                if res.is_err() {
+                    self.exit_local_scope();
+                }
+                let (tele, ident) = res?;
 
                 let global_id = self.curr_gi() + 1;
                 let data_decl = DeclA::Data(DataInfoA::new(
@@ -217,20 +260,19 @@ impl DesugarState {
                     tele,
                     (global_id..global_id + cons.len()).collect(),
                 ));
-                self.insert_decl(data_decl.clone())?;
-
-                for con in cons {
-                    self.enter_local_scope();
-                    let (tele, ident) = self.desugar_telescope(con)?;
+                let res = self.insert_decl(data_decl.clone());
+                if res.is_err() {
                     self.exit_local_scope();
-                    self.insert_decl(DeclA::Cons(ConsInfoA::new(
-                        ident.loc,
-                        ident,
-                        tele,
-                        global_id - 1,
-                    )))?;
+                }
+                res?;
+
+                cons.reverse();
+                let res = self.desugar_cons(global_id - 1, cons);
+                if res.is_err() {
+                    self.remove_last_decl();
                 }
                 self.exit_local_scope();
+                res?;
 
                 Ok(data_decl)
             }
@@ -247,9 +289,13 @@ impl DesugarState {
                     params.to_pi_with(Expr::Hole(name.loc))
                 };
                 self.ensure_no_local_scopes();
-                let expr = self.desugar_expr(body_new)?;
-                let ty = self.desugar_expr(ty_new)?;
+                let res: Result<_> = try {
+                    let expr = self.desugar_expr(body_new)?;
+                    let ty = self.desugar_expr(ty_new)?;
+                    (expr, ty)
+                };
                 self.clear_local();
+                let (expr, ty) = res?;
                 let decl = DeclA::Fn(FuncA::new(name, expr, Some(ty))); // TODO: get rid of Option?
                 self.insert_decl(decl.clone())?;
                 Ok(decl)

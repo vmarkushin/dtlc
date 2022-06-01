@@ -53,8 +53,8 @@ mod tests {
 
     use crate::check::{TypeCheckState, Unify};
     use crate::parser::Parser;
-    use crate::pct;
     use crate::syntax::desugar::desugar_prog;
+    use crate::{pct, pe};
 
     #[test]
     fn test_id() -> eyre::Result<()> {
@@ -65,6 +65,10 @@ mod tests {
         data Nat : Type
             | O
             | S Nat
+        data Bool : Type
+            | true
+            | false
+
         fn id := lam (A : Type) (x : A) => x
         fn zero := lam (s : Nat -> Nat) (z : Nat) => z
         fn main := id Nat (zero S O)
@@ -76,6 +80,12 @@ mod tests {
         let val = pct!(p, des, env, "main");
         let val1 = pct!(p, des, env, "O");
         Unify::unify(&mut env, &val, &val1)?;
+
+        let val = pct!(p, des, env, "Nat -> Nat");
+        env.check(&pe!(p, des, "id Nat"), &val)?;
+
+        let val = pct!(p, des, env, "Bool -> Bool");
+        env.check(&pe!(p, des, "id Bool"), &val)?;
         Ok(())
     }
 }
