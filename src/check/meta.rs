@@ -1,7 +1,7 @@
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
 use crate::syntax::core::{
-    Bind, Closure, Elim, Func, Lambda, Subst, Substitution, Term, Val, ValData,
+    Bind, Case, Closure, Elim, Func, Lambda, Pat, Subst, Substitution, Term, Val, ValData,
 };
 use crate::syntax::{DBI, MI};
 use std::{
@@ -169,16 +169,43 @@ impl HasMeta for Func {
     }
 }
 
+impl HasMeta for Pat {
+    fn inline_meta(self, tcs: &mut TypeCheckState) -> Result<Self> {
+        use crate::syntax::pattern::Pat::*;
+        match self {
+            p @ Var(_) => Ok(p),
+            Wildcard => Ok(Wildcard),
+            Absurd => Ok(Absurd),
+            Cons(forced, head, args) => Ok(Cons(forced, head, args.inline_meta(tcs)?)),
+            Forced(t) => Ok(Forced(t.inline_meta(tcs)?)),
+        }
+    }
+}
+
+impl HasMeta for Case {
+    fn inline_meta(self, tcs: &mut TypeCheckState) -> Result<Self> {
+        Ok(Case {
+            pattern: self.pattern.inline_meta(tcs)?,
+            body: self.body.inline_meta(tcs)?,
+        })
+    }
+}
+
 impl HasMeta for Term {
     fn inline_meta(self, tcs: &mut TypeCheckState) -> Result<Self> {
         match self {
             // Prefer not to simplify
             Term::Whnf(Val::Meta(mi, elims)) => solve_meta(tcs, mi, elims),
             Term::Whnf(w) => w.inline_meta(tcs).map(Term::Whnf),
-            Term::Redex(gi, id, elims) => {
+            Term::Redex(func, id, elims) => {
+                let func = func.inline_meta(tcs)?;
                 let elims = elims.inline_meta(tcs)?;
-                Ok(Term::Redex(gi, id, elims))
+                Ok(Term::Redex(func, id, elims))
             }
+            Term::Match(term, cases) => {
+                let cases = cases.inline_meta(tcs)?;
+                Ok(Term::Match(term, cases))
+            } // Term::Match(ct) => Ok(Term::Match(ct.inline_meta(tcs)?)),
         }
     }
 }
@@ -245,5 +272,12 @@ impl HasMeta for Val {
             }
             Var(head, args) => args.inline_meta(tcs).map(|a| Var(head, a)),
         }
+    }
+}
+
+impl<T: HasMeta, U: HasMeta> HasMeta for (T, U) {
+    fn inline_meta(self, tcs: &mut TypeCheckState) -> Result<Self> {
+        let (t, u) = self;
+        Ok((t.inline_meta(tcs)?, u.inline_meta(tcs)?))
     }
 }

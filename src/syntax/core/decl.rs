@@ -22,7 +22,7 @@ pub struct ConsInfo {
     pub loc: Loc,
     pub name: Ident,
     pub params: Tele,
-    pub data: GI,
+    pub data_gi: GI,
     pub signature: Term,
 }
 
@@ -58,9 +58,7 @@ impl Decl {
             Decl::Func(f) => f.name.clone(),
         }
     }
-}
 
-impl Decl {
     pub fn def_name(&self) -> &Ident {
         match self {
             Decl::Proj(i) => &i.name,
@@ -86,6 +84,27 @@ impl Decl {
             Decl::Data(i) => i.loc(),
             Decl::Cons(i) => i.loc(),
             Decl::Func(i) => i.loc(),
+        }
+    }
+
+    pub fn as_cons(&self) -> &ConsInfo {
+        match self {
+            Decl::Cons(c) => c,
+            _ => panic!("not a constructor"),
+        }
+    }
+
+    pub fn as_func(&self) -> &FuncInfo {
+        match self {
+            Decl::Func(f) => f,
+            _ => panic!("not a function"),
+        }
+    }
+
+    fn into_cons(self) -> ConsInfo {
+        match self {
+            Decl::Cons(c) => c,
+            _ => panic!("not a constructor"),
         }
     }
 }

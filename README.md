@@ -4,10 +4,11 @@ Features:
 + Normalisation
 + Type checking/inference
 + Terms unification
+* Inductive types
 
 TO-DO:
 + Pattern-matching
-+ (Higher) Inductive types
++ Inductive type families
 + [Higher Observational Type Theory](https://ncatlab.org/nlab/show/higher+observational+type+theory)
 + More powerful universes
 

@@ -17,6 +17,8 @@ pub enum Token<'input> {
     Data,
     #[token("codata")]
     Codata,
+    #[token("match")]
+    Match,
     #[token("@")]
     At,
     #[token(":")]
@@ -39,6 +41,10 @@ pub enum Token<'input> {
     RArrow,
     #[token("_")]
     Underscore,
+    #[token("!")]
+    Bang,
+    #[token("?")]
+    Question,
     #[regex("\\?[a-zA-Z0-9_]+")]
     MetaIdent(&'input str),
     #[token("{")]
@@ -73,6 +79,7 @@ impl<'a> Display for Token<'a> {
             Sigma               => f.write_str("exists"),
             Data                => f.write_str("data"),
             Codata              => f.write_str("codata"),
+            Match               => f.write_str("match"),
             At                  => f.write_str("@"),
             Colon               => f.write_str(":"),
             Assignment          => f.write_str(":="),
@@ -92,6 +99,8 @@ impl<'a> Display for Token<'a> {
             Whitespace          => f.write_str(" "),
             Underscore          => f.write_str("_"),
             MetaIdent(s) => f.write_str(s),
+            Bang                => f.write_str("!"),
+            Question            => f.write_str("?"),
         }
     }
 }

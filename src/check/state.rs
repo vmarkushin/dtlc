@@ -1,7 +1,10 @@
 use crate::check::meta::MetaContext;
-use crate::syntax::core::{Bind, DeBruijn, Decl, Subst, Substitution, Tele, Term};
+use crate::syntax::core::{
+    Bind, Ctx, DeBruijn, Decl, Indentation, Subst, Substitution, Tele, Term, Val,
+};
 use crate::syntax::{DBI, GI, UID};
 use std::fmt::{Display, Error, Formatter, Write};
+use std::mem::swap;
 
 /// Typing context.
 pub type Sigma = Vec<Decl>;
@@ -20,24 +23,26 @@ pub struct TypeCheckState {
     /// Global context (definitions are attached with type annotations).
     pub sigma: Sigma,
     /// Local typing context.
-    pub gamma: Tele,
+    pub gamma: Ctx,
     /// Meta variable context, scoped. Always global.
     pub meta_ctx: Vec<MetaContext<Term>>,
 }
 
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct Indentation {
-    tc_depth: usize,
-    /// How many indentations should we add when enter each sub-inference-rule?
-    indentation_size: usize,
+impl TypeCheckState {
+    pub(crate) fn is_caseless(&self, ty: &Term) -> bool {
+        match ty {
+            Term::Whnf(Val::Data(data)) => match self.def(data.def) {
+                Decl::Data(data) => data.conses.is_empty(),
+                _ => panic!("Not a data type: {}", ty),
+            },
+            _ => panic!("Not a data type: {}", ty),
+        }
+    }
 }
 
-impl Display for Indentation {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
-        for _ in 0..self.tc_depth * self.indentation_size {
-            f.write_char(' ')?;
-        }
-        Ok(())
+impl TypeCheckState {
+    pub(crate) fn lookup(&self, p0: DBI) -> &Bind {
+        &self.gamma.lookup(p0)
     }
 }
 
@@ -65,6 +70,21 @@ impl TypeCheckState {
         self.current_checking_def = None;
     }
 
+    pub fn with_ctx<R, F: FnOnce(&mut Self) -> R>(&mut self, ctx: Ctx, f: F) -> R {
+        let old_len = self.gamma.len();
+        self.gamma.0.extend(ctx.0);
+        let res = f(self);
+        self.gamma.0.truncate(old_len);
+        res
+    }
+
+    pub fn under_ctx<R, F: FnOnce(&mut Self) -> R>(&mut self, mut ctx: Ctx, f: F) -> R {
+        swap(&mut self.gamma, &mut ctx);
+        let res = f(self);
+        swap(&mut self.gamma, &mut ctx);
+        res
+    }
+
     pub fn tc_shallower(&mut self) {
         if self.indentation.tc_depth > 0 {
             self.indentation.tc_depth -= 1;
@@ -82,7 +102,7 @@ impl TypeCheckState {
     }
 
     pub fn reserve_local_variables(&mut self, additional: usize) {
-        self.gamma.reserve(additional);
+        self.gamma.0.reserve(additional);
         self.sigma.reserve(additional);
         self.meta_ctx.reserve(additional);
     }
@@ -95,11 +115,6 @@ impl TypeCheckState {
 
     pub fn def(&self, ix: GI) -> &Decl {
         &self.sigma[ix]
-    }
-
-    pub fn local(&self, ix: DBI) -> &Bind {
-        let len = self.gamma.len();
-        &self.gamma[len - ix - 1]
     }
 
     pub fn local_by_id(&self, id: UID) -> (Bind<Term>, Term) {
@@ -132,9 +147,5 @@ impl TypeCheckState {
     pub fn mut_meta_ctx(&mut self) -> &mut MetaContext<Term> {
         let we_are_here = self.current_checking_def.unwrap();
         &mut self.meta_ctx[we_are_here]
-    }
-
-    pub fn mut_local(&mut self, ix: DBI) -> &mut Bind {
-        &mut self.gamma[ix]
     }
 }

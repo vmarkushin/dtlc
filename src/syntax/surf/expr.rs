@@ -1,8 +1,12 @@
+use crate::syntax::core::pretty_list;
+use crate::syntax::pattern;
 use crate::syntax::surf::Param;
 use crate::syntax::{Ident, Loc, Plicitness, Universe};
 use itertools::Itertools;
 use std::fmt::{Debug, Display, Formatter};
 use vec1::Vec1;
+
+pub type Pat = pattern::Pat<Ident, Expr>;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expr {
@@ -14,6 +18,7 @@ pub enum Expr {
     /// `A -> B -> C` represented as `Pi([A, B], C)`.
     Pi(Vec1<Param>, Box<Self>),
     Hole(Loc),
+    Match(Vec1<Self>, Vec<Case>),
 }
 
 impl Expr {
@@ -114,6 +119,34 @@ impl Display for Expr {
             Self::Pi(params, ty) => write!(f, "(Π {}, {})", params.into_iter().join(" "), ty),
             Self::Universe(_, k) => write!(f, "{}", k),
             Self::Hole(_) => write!(f, "_"),
+            Expr::Match(expr, cases) => {
+                write!(f, "match")?;
+                pretty_list(f, expr, ", ")?;
+                for Case { patterns, body } in cases {
+                    if let Some(body) = body {
+                        write!(f, " | ")?;
+                        pretty_list(f, patterns, ", ")?;
+                        write!(f, " => {}", body)?;
+                    } else {
+                        write!(f, " | ")?;
+                        pretty_list(f, patterns, ", ")?;
+                    }
+                }
+                Ok(())
+            }
         }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Case {
+    pub patterns: Vec<Pat>,
+    /// `Some(v)` if $\Delta \vdash v$, while `None` if the pattern is absurd.
+    pub body: Option<Expr>,
+}
+
+impl Case {
+    pub fn new(patterns: Vec<Pat>, body: Option<Expr>) -> Self {
+        Self { patterns, body }
     }
 }

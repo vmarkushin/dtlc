@@ -14,15 +14,15 @@ impl TypeCheckState {
         }
         let depth_ws = self.tc_depth_ws();
         self.tc_deeper();
-        debug!("{}Checking {} <: {}", depth_ws, sub, sup);
+        debug!("{}Checking {} <= {}", depth_ws, sub, sup);
         self.subtype_impl(sub, sup).map_err(|e| {
-            debug!("{}Subtyping {} <: {}", depth_ws, sub, sup);
+            debug!("{}Subtyping {} <= {}", depth_ws, sub, sup);
             e
         })?;
         if self.current_checking_def.is_some() {
-            debug!("{}{} <: {} --> {}", depth_ws, sub, sup, self.meta_ctx());
+            debug!("{}{} <= {} --> {}", depth_ws, sub, sup, self.meta_ctx());
         } else {
-            debug!("{}{} <: {}", depth_ws, sub, sup);
+            debug!("{}{} <= {}", depth_ws, sub, sup);
         }
         self.tc_shallower();
         Ok(())
@@ -201,7 +201,7 @@ impl TypeCheckState {
                 Unify::unify(self, &a.ty, &b.ty)?;
                 Unify::unify(self, c0, c1)
             }
-            (Cons(c0, a), Cons(c1, b)) if c0.cons_ix == c1.cons_ix => {
+            (Cons(c0, a), Cons(c1, b)) if c0.cons_gi == c1.cons_gi => {
                 Unify::unify(self, a.as_slice(), b.as_slice())
             }
             (Meta(i, a), Meta(j, b)) => {
@@ -222,7 +222,7 @@ impl TypeCheckState {
             }
             (Var(i, a), Var(j, b)) if i == j => Unify::unify(self, a.as_slice(), b.as_slice()),
             (a, b) => {
-                debug!("here2 {} {}", a, b);
+                debug!("Got different terms when unifying {} {}", a, b);
 
                 Err(Error::DifferentTerm(
                     box Term::Whnf(a.clone()),

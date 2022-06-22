@@ -1,12 +1,14 @@
 use crate::check::block::Blocked;
-use crate::syntax::abs::Expr;
-use crate::syntax::core::{Elim, Term, Val};
+use crate::syntax::abs::{Expr, Pat as PatA};
+use crate::syntax::core::{Elim, Pat, Term, Val};
 use crate::syntax::{Ident, Loc, Universe, MI};
 
+pub use case::{CaseTree, Clause, Constraint, LshProblem};
 pub use state::TypeCheckState;
 pub use unify::Unify;
 
 mod block;
+mod case;
 mod decls;
 mod infer;
 mod meta;
@@ -43,6 +45,16 @@ pub enum Error {
     Blocked(Box<Blocked<Term>>),
     #[error("Expected universe for data declaration `{0}`")]
     ExpectedUniverseForData(Ident),
+    #[error("Non-exhaustive `match` expression")]
+    NonExhaustiveMatch,
+    #[error("Expected `!`, but got `{0}`")]
+    ExpectedAbsurd(Box<PatA>),
+    #[error("Expected right-hand side")]
+    UnexpectedRhs,
+    #[error("Too many patterns used in a clause")]
+    TooManyPatterns,
+    #[error("Not enough patterns used in a clause")]
+    TooFewPatterns,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

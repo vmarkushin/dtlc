@@ -4,6 +4,7 @@ use crate::syntax::core::Term;
 use crate::syntax::{dbi_nat, dbi_pred, DBI};
 use itertools::Either;
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::hash::BuildHasher;
 use std::rc::Rc;
 
@@ -12,6 +13,7 @@ pub type Substitution = PrimSubst<Term>;
 /// Substitution type.
 /// [Agda](https://hackage.haskell.org/package/Agda-2.6.0.1/docs/src/Agda.Syntax.Internal.html#Substitution%27).
 #[derive(Clone, Debug)]
+
 pub enum PrimSubst<T> {
     /// The identity substitution.
     /// $$
@@ -45,6 +47,18 @@ pub enum PrimSubst<T> {
     /// {\Gamma, \Psi \rho \vdash \text{Lift}_\Psi \rho : \Delta, \Psi}
     /// $$
     Lift(DBI, Rc<Self>),
+}
+
+impl<T: Display> Display for PrimSubst<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            PrimSubst::IdS => write!(f, "IdS"),
+            PrimSubst::Cons(t, r) => write!(f, "Cons({}, {})", t, r),
+            PrimSubst::Succ(r) => write!(f, "Succ({})", r),
+            PrimSubst::Weak(dbi, r) => write!(f, "Weak({}, {})", dbi, r),
+            PrimSubst::Lift(dbi, r) => write!(f, "Lift({}, {})", dbi, r),
+        }
+    }
 }
 
 impl<T> Default for PrimSubst<T> {

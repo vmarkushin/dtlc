@@ -5,6 +5,7 @@ use std::ops::{Add, Range};
 pub mod abs;
 pub mod core;
 pub mod desugar;
+pub mod pattern;
 pub mod surf;
 
 /// Plicitness (plɪsɪtnəs), noun - the quality of being explicit or implicit (Oxford dictionary (no)).
@@ -159,6 +160,10 @@ impl<T> Bind<T> {
     pub fn map_term<R>(self, f: impl FnOnce(T) -> R) -> Bind<R> {
         Bind::new(self.licit, self.name, f(self.ty), self.loc)
     }
+
+    pub fn ident(self) -> Ident {
+        Ident::new(self.name.to_string(), self.loc)
+    }
 }
 
 impl<T> Bind<Box<T>> {
@@ -178,7 +183,7 @@ pub struct ConHead {
     /// Constructor name.
     pub name: Ident,
     /// Index of the constructor.
-    pub cons_ix: GI,
+    pub cons_gi: GI,
 }
 
 impl ConHead {
@@ -187,7 +192,7 @@ impl ConHead {
     }
 
     pub fn new(name: Ident, ix: GI) -> Self {
-        Self { name, cons_ix: ix }
+        Self { name, cons_gi: ix }
     }
 }
 

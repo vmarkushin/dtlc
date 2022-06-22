@@ -20,9 +20,10 @@ impl TypeCheckState {
             Term::Whnf(whnf) => Ok(whnf),
             Term::Redex(f, id, elims) => match f {
                 Func::Index(def) => match self.def(def) {
+                    // TODO: make a separate function for each data and constructor
                     Decl::Data(_) => Ok(Val::inductive(def, elims_to_terms(elims)?)),
                     Decl::Cons(cons) => {
-                        let head = ConHead::new(id, cons.data);
+                        let head = ConHead::new(id, cons.data_gi);
                         Ok(Val::Cons(head, elims_to_terms(elims)?))
                     }
                     Decl::Proj { .. } => unimplemented!(),
@@ -49,6 +50,9 @@ impl TypeCheckState {
                     self.simplify(*term)
                 }
             },
+            Term::Match(_, _) => {
+                todo!()
+            }
         }
     }
 

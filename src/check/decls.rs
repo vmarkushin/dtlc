@@ -6,7 +6,7 @@ use crate::syntax::abs::{
     ConsInfo as AConsInfo, DataInfo as ADataInfo, Decl as ADecl, Expr, Tele as ATele,
 };
 use crate::syntax::core::{
-    Closure, ConsInfo, DataInfo, DeBruijn, Decl, FuncInfo, Tele, Term, Val, ValData,
+    Closure, ConsInfo, Ctx, DataInfo, DeBruijn, Decl, FuncInfo, Tele, Term, Val, ValData,
 };
 use crate::syntax::desugar::DesugarState;
 use crate::syntax::{Universe, GI};
@@ -87,7 +87,7 @@ impl TypeCheckState {
     fn check_cons(&mut self, cons: AConsInfo, data: &DataInfo, ty: &Val) -> Result<ConsInfo> {
         let param_len = self.gamma.len();
         self.check_tele(cons.tele, ty)?;
-        let params = self.gamma.split_off(param_len);
+        let params = self.gamma.0.split_off(param_len);
         let mut tele = data.params.clone();
         tele.append(&mut params.clone());
         let args = (0..data.params.len())
@@ -100,7 +100,7 @@ impl TypeCheckState {
             loc: cons.loc,
             name: cons.name,
             params,
-            data: cons.data_ix,
+            data_gi: cons.data_ix,
             signature,
         };
         Ok(info)
@@ -113,9 +113,10 @@ impl TypeCheckState {
         let t = Val::Universe(universe1);
         self.check_tele(data.tele, &t)?;
         let param_len = self.gamma.len();
-        let signature = Term::pi_from_tele(self.gamma.clone(), Term::universe(universe1));
+        let tele = self.gamma.clone().into_tele();
+        let signature = Term::pi_from_tele(tele.clone(), Term::universe(universe1));
         let info = DataInfo {
-            params: self.gamma.clone(),
+            params: tele,
             loc: data.loc,
             name: data.name,
             universe: data.uni.unwrap(),
@@ -130,8 +131,8 @@ impl TypeCheckState {
         for cons in conses {
             let cons = self.check_cons(cons, &info, &t)?;
             match data_ix {
-                None => data_ix = Some(cons.data),
-                Some(ix) => debug_assert_eq!(ix, cons.data),
+                None => data_ix = Some(cons.data_gi),
+                Some(ix) => debug_assert_eq!(ix, cons.data_gi),
             }
             debug_assert_eq!(param_len, self.gamma.len());
 
@@ -176,7 +177,7 @@ impl TypeCheckState {
             self.gamma.push(bind.clone());
             tele.push(bind);
         }
-        self.gamma.truncate(self.gamma.len() - len);
+        self.gamma.0.truncate(self.gamma.len() - len);
 
         Ok((tele, val))
     }
@@ -191,7 +192,7 @@ impl TypeCheckState {
     #[allow(unused)]
     fn bind_as_and_tele<T>(
         &mut self,
-        mut tele: Tele,
+        mut tele: Ctx,
         f: impl FnOnce(&mut TypeCheckState) -> Result<T>,
     ) -> Result<T> {
         use std::mem::swap;

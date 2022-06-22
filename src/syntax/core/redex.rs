@@ -1,8 +1,9 @@
 use super::Term;
 use crate::syntax::core::subst::{PrimSubst, Substitution};
-use crate::syntax::core::term::Lambda;
+use crate::syntax::core::term::{Lambda, TryIntoPat};
 use crate::syntax::core::{Closure, Elim, Func, Val, ValData};
-use crate::syntax::{Bind, Ident, GI};
+use crate::syntax::pattern::Pat;
+use crate::syntax::{Bind, Ident, DBI, GI};
 use std::rc::Rc;
 
 impl Term {
@@ -68,6 +69,9 @@ impl Subst for Term {
             Term::Redex(Func::Index(f), id, args) => def_app(f, id, vec![], args.subst(subst)),
             Term::Redex(Func::Lam(lam), id, args) => {
                 Term::Redex(Func::Lam(lam.subst(subst.clone())), id, args.subst(subst))
+            }
+            Term::Match(_, _) => {
+                todo!()
             }
         }
     }
@@ -141,5 +145,21 @@ impl<R, T: Subst<R>> Subst<Bind<R>> for Bind<T> {
 impl Subst for ValData {
     fn subst(self, subst: Rc<Substitution>) -> Self {
         ValData::new(self.def, self.args.subst(subst))
+    }
+}
+
+impl<R, T: Subst<R>> Subst<Pat<DBI, R>> for Pat<DBI, T> {
+    fn subst(self, subst: Rc<PrimSubst<Term>>) -> Pat<DBI, R> {
+        match self {
+            Pat::Absurd => Pat::Absurd,
+            // Pat::Var(v) => {
+            //     let t = subst.lookup(v);
+            //     t.try_into_pat().expect("Cannot convert to pattern.")
+            // }
+            Pat::Var(v) => Pat::Var(v),
+            Pat::Cons(f, c, pats) => Pat::Cons(f, c, pats.subst(subst)),
+            Pat::Forced(t) => Pat::Forced(t.subst(subst)),
+            Pat::Wildcard => Pat::Wildcard,
+        }
     }
 }

@@ -1,25 +1,25 @@
 use crate::check::state::TypeCheckState;
-use crate::check::{Error, Result};
+use crate::check::{Clause, Error, LshProblem, Result, Unify};
 use crate::syntax::abs::{AppView, Expr};
-use crate::syntax::core::Closure;
 use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, Val, ValData};
+use crate::syntax::core::{Closure, Ctx};
 use crate::syntax::{ConHead, Ident, Loc, Universe, GI};
 
 impl TypeCheckState {
-    /// Infer the type of the expression.
+    /// Infer the type of the expression. Returns evaluated term and its type.
     pub fn infer(&mut self, input_term: &Expr) -> Result<(TermInfo, Term)> {
         if !self.trace_tc {
             return self.infer_impl(input_term);
         }
         let depth_ws = self.tc_depth_ws();
         self.tc_deeper();
-        debug!("{}⊢ {} ↑", depth_ws, input_term);
+        debug!("{}⊢ {} ↓", depth_ws, input_term);
         let (evaluated, inferred_ty) = self.infer_impl(input_term).map_err(|e| {
             debug!("{}Error inferring {}", depth_ws, input_term);
             e
         })?;
         debug!(
-            "{}⊢ {} : {} → {}",
+            "{}⊢ {} ↓ {} ⇝ {}",
             depth_ws, input_term, inferred_ty, evaluated.ast
         );
         self.tc_shallower();
@@ -76,7 +76,7 @@ impl TypeCheckState {
                     |_, gi, args| Term::data(ValData::new(gi, args)),
                 )
             }
-            Term::Whnf(Val::Cons(ConHead { name, cons_ix: def }, args)) => {
+            Term::Whnf(Val::Cons(ConHead { name, cons_gi: def }, args)) => {
                 debug_assert!(args.is_empty());
                 let info = match &self.sigma[*def] {
                     Decl::Cons(cons) => cons,
@@ -105,6 +105,7 @@ impl TypeCheckState {
                     let param_ty = self.simplify(*param.ty)?;
                     let arg = self.check(&arg, &param_ty)?;
                     ty = clos.instantiate(arg.ast.clone());
+                    // TODO: nahuya?
                     elims.push(Elim::app(arg.ast));
                 }
                 Ok((head.map_ast(|t| t.apply_elim(elims)), ty))
@@ -254,13 +255,13 @@ impl TypeCheckState {
             return self.check_impl(input_term, against);
         }
         let depth_ws = self.tc_depth_ws();
-        debug!("{}⊢ {} ↓ {}", depth_ws, input_term, against);
+        debug!("{}⊢ {} ↑? {}", depth_ws, input_term, against);
         self.tc_deeper();
         let a = self.check_impl(input_term, against).map_err(|e| {
             debug!("{}Error checking {} : {}", depth_ws, input_term, against);
             e
         })?;
-        debug!("{}⊢ {} : {} ↑ {}", depth_ws, input_term, against, a.ast);
+        debug!("{}⊢ {} ↑ {} ⇝ {}", depth_ws, input_term, against, a.ast);
         self.tc_shallower();
         Ok(a)
     }
@@ -302,6 +303,40 @@ impl TypeCheckState {
                 let bind_ty = self.gamma.pop().expect("Bad index");
                 let term = Term::pi2(bind_ty.boxed(), Closure::plain(ret_ty.ast));
                 Ok(term.at(*info))
+            }
+            (Expr::Lam(_info, bind, ret), Val::Pi(bind_pi, ret_pi)) => {
+                let (bind_ty, bind_ty_ty) = self.infer((*bind.ty).as_ref().unwrap())?;
+                self.subtype(
+                    &self.simplify(bind_ty.ast.clone())?,
+                    &self.simplify(*bind_pi.ty.clone())?,
+                )?;
+                let Closure::Plain(ret_pi) = ret_pi;
+                let bind_new = Bind::boxing(bind.licit, bind.name, bind_ty.ast, bind_ty.loc);
+                self.gamma.push(bind_new.clone().unboxed());
+                let body = self.check(&*ret, &self.simplify(*ret_pi.clone())?)?;
+                self.gamma.pop();
+                Ok(Term::lam(bind_new, body.ast).at(bind_ty.loc))
+            }
+            (Expr::Match(xs, cs), against) => {
+                let vars = xs
+                    .iter()
+                    .map(|x| self.infer(x).map(|x| x.0))
+                    .collect::<Result<Vec<_>>>()?;
+                let vars = vars
+                    .into_iter()
+                    .map(|ti| match ti.ast {
+                        Term::Whnf(Val::Var(idx, _)) => idx,
+                        _ => unimplemented!("Match on non-var"),
+                    })
+                    .collect::<Vec<_>>();
+                let clauses = cs
+                    .iter()
+                    .map(|c| Clause::new(c.patterns.clone(), c.body.clone()))
+                    .collect::<Vec<_>>();
+                let mut lhs = LshProblem::new(vars, clauses, Term::Whnf(against.clone()));
+                lhs.init(self)?;
+                let case_tree = lhs.check(self)?;
+                Ok(case_tree.into_term().at(Loc::default()))
             }
             (expr, anything) => self.check_fallback(expr.clone(), anything),
         }

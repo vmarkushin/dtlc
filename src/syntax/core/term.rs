@@ -1,10 +1,28 @@
+use crate::check::{CaseTree, TypeCheckState};
+use crate::syntax::abs::Expr;
 use crate::syntax::core::redex::Subst;
 use crate::syntax::core::subst::Substitution;
-use crate::syntax::core::Tele;
+use crate::syntax::core::{DeBruijn, Tele};
+use crate::syntax::pattern;
 use crate::syntax::{ConHead, Ident, Loc, Plicitness, Universe, DBI, GI, MI, UID};
 use derive_more::From;
 use itertools::Either;
 use itertools::Either::*;
+
+pub type Pat<Ix = DBI, T = Term> = pattern::Pat<Ix, T>;
+
+impl DeBruijn for Pat {
+    fn dbi_view(&self) -> Option<DBI> {
+        match self {
+            Pat::Var(dbi) => Some(*dbi),
+            _ => None,
+        }
+    }
+
+    fn from_dbi(dbi: DBI) -> Self {
+        Pat::Var(dbi)
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ValData {
@@ -55,14 +73,70 @@ pub enum Func {
     Lam(Lambda),
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Case {
+    pub pattern: Pat,
+    pub body: Term,
+}
+
+impl Case {
+    pub fn new(pattern: Pat, body: Term) -> Self {
+        Self { pattern, body }
+    }
+}
+
 /// Type for terms.
 #[derive(Debug, PartialEq, Eq, Clone, From)]
 pub enum Term {
     Whnf(Val),
     Redex(Func, Ident, Vec<Elim>),
+    /// Data elimination.
+    Match(DBI, Vec<Case>),
+    // Match(Box<CaseTree>),
+}
+
+pub trait TryIntoPat<Ix, T> {
+    fn try_into_pat(self) -> Option<Pat<Ix, T>>;
+}
+
+impl<Ix: From<DBI>, T: Subst<Term>> TryIntoPat<Ix, T> for Term {
+    fn try_into_pat(self) -> Option<Pat<Ix, T>> {
+        match self {
+            Term::Whnf(Val::Cons(con_head, params)) => Some(Pat::cons(
+                con_head,
+                params
+                    .into_iter()
+                    .map(Term::try_into_pat)
+                    .collect::<Option<Vec<_>>>()?,
+            )),
+            Term::Whnf(Val::Var(ix, _)) => Some(Pat::Var(Ix::from(ix))),
+            _ => None,
+        }
+    }
 }
 
 impl Term {
+    pub(crate) fn is_cons(&self) -> bool {
+        match self {
+            Term::Whnf(Val::Cons(..)) => true,
+            _ => false,
+        }
+    }
+
+    pub(crate) fn is_eta_cons(&self) -> bool {
+        match self {
+            Term::Whnf(Val::Cons(_, es)) if es.is_empty() => true,
+            _ => false,
+        }
+    }
+
+    pub(crate) fn is_eta_var(&self) -> bool {
+        match self {
+            Term::Whnf(Val::Var(_, es)) if es.is_empty() => true,
+            _ => false,
+        }
+    }
+
     #[allow(unused)]
     pub(crate) fn tele_len(&self) -> usize {
         match self {
@@ -72,13 +146,16 @@ impl Term {
                 _ => 0,
             },
             Self::Redex(..) => 0,
+            Self::Match(..) => 0,
         }
     }
-}
 
-impl Term {
     pub(crate) fn lam(p0: Bind<Box<Term>>, p1: Term) -> Term {
         Term::Whnf(Val::Lam(Lambda(p0, Closure::Plain(box p1))))
+    }
+
+    pub fn mat(x: DBI, cs: impl Into<Vec<Case>>) -> Self {
+        Term::Match(x, cs.into())
     }
 
     pub fn is_meta(&self) -> bool {
@@ -139,6 +216,7 @@ impl Term {
         match match self {
             Term::Whnf(val) => val,
             Term::Redex(..) => return false,
+            Term::Match(..) => return false,
         } {
             Pi(..) | Data(..) | Universe(..) => true,
             Var(..) | Meta(..) | Cons(..) | Lam(..) => false,

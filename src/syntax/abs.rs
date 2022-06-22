@@ -1,7 +1,9 @@
 use crate::syntax;
 use crate::syntax::core::pretty_application;
-use crate::syntax::{Ident, Loc, Plicitness, Universe, GI, MI, UID};
+use crate::syntax::{pattern, Ident, Loc, Plicitness, Universe, GI, MI, UID};
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::rc::Rc;
 use vec1::Vec1;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -114,6 +116,106 @@ impl LamParam {
 pub type Bind<T = Option<Expr>> = syntax::Bind<T>;
 pub type Tele = Vec<Bind>;
 pub type Type = Expr;
+pub type Pat<T = Expr> = pattern::Pat<UID, T>;
+
+// impl<T> pattern::Pat<UID, T> {
+//     pub fn subst_abs(self, subst: Rc<HashMap<UID, Expr>>) -> Self {
+//         match self {
+//             Pat::Var(x) => {
+//                 match subst.get(&x).cloned() {
+//                     Some(Expr::Var(_, uid)) => Pat::Var(uid),
+//                     Some(Expr::Cons(_, gi)) => Pat::Cons(false, ),
+//                     None => Pat::Var(x),
+//                 }
+//             },
+//             Pat::Wildcard => Pat::Wildcard,
+//             Pat::Absurd => Pat::Absurd,
+//             Pat::Cons(forced, con, args) => Pat::Cons(
+//                 forced,
+//                 con,
+//                 args.into_iter()
+//                     .map(|x| x.subst_abs(subst.clone()))
+//                     .collect(),
+//             ),
+//             Pat::Forced(x) => Pat::Forced(x),
+//         }
+//     }
+// }
+
+impl Case {
+    pub fn subst_abs(&mut self, subst: Rc<HashMap<UID, Expr>>) {
+        self.body
+            .as_mut()
+            .iter_mut()
+            .for_each(|x| x.subst_abs(subst.clone()));
+        self.tele.iter_mut().for_each(|b| {
+            b.ty.iter_mut().for_each(|x| x.subst_abs(subst.clone()));
+            if let Some(Expr::Var(_, uid)) = subst.get(&b.name) {
+                b.name = *uid;
+            }
+        });
+    }
+}
+
+impl Expr {
+    pub fn subst_abs(&mut self, subst: Rc<HashMap<UID, Expr>>) {
+        match self {
+            Expr::Var(_, x) => {
+                if let Some(x) = subst.get(x).cloned() {
+                    *self = x;
+                }
+            }
+            Expr::Lam(_, b, t) => {
+                b.ty.iter_mut().for_each(|x| x.subst_abs(subst.clone()));
+                if let Some(Expr::Var(_, uid)) = subst.get(&b.name) {
+                    b.name = *uid;
+                }
+                t.subst_abs(subst);
+            }
+            Expr::App(a, b) => {
+                a.subst_abs(subst.clone());
+                b.iter_mut().for_each(|x| x.subst_abs(subst.clone()));
+            }
+            Expr::Pi(_, b, r) => {
+                b.ty.iter_mut().for_each(|x| x.subst_abs(subst.clone()));
+                if let Some(Expr::Var(_, uid)) = subst.get(&b.name) {
+                    b.name = *uid;
+                }
+                r.subst_abs(subst);
+            }
+            Expr::Universe(_, _) => {}
+            Expr::Fn(_, _) => {}
+            Expr::Def(_, _) => {}
+            Expr::Cons(_, _) => {}
+            Expr::Proj(_, _) => {}
+            Expr::Meta(_, _) => {}
+            Expr::Match(xs, cs) => {
+                xs.iter_mut().for_each(|x| x.subst_abs(subst.clone()));
+                cs.iter_mut().for_each(|x| x.subst_abs(subst.clone()));
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Case {
+    /// Δ. The types of the pattern variables in dependency order.
+    pub tele: Tele,
+    /// Δ ⊢ ps. The de Bruijn indices refer to Δ.
+    pub patterns: Vec<Pat>,
+    /// `Some(v)` if `Δ ⊢ v`, while `None` if the pattern is absurd.
+    pub body: Option<Expr>,
+}
+
+impl Case {
+    pub fn new(tele: Tele, patterns: Vec<Pat>, body: Option<Expr>) -> Self {
+        Self {
+            tele,
+            patterns,
+            body,
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expr {
@@ -127,6 +229,14 @@ pub enum Expr {
     Cons(Ident, GI),
     Proj(Ident, GI),
     Meta(Ident, MI),
+    Match(Vec1<Self>, Vec<Case>),
+}
+
+impl Expr {
+    pub(crate) fn lam_tele(tele: Tele, body: Expr) -> Expr {
+        tele.into_iter()
+            .rfold(body, |expr, param| Self::lam(param.boxed(), box expr))
+    }
 }
 
 /// Application's internal view.
@@ -183,11 +293,16 @@ impl Expr {
             | Cons(ident, ..)
             | Def(ident, ..)
             | Meta(ident, ..) => ident.loc,
+            Match(e, _) => e.last().loc(),
         }
     }
 
     pub fn app(f: Self, args: Vec1<Self>) -> Self {
         Expr::App(Box::new(f), args)
+    }
+
+    pub fn lam(param: Bind<Box<Option<Self>>>, body: Box<Self>) -> Self {
+        Expr::Lam(Loc::default(), param, body)
     }
 
     pub fn get_gi(&self) -> Option<GI> {
@@ -285,6 +400,9 @@ impl Display for Expr {
             Cons(ident, _) => write!(f, "{}", ident),
             Proj(ident, _) => write!(f, "{}", ident),
             Meta(ident, _) => write!(f, "?{}", ident),
+            Match(_, _) => {
+                todo!()
+            }
         }
     }
 }

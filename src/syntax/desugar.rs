@@ -1,11 +1,12 @@
 use crate::syntax::abs::{
-    Bind, ConsInfo as ConsInfoA, DataInfo as DataInfoA, Decl as DeclA, Expr as ExprA,
-    Func as FuncA, Tele as TeleA,
+    Bind, Case as CaseA, ConsInfo as ConsInfoA, DataInfo as DataInfoA, Decl as DeclA,
+    Expr as ExprA, Func as FuncA, Pat as PatA, Tele as TeleA,
 };
-use crate::syntax::surf::{Data, Decl, Expr, Func, NamedTele, Param};
-use crate::syntax::{Ident, Plicitness, GI, MI, UID};
+use crate::syntax::surf::{Case, Data, Decl, Expr, Func, NamedTele, Param, Pat};
+use crate::syntax::{ConHead, Ident, Plicitness, GI, MI, UID};
 use std::cell::Cell;
 use std::collections::BTreeMap;
+use vec1::Vec1;
 
 #[derive(Debug, Clone, Default)]
 pub struct DesugarState {
@@ -20,13 +21,30 @@ pub struct DesugarState {
     local_count: Vec<usize>,
 }
 
+struct LocalScope {
+    state: *mut DesugarState,
+}
+
+impl LocalScope {
+    pub fn enter(state: &mut DesugarState) -> Self {
+        state.enter_local_scope();
+        LocalScope { state }
+    }
+}
+
+impl Drop for LocalScope {
+    fn drop(&mut self) {
+        unsafe {
+            (*self.state).exit_local_scope();
+        }
+    }
+}
+
 impl DesugarState {
     pub fn lookup_by_name(&self, name: &str) -> Option<(&DeclA, GI)> {
-        let gi = *self
-            .decls_map
+        self.decls_map
             .get(name)
-            .unwrap_or_else(|| panic!("{} not found", name));
-        self.decls.get(gi).map(|decl| (decl, gi))
+            .and_then(|gi| self.decls.get(*gi).map(|decl| (decl, *gi)))
     }
 
     pub fn enter_local_scope(&mut self) {
@@ -150,6 +168,52 @@ impl DesugarState {
         Ok((tele, ident))
     }
 
+    pub fn desugar_pat(&mut self, pat: Pat) -> Result<PatA> {
+        let pat = match pat {
+            Pat::Var(name) => {
+                if let Some((DeclA::Cons(..), ix)) = self.lookup_by_name(&name.text) {
+                    PatA::Cons(false, ConHead::new(name, ix), Vec::new())
+                } else {
+                    let uid = self.next_uid();
+                    self.insert_local(name.text, uid);
+                    PatA::Var(uid)
+                }
+            }
+            Pat::Wildcard => {
+                let uid = self.next_uid();
+                PatA::Var(uid)
+            }
+            Pat::Absurd => PatA::Absurd,
+            Pat::Cons(forced, head, args) => {
+                let head_ix =
+                    if let Some((DeclA::Cons(..), ix)) = self.lookup_by_name(&head.name.text) {
+                        ix
+                    } else {
+                        panic!("{} not found", head.name.text)
+                    };
+                let head = ConHead::new(head.name, head_ix);
+                let args = args
+                    .into_iter()
+                    .map(|pat| self.desugar_pat(pat))
+                    .collect::<Result<Vec<_>>>()?;
+                PatA::Cons(forced, head, args)
+            }
+            Pat::Forced(term) => PatA::Forced(self.desugar_expr(term)?),
+        };
+        Ok(pat)
+    }
+
+    pub fn desugar_case(&mut self, case: Case) -> Result<CaseA> {
+        let _scope = LocalScope::enter(self);
+        let pattern = case
+            .patterns
+            .into_iter()
+            .map(|p| self.desugar_pat(p))
+            .collect::<Result<Vec<_>>>()?;
+        let body = case.body.map(|body| self.desugar_expr(body)).transpose()?;
+        Ok(CaseA::new(Default::default(), pattern, body))
+    }
+
     pub fn desugar_expr(&mut self, expr: Expr) -> Result<ExprA> {
         match expr {
             Expr::Var(v) => {
@@ -211,6 +275,17 @@ impl DesugarState {
                 let i = self.next_meta();
                 Ok(ExprA::Meta(Ident::new(format!("hole{}", i), loc), i))
             }
+            Expr::Match(exprs, cases) => {
+                let exprs = exprs
+                    .into_iter()
+                    .map(|expr| self.desugar_expr(expr))
+                    .collect::<Result<Vec<_>>>()?;
+                let cases = cases
+                    .into_iter()
+                    .map(|case| self.desugar_case(case))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(ExprA::Match(Vec1::try_from_vec(exprs).unwrap(), cases))
+            }
         }
     }
 
@@ -232,6 +307,23 @@ impl DesugarState {
 
     pub fn desugar_con(&mut self, data_ix: GI, con: NamedTele) -> Result<()> {
         let (tele, ident) = self.desugar_telescope(con)?;
+
+        // let args = Vec1::try_from_vec(
+        //     tele.iter()
+        //         .map(|bind| ExprA::Var(bind.ident(), bind.name))
+        //         .collect::<Vec<_>>(),
+        // )
+        // .unwrap();
+        // Here we represent each construction as a function declaration with the result of
+        // fully applied constructor: `fn C x y := C' x y`
+        // self.insert_decl(DeclA::Fn(FuncA {
+        //     id: con.name.clone(),
+        //     ty: None,
+        //     expr: ExprA::lam_tele(
+        //         tele,
+        //         ExprA::App(box ExprA::Cons(con.name.clone(), data_ix), args),
+        //     ),
+        // }))?;
         self.insert_decl(DeclA::Cons(ConsInfoA::new(ident.loc, ident, tele, data_ix)))?;
         Ok(())
     }
@@ -312,15 +404,16 @@ impl DesugarState {
 mod tests {
     use super::*;
     use crate::parser::Parser;
-    use crate::syntax::abs::Expr::{Def, Meta, Pi};
+    use crate::syntax::abs::Expr::Def;
     use crate::syntax::desugar::desugar_prog;
     use crate::syntax::Plicitness::Explicit;
     use crate::syntax::{Ident, Loc, Universe};
     use itertools::Itertools;
-    use vec1::Vec1;
+    use vec1::{vec1, Vec1};
 
     #[test]
     fn test_desugar() {
+        use ExprA::{App, Match, Meta, Pi, Var};
         let mut parser = Parser::default();
         let state = desugar_prog(
             parser
@@ -330,7 +423,10 @@ data Nat : Type
     | Z
     | S Nat
 
-fn foo (p : Nat) := (lam (f : Nat -> Nat) => f p) (lam (n : Nat) => n)
+fn foo (p : Nat) := match p {
+        | Z => (lam (f : Nat -> Nat) => f p) (lam (n : Nat) => n)
+        | (S n) => n
+    }
 "#,
                 )
                 .unwrap(),
@@ -382,10 +478,7 @@ fn foo (p : Nat) := (lam (f : Nat -> Nat) => f p) (lam (n : Nat) => n)
                     DeclA::Fn(FuncA::new(
                         Ident::new("foo", Loc::new(41, 44),),
                         ExprA::Lam(
-                            Loc {
-                                start: 46,
-                                end: 107
-                            },
+                            Loc { start: 46, end: 65 },
                             Bind {
                                 licit: Explicit,
                                 name: 0,
@@ -398,84 +491,148 @@ fn foo (p : Nat) := (lam (f : Nat -> Nat) => f p) (lam (n : Nat) => n)
                                 )),
                                 loc: Loc::new(46, 47)
                             },
-                            box ExprA::App(
-                                box ExprA::Lam(
-                                    Loc::new(64, 86),
-                                    Bind {
-                                        licit: Explicit,
-                                        name: 1,
-                                        ty: box Some(ExprA::Pi(
-                                            Loc::new(68, 78),
-                                            Bind {
-                                                licit: Explicit,
-                                                name: 1,
-                                                ty: box Some(Def(
-                                                    Ident {
-                                                        loc: Loc::new(68, 71),
-                                                        text: "Nat".to_owned()
-                                                    },
-                                                    0
-                                                )),
-                                                loc: Loc::new(68, 71)
-                                            },
-                                            box Def(
-                                                Ident {
-                                                    loc: Loc::new(75, 78),
-                                                    text: "Nat".to_owned()
-                                                },
-                                                0
-                                            )
-                                        )),
-                                        loc: Loc::new(64, 65)
+                            box Match(
+                                vec1![Var(
+                                    Ident {
+                                        text: "p".to_owned(),
+                                        loc: Loc { start: 64, end: 65 }
                                     },
-                                    box ExprA::App(
-                                        box ExprA::Var(
+                                    0
+                                )],
+                                vec![
+                                    CaseA {
+                                        tele: Default::default(),
+                                        patterns: vec![PatA::Cons(
+                                            false,
+                                            ConHead {
+                                                name: Ident {
+                                                    text: "Z".to_owned(),
+                                                    loc: Loc { start: 78, end: 79 }
+                                                },
+                                                cons_gi: 1
+                                            },
+                                            vec![]
+                                        )],
+                                        body: Some(App(
+                                            box ExprA::Lam(
+                                                Loc::new(89, 111),
+                                                Bind {
+                                                    licit: Explicit,
+                                                    name: 1,
+                                                    ty: box Some(ExprA::Pi(
+                                                        Loc::new(93, 103),
+                                                        Bind {
+                                                            licit: Explicit,
+                                                            name: 1,
+                                                            ty: box Some(Def(
+                                                                Ident {
+                                                                    loc: Loc::new(93, 96),
+                                                                    text: "Nat".to_owned()
+                                                                },
+                                                                0
+                                                            )),
+                                                            loc: Loc { start: 93, end: 96 }
+                                                        },
+                                                        box Def(
+                                                            Ident {
+                                                                loc: Loc {
+                                                                    start: 100,
+                                                                    end: 103
+                                                                },
+                                                                text: "Nat".to_owned()
+                                                            },
+                                                            0
+                                                        )
+                                                    )),
+                                                    loc: Loc { start: 89, end: 90 }
+                                                },
+                                                box ExprA::App(
+                                                    box ExprA::Var(
+                                                        Ident {
+                                                            loc: Loc {
+                                                                start: 108,
+                                                                end: 109
+                                                            },
+                                                            text: "f".to_owned()
+                                                        },
+                                                        1
+                                                    ),
+                                                    Vec1::new(ExprA::Var(
+                                                        Ident {
+                                                            loc: Loc {
+                                                                start: 110,
+                                                                end: 111
+                                                            },
+                                                            text: "p".to_owned()
+                                                        },
+                                                        0
+                                                    ))
+                                                )
+                                            ),
+                                            Vec1::new(ExprA::Lam(
+                                                Loc {
+                                                    start: 119,
+                                                    end: 132
+                                                },
+                                                Bind {
+                                                    licit: Explicit,
+                                                    name: 1,
+                                                    ty: box Some(Def(
+                                                        Ident {
+                                                            loc: Loc {
+                                                                start: 123,
+                                                                end: 126
+                                                            },
+                                                            text: "Nat".to_owned()
+                                                        },
+                                                        0
+                                                    )),
+                                                    loc: Loc {
+                                                        start: 119,
+                                                        end: 120
+                                                    }
+                                                },
+                                                box ExprA::Var(
+                                                    Ident {
+                                                        loc: Loc {
+                                                            start: 131,
+                                                            end: 132
+                                                        },
+                                                        text: "n".to_owned()
+                                                    },
+                                                    1
+                                                )
+                                            ))
+                                        ))
+                                    },
+                                    CaseA {
+                                        tele: Default::default(),
+                                        patterns: vec![PatA::Cons(
+                                            false,
+                                            ConHead {
+                                                name: Ident {
+                                                    text: "S".to_owned(),
+                                                    loc: Loc {
+                                                        start: 145,
+                                                        end: 146
+                                                    }
+                                                },
+                                                cons_gi: 2
+                                            },
+                                            vec![PatA::Var(1)]
+                                        )],
+                                        body: Some(Var(
                                             Ident {
-                                                loc: Loc::new(83, 84),
-                                                text: "f".to_owned()
+                                                text: "n".to_owned(),
+                                                loc: Loc {
+                                                    start: 153,
+                                                    end: 154
+                                                }
                                             },
                                             1
-                                        ),
-                                        Vec1::new(ExprA::Var(
-                                            Ident {
-                                                loc: Loc::new(85, 86),
-                                                text: "p".to_owned()
-                                            },
-                                            0
                                         ))
-                                    )
-                                ),
-                                Vec1::new(ExprA::Lam(
-                                    Loc {
-                                        start: 94,
-                                        end: 107
-                                    },
-                                    Bind {
-                                        licit: Explicit,
-                                        name: 1,
-                                        ty: box Some(Def(
-                                            Ident {
-                                                loc: Loc {
-                                                    start: 98,
-                                                    end: 101
-                                                },
-                                                text: "Nat".to_owned()
-                                            },
-                                            0
-                                        )),
-                                        loc: Loc::new(94, 95)
-                                    },
-                                    box ExprA::Var(
-                                        Ident {
-                                            loc: Loc {
-                                                start: 106,
-                                                end: 107
-                                            },
-                                            text: "n".to_owned()
-                                        },
-                                        1
-                                    )
-                                ))
+                                    }
+                                ]
                             )
                         ),
                         Some(Pi(

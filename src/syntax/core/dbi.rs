@@ -42,6 +42,7 @@ impl DeBruijn for Term {
         match self {
             Term::Whnf(w) => w.dbi_view(),
             Term::Redex(..) => None,
+            Term::Match(..) => None,
         }
     }
 
