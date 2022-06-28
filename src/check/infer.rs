@@ -210,7 +210,8 @@ impl TypeCheckState {
     fn infer_head_impl(&mut self, abs: &Expr) -> Result<(TermInfo, Term)> {
         use Expr::*;
         match abs {
-            Proj(id, def) | Fn(id, def) => self
+            Proj(_id, _def) => unimplemented!("projections"),
+            Fn(id, def) => self
                 .type_of_decl(*def)
                 .map(|ty| (Term::simple_def(*def, id.clone()).at(id.loc), ty.ast)),
             Cons(id, def) => self.type_of_decl(*def).map(|ty| {

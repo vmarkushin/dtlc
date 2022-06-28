@@ -27,13 +27,16 @@ impl TypeCheckState {
                         Ok(Val::Cons(head, elims_to_terms(elims)?))
                     }
                     Decl::Proj { .. } => unimplemented!(),
-                    Decl::Func(func) => match self.unfold_func(def, id, func.body.clone(), elims) {
-                        Ok((_, term)) => self.simplify(term),
-                        Err(blockage) => match blockage.stuck {
-                            Stuck::NotBlocked => self.simplify(blockage.anyway),
-                            _ => Err(Error::Blocked(box blockage)),
-                        },
-                    },
+                    Decl::Func(func) => {
+                        match self.unfold_func(def, id, func.body.as_ref().unwrap().clone(), elims)
+                        {
+                            Ok((_, term)) => self.simplify(term),
+                            Err(blockage) => match blockage.stuck {
+                                Stuck::NotBlocked => self.simplify(blockage.anyway),
+                                _ => Err(Error::Blocked(box blockage)),
+                            },
+                        }
+                    }
                 },
                 Func::Lam(lam) => {
                     let mut term = lam.1;

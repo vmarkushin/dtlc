@@ -77,12 +77,13 @@ impl Data {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Func {
     pub id: Ident,
-    pub expr: Expr,
+    /// May be `None` if not fully desugared.
+    pub expr: Option<Expr>,
     pub(crate) ty: Option<Type>,
 }
 
 impl Func {
-    pub fn new(id: Ident, expr: Expr, ty: Option<Expr>) -> Self {
+    pub fn new(id: Ident, expr: Option<Expr>, ty: Option<Expr>) -> Self {
         Func { id, expr, ty }
     }
 
@@ -97,7 +98,11 @@ impl Display for Func {
         if let Some(ty) = &self.ty {
             write!(f, " : {}", ty)?;
         }
-        write!(f, " := {}", self.expr)
+        if let Some(body) = &self.expr {
+            write!(f, " := {}", body)
+        } else {
+            write!(f, " := <unknown>")
+        }
     }
 }
 
@@ -355,6 +360,13 @@ pub enum Decl {
 }
 
 impl Decl {
+    pub(crate) fn as_func_mut(&mut self) -> &mut Func {
+        match self {
+            Decl::Fn(f) => f,
+            _ => panic!("not a function"),
+        }
+    }
+
     pub fn ident(&self) -> &Ident {
         match self {
             Decl::Data(data) => data.ident(),

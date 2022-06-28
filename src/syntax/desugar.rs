@@ -382,15 +382,17 @@ impl DesugarState {
                 };
                 self.ensure_no_local_scopes();
                 let res: Result<_> = try {
-                    let expr = self.desugar_expr(body_new)?;
                     let ty = self.desugar_expr(ty_new)?;
-                    (expr, ty)
+                    let partial_decl = DeclA::Fn(FuncA::new(name, None, Some(ty))); // TODO: get rid of Option?
+                    self.insert_decl(partial_decl.clone())?;
+                    let expr = self.desugar_expr(body_new)?;
+                    expr
                 };
                 self.clear_local();
-                let (expr, ty) = res?;
-                let decl = DeclA::Fn(FuncA::new(name, expr, Some(ty))); // TODO: get rid of Option?
-                self.insert_decl(decl.clone())?;
-                Ok(decl)
+                let expr = res?;
+                let decl = self.decls.last_mut().unwrap().as_func_mut();
+                decl.expr = Some(expr);
+                Ok(DeclA::Fn(decl.clone()))
             }
         }
     }
@@ -477,7 +479,7 @@ fn foo (p : Nat) := match p {
                     "foo".to_owned(),
                     DeclA::Fn(FuncA::new(
                         Ident::new("foo", Loc::new(41, 44),),
-                        ExprA::Lam(
+                        Some(ExprA::Lam(
                             Loc { start: 46, end: 65 },
                             Bind {
                                 licit: Explicit,
@@ -634,7 +636,7 @@ fn foo (p : Nat) := match p {
                                     }
                                 ]
                             )
-                        ),
+                        )),
                         Some(Pi(
                             Loc::new(50, 44),
                             Bind::new(

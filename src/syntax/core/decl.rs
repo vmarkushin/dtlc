@@ -14,7 +14,8 @@ pub struct FuncInfo {
     pub loc: Loc,
     pub name: Ident,
     pub signature: Term,
-    pub body: Term,
+    /// May be empty if not fully type-checked.
+    pub body: Option<Term>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -95,6 +96,13 @@ impl Decl {
     }
 
     pub fn as_func(&self) -> &FuncInfo {
+        match self {
+            Decl::Func(f) => f,
+            _ => panic!("not a function"),
+        }
+    }
+
+    pub fn as_func_mut(&mut self) -> &mut FuncInfo {
         match self {
             Decl::Func(f) => f,
             _ => panic!("not a function"),

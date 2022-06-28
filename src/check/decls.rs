@@ -55,17 +55,20 @@ impl TypeCheckState {
                     )?;
 
                     let signature = signature.ast;
-                    let body = self.lam(f.expr, signature.clone())?;
+                    let partial_func = FuncInfo {
+                        loc: f.id.loc,
+                        name: f.id,
+                        signature: signature.clone(),
+                        body: None,
+                    };
+                    self.sigma.push(Decl::Func(partial_func));
+                    let body = self.check_lam(f.expr.unwrap(), signature.clone())?;
                     let body = body.inline_meta(self)?;
                     let term = signature.inline_meta(self)?;
                     let signature = self.simplify(term)?.into();
-                    let func = FuncInfo {
-                        loc: f.id.loc,
-                        name: f.id,
-                        signature,
-                        body,
-                    };
-                    self.sigma.push(Decl::Func(func));
+                    let func = self.sigma.last_mut().unwrap().as_func_mut();
+                    func.signature = signature;
+                    func.body = Some(body);
                 }
             }
             self.exit_def();
@@ -182,7 +185,7 @@ impl TypeCheckState {
         Ok((tele, val))
     }
 
-    fn lam(&mut self, body: Expr, against: Term) -> Result<Term> {
+    fn check_lam(&mut self, body: Expr, against: Term) -> Result<Term> {
         let against_val = self.simplify(against)?;
         let body_ch = self.check(&body, &against_val)?.ast;
         Ok(body_ch)

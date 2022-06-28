@@ -784,6 +784,7 @@ mod tests {
             .as_func()
             .body
             .clone()
+            .unwrap()
             .tele_view()
             .1;
 
@@ -889,6 +890,7 @@ mod tests {
             .as_func()
             .body
             .clone()
+            .unwrap()
             .tele_view()
             .1;
         let cte = Term::mat(0, []);
