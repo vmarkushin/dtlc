@@ -13,13 +13,14 @@ pub type Substitution = PrimSubst<Term>;
 /// Substitution type.
 /// [Agda](https://hackage.haskell.org/package/Agda-2.6.0.1/docs/src/Agda.Syntax.Internal.html#Substitution%27).
 #[derive(Clone, Debug)]
-
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub enum PrimSubst<T> {
     /// The identity substitution.
     /// $$
     /// \Gamma \vdash \text{IdS} : \Gamma
     /// $$
     IdS,
+    Empty,
     /// The "add one more" substitution, or "substitution extension".
     /// $$
     /// \cfrac{\Gamma \vdash u : A \rho \quad \Gamma \vdash \rho : \Delta}
@@ -52,11 +53,12 @@ pub enum PrimSubst<T> {
 impl<T: Display> Display for PrimSubst<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            PrimSubst::IdS => write!(f, "IdS"),
+            PrimSubst::IdS => write!(f, "ε"),
             PrimSubst::Cons(t, r) => write!(f, "Cons({}, {})", t, r),
             PrimSubst::Succ(r) => write!(f, "Succ({})", r),
             PrimSubst::Weak(dbi, r) => write!(f, "Weak({}, {})", dbi, r),
             PrimSubst::Lift(dbi, r) => write!(f, "Lift({}, {})", dbi, r),
+            PrimSubst::Empty => write!(f, "⊥"),
         }
     }
 }
@@ -103,6 +105,7 @@ impl<Term: DeBruijn + Subst<Term, Term> + Clone> PrimSubst<Term> {
                 self.lookup(0),
                 self.compose(sgm.clone().lift_by(*n - 1).weaken(1)),
             )),
+            (_, Empty) => Empty.into(),
         }
     }
 
@@ -124,6 +127,7 @@ impl<Term: DeBruijn + Subst<Term, Term> + Clone> PrimSubst<Term> {
             },
             Lift(n, _) if dbi < *n => Right(DeBruijn::from_dbi(dbi)),
             Lift(n, rest) => Right(Self::raise_term(*n, rest.lookup(dbi - *n))),
+            Empty => panic!(),
         }
     }
 }
@@ -145,6 +149,7 @@ impl<T> PrimSubst<T> {
             (n, Cons(_, rho)) | (n, Succ(rho)) => rho.clone().drop_by(n - 1),
             (n, Lift(0, _rho)) => unreachable!("n = {:?}", n),
             (n, Lift(m, rho)) => rho.clone().lift_by(*m - 1).drop_by(n - 1).weaken(1),
+            (_, Empty) => panic!(),
         }
     }
 
@@ -173,6 +178,60 @@ impl<T> PrimSubst<T> {
     pub fn one(t: T) -> Rc<Self> {
         Rc::new(PrimSubst::Cons(t, Default::default()))
     }
+
+    pub fn id() -> Rc<Self> {
+        Rc::new(PrimSubst::IdS)
+    }
+}
+
+impl<T: Clone> PrimSubst<T> {
+    /// If Γ ⊢ ρ : Δ, Θ then splitS |Θ| ρ = (σ, δ), with
+    ///    Γ ⊢ σ : Δ
+    ///    Γ ⊢ δ : Θσ
+    pub fn split(self: Rc<Self>, n: DBI) -> (Rc<Self>, Rc<Self>) {
+        use PrimSubst::*;
+        if n == 0 {
+            return (self, Empty.into());
+        }
+        match &*self {
+            Cons(u, rho) => {
+                let x1 = rho.clone().split(n - 1);
+                (x1.0, Rc::new(Cons(u.clone(), x1.1)))
+            }
+            Succ(rho) => {
+                let x2 = rho.clone().split(n - 1);
+                (x2.0, Succ(x2.1).into())
+            }
+            Lift(0, _) => {
+                panic!()
+            }
+            Weak(m, rho) => {
+                let x = rho.clone().split(n);
+                (Self::weaken(x.0, *m), Self::weaken(x.1, *m))
+            }
+            IdS => (Self::raise(n), Self::lift_by(Rc::new(Empty), n)),
+            Lift(m, rho) => {
+                let x = rho.clone().lift_by(m - 1).split(n - 1);
+                (Self::weaken(x.0, 1), Self::lift_by(x.1, 1))
+            }
+            Empty => {
+                panic!()
+            }
+        }
+    }
+
+    pub fn union(self: Rc<Self>, other: Rc<Self>) -> Rc<Self> {
+        use PrimSubst::*;
+        // TODO: use helper functions for constructing new substs
+        match &*other {
+            IdS => self,
+            Empty => self,
+            Cons(t, o) => Cons(t.clone(), self.union(o.clone())).into(),
+            Succ(x) => Succ(self.union(x.clone())).into(),
+            Weak(v, x) => Weak(*v, self.union(x.clone())).into(),
+            Lift(v, x) => Lift(*v, self.union(x.clone())).into(),
+        }
+    }
 }
 
 pub fn build_subst<H: BuildHasher>(map: HashMap<DBI, Term, H>, max: usize) -> Rc<Substitution> {
@@ -182,4 +241,89 @@ pub fn build_subst<H: BuildHasher>(map: HashMap<DBI, Term, H>, max: usize) -> Rc
 /// [Agda](https://hackage.haskell.org/package/Agda-2.6.0.1/docs/src/Agda.TypeChecking.Patterns.Match.html#matchedArgs).
 fn matched<T, H: BuildHasher>(mut map: HashMap<DBI, T, H>, max: usize) -> Vec<T> {
     (0..max).map(|i| map.remove(&i).unwrap()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::syntax::core::{Case, Ctx, ValData};
+    use crate::syntax::pattern::Pat;
+    use crate::syntax::{ConHead, Ident, Loc};
+
+    #[test]
+    fn test_union() {
+        let s1 = Substitution::one(Term::from_dbi(0));
+        let s2 = Substitution::one(Term::from_dbi(1));
+
+        assert_eq!(
+            s1.union(s2),
+            Substitution::one(Term::from_dbi(0)).cons(Term::from_dbi(1))
+        );
+    }
+
+    #[test]
+    fn test_split_subst() {
+        let x = 1;
+        let t = Term::mat(
+            x,
+            vec![Case::new(
+                Pat::cons(
+                    ConHead::new(Ident::new("C", Loc::default()), 4),
+                    vec![Pat::Var(2), Pat::Var(1)],
+                ),
+                Term::from_dbi(3).apply(vec![
+                    Term::from_dbi(2),
+                    Term::from_dbi(1),
+                    Term::from_dbi(0),
+                ]),
+            )],
+        );
+        let Γ = Ctx(vec![
+            (2, Term::data(ValData::new(0, vec![]))),
+            (1, Term::data(ValData::new(1, vec![]))),
+            (0, Term::data(ValData::new(2, vec![]))),
+        ]
+        .into_iter()
+        .map(From::from)
+        .collect());
+        println!("Γ = {}", Γ);
+        println!("{}", t);
+
+        let Γ_new = Ctx(vec![
+            (2, Term::data(ValData::new(0, vec![]))),
+            (4, Term::data(ValData::new(3, vec![]))),
+            (3, Term::data(ValData::new(4, vec![]))),
+            (0, Term::data(ValData::new(2, vec![]))),
+        ]
+        .into_iter()
+        .map(From::from)
+        .collect());
+
+        println!("Γ' = {}", Γ_new);
+        let σ = build_subst(
+            vec![
+                (0, Term::meta(0, vec![])),
+                (1, Term::from_dbi(1)),
+                (2, Term::meta(2, vec![])),
+            ]
+            .into_iter()
+            .collect::<HashMap<_, _>>(),
+            3,
+        );
+        println!("σ = {}", σ);
+        let (ρ, τ) = σ.split(x);
+        println!("ρ = {}, τ = {}", ρ, τ);
+        let α = ρ.drop_by(1).lift_by(2).union(τ);
+        println!("ρ ⊎ τ = α = {}", α);
+        println!("{}", t.subst(α));
+        // Γ = (a : A) (b : B) (c : C)
+        //      2       1       0
+        // σ = { 0 := x, 1 := y, 2 := z }
+        // match b {
+        //     | C i j => ...
+        // }
+        // Γ' = (a : A) (i : Ba) (j : Bb) (c : C)
+        //       3       2        1        0
+        // σ -- BROKEN
+    }
 }

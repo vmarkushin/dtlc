@@ -61,10 +61,13 @@ pub enum Token<'input> {
     RParen,
     #[token(":=")]
     Assignment,
-
     #[error]
     #[regex(r"[ \t\n\f]+", logos::skip)]
     Whitespace,
+    #[regex(r"--.*", logos::skip)]
+    Comment,
+    #[regex(r"(?sm)\{-.*-\}", logos::skip)]
+    BlockComment,
 }
 
 impl<'a> Display for Token<'a> {
@@ -101,6 +104,8 @@ impl<'a> Display for Token<'a> {
             MetaIdent(s) => f.write_str(s),
             Bang                => f.write_str("!"),
             Question            => f.write_str("?"),
+            Comment             => Ok(()),
+            BlockComment        => Ok(()),
         }
     }
 }

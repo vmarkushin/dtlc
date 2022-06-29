@@ -25,18 +25,14 @@ impl<Ix, Term> Pat<Ix, Term> {
             _ => false,
         }
     }
-}
 
-impl<Ix, Term> Pat<Ix, Term> {
     pub(crate) fn is_cons(&self) -> bool {
         match self {
             Pat::Cons(_, _, _) => true,
             _ => false,
         }
     }
-}
 
-impl<Ix, Term> Pat<Ix, Term> {
     pub fn cons_surf(forced: bool, ident: Ident, args: Vec<Self>) -> Self {
         Self::Cons(forced, ConHead::new(ident, 0), args)
     }
@@ -47,6 +43,22 @@ impl<Ix, Term> Pat<Ix, Term> {
 
     pub fn is_var(&self) -> bool {
         matches!(self, Self::Var(_))
+    }
+
+    /// Pattern variables `PV(qs)`.By removing the forcing brackets, patterns p embed into terms
+    /// ps, and copatterns q into elimination qs, except for the absurd pattern.
+    /// [norell_phd](Ulf Norell's PhD, page. 35)
+    pub fn vars(&self) -> Vec<Ix>
+    where
+        Ix: Copy,
+    {
+        match self {
+            Pat::Var(ix) => vec![*ix],
+            Pat::Wildcard => vec![],
+            Pat::Absurd => vec![],
+            Pat::Cons(_, _, args) => args.iter().flat_map(|arg| arg.vars()).collect(),
+            Pat::Forced(..) => vec![],
+        }
     }
 }
 

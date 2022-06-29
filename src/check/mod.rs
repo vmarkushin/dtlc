@@ -1,6 +1,6 @@
 use crate::check::block::Blocked;
 use crate::syntax::abs::{Expr, Pat as PatA};
-use crate::syntax::core::{Elim, Pat, Term, Val};
+use crate::syntax::core::{Elim, Term, Val};
 use crate::syntax::{Ident, Loc, Universe, MI};
 
 pub use case::{CaseTree, Clause, Constraint, LshProblem};

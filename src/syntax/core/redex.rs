@@ -1,6 +1,7 @@
 use super::Term;
 use crate::syntax::core::subst::{PrimSubst, Substitution};
-use crate::syntax::core::term::{Lambda, TryIntoPat};
+use crate::syntax::core::term::{Lambda};
+use crate::syntax::core::{Case};
 use crate::syntax::core::{Closure, Elim, Func, Val, ValData};
 use crate::syntax::pattern::Pat;
 use crate::syntax::{Bind, Ident, DBI, GI};
@@ -70,8 +71,54 @@ impl Subst for Term {
             Term::Redex(Func::Lam(lam), id, args) => {
                 Term::Redex(Func::Lam(lam.subst(subst.clone())), id, args.subst(subst))
             }
-            Term::Match(_, _) => {
-                todo!()
+            Term::Match(x, mut cs) => {
+                let x_inst = subst.lookup(x);
+
+                /// Returns `Some(i, n)` for ith-matched case with n new variables bound, and None
+                /// for a stuck match.
+                fn try_match(x: Term, cs: &[Case]) -> Option<(usize, Rc<Substitution>)> {
+                    cs.into_iter()
+                        .enumerate()
+                        .filter_map(|(i, c)| c.pattern.match_term(&x).map(|j| (i, j)))
+                        .next()
+                }
+                /*
+                Given:
+                Γ = (a : A) (b : B) (c : C)
+                     2       1       0         -- DeBruijn indices
+                σ = { 0 := x, 1 := y, 2 := z }
+                self = match b {
+                    | C i j => t
+                }
+
+                1) On match:
+                   Γ' = (a : A) (i : Ba) (j : Bb) (c : C)
+                         3       2        1        0
+                   ρ ⊎ τ = σ
+                   σ' = ρ.drop(1).lift(n) ⊎ τ
+                   where `n` is number of newly bound variables in the pattern (2 in this case)
+                   result: tσ'
+
+                2) On stuck match:
+                   Perform ordinary substitution in each sub-term
+                */
+                match try_match(x_inst, &cs) {
+                    Some((i, sigma)) => {
+                        println!("matched {} with new {} vars", i, sigma);
+                        let (subst1, subst2) = subst.clone().split(x);
+                        println!("{} = {} ⊎ {}", subst, subst1, subst2);
+                        let rc = subst1.drop_by(1).union(sigma);
+                        let new_subst = rc.clone().union(subst2.clone());
+                        println!("new {} = {} ⊎ {} ", new_subst, rc, subst2);
+                        let matched_case = cs.remove(i);
+                        matched_case.body.subst(new_subst)
+                    }
+                    None => {
+                        todo!("stuck match")
+                        // let cs = cs.into_iter().map(|c| c.subst(subst.clone())).collect();
+                        // Term::Match(x, cs)
+                    }
+                }
             }
         }
     }

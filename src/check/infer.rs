@@ -1,8 +1,8 @@
 use crate::check::state::TypeCheckState;
-use crate::check::{Clause, Error, LshProblem, Result, Unify};
+use crate::check::{Clause, Error, LshProblem, Result};
 use crate::syntax::abs::{AppView, Expr};
 use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, Val, ValData};
-use crate::syntax::core::{Closure, Ctx};
+use crate::syntax::core::{Closure};
 use crate::syntax::{ConHead, Ident, Loc, Universe, GI};
 
 impl TypeCheckState {
@@ -306,7 +306,7 @@ impl TypeCheckState {
                 Ok(term.at(*info))
             }
             (Expr::Lam(_info, bind, ret), Val::Pi(bind_pi, ret_pi)) => {
-                let (bind_ty, bind_ty_ty) = self.infer((*bind.ty).as_ref().unwrap())?;
+                let (bind_ty, _bind_ty_ty) = self.infer((*bind.ty).as_ref().unwrap())?;
                 self.subtype(
                     &self.simplify(bind_ty.ast.clone())?,
                     &self.simplify(*bind_pi.ty.clone())?,

@@ -1,5 +1,3 @@
-use crate::check::{CaseTree, TypeCheckState};
-use crate::syntax::abs::Expr;
 use crate::syntax::core::redex::Subst;
 use crate::syntax::core::subst::Substitution;
 use crate::syntax::core::{DeBruijn, Tele};
@@ -8,6 +6,7 @@ use crate::syntax::{ConHead, Ident, Loc, Plicitness, Universe, DBI, GI, MI, UID}
 use derive_more::From;
 use itertools::Either;
 use itertools::Either::*;
+use std::rc::Rc;
 
 pub type Pat<Ix = DBI, T = Term> = pattern::Pat<Ix, T>;
 
@@ -78,6 +77,13 @@ pub struct Case {
     pub pattern: Pat,
     pub body: Term,
 }
+impl Subst for Case {
+    fn subst(mut self, subst: Rc<Substitution>) -> Case {
+        self.pattern = self.pattern.subst(subst.clone());
+        self.body = self.body.subst(subst);
+        self
+    }
+}
 
 impl Case {
     pub fn new(pattern: Pat, body: Term) -> Self {
@@ -119,13 +125,6 @@ impl Term {
     pub(crate) fn is_cons(&self) -> bool {
         match self {
             Term::Whnf(Val::Cons(..)) => true,
-            _ => false,
-        }
-    }
-
-    pub(crate) fn is_eta_cons(&self) -> bool {
-        match self {
-            Term::Whnf(Val::Cons(_, es)) if es.is_empty() => true,
             _ => false,
         }
     }

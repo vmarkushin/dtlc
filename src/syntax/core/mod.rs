@@ -53,6 +53,10 @@ pub type TeleS = [Bind];
 pub struct Ctx(pub Vec<Bind>);
 
 impl Ctx {
+    pub(crate) fn skipping(&self, n: usize) -> Self {
+        Self(self.0.iter().skip(n).cloned().collect())
+    }
+
     fn dbu_to_idx(&self, v: DBI) -> usize {
         self.0.len() - v - 1
     }

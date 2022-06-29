@@ -1,8 +1,9 @@
 use crate::check::meta::HasMeta;
 use crate::check::{Error, Result, TypeCheckState};
-use crate::syntax::abs::{Expr, Pat as PatA, Tele as TeleA};
+use crate::dsp;
+use crate::syntax::abs::{Expr, Pat as PatA};
 use crate::syntax::core::{
-    build_subst, Case, Ctx, DeBruijn, Decl, Pat, PrimSubst, Subst, Substitution, Tele, Term, Val,
+    Case, Ctx, DataInfo, DeBruijn, Decl, Pat, PrimSubst, Subst, Substitution, Term, Val,
 };
 use crate::syntax::{ConHead, DBI, UID};
 use itertools::{EitherOrBoth, Itertools};
@@ -82,64 +83,11 @@ impl Display for Constraint {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Constraints(pub Vec<Constraint>);
-
-impl Constraints {
-    pub fn new() -> Self {
-        Self(Vec::new())
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &Constraint> {
-        self.0.iter()
-    }
-
-    pub fn into_iter(self) -> impl Iterator<Item = Constraint> {
-        self.0.into_iter()
-    }
-}
-
-impl Iterator for Constraints {
-    type Item = Constraint;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.pop()
-    }
-}
-
-impl Subst for Constraints {
-    fn subst(self, subst: Rc<PrimSubst<Term>>) -> Self {
-        let mut prev_tele_len = 0;
-        Self(
-            self.0
-                .into_iter()
-                .enumerate()
-                .map(|(i, c)| {
-                    if i == 0 {
-                        let new_c = c.subst(subst.clone());
-                        prev_tele_len = new_c.ty.tele_len();
-                        new_c
-                    } else {
-                        c.subst(subst.clone().lift_by(prev_tele_len))
-                    }
-                })
-                .collect(),
-        )
-    }
-}
-
-impl Display for Constraints {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.iter().join(" "))
-    }
-}
-
 /// \[E\]q ~> rhs
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Clause {
     /// Constraints `[t /? p]`.
     constraints: Vec<Constraint>,
-    // constraints: Constraints,
     /// Patterns given by the user.
     user_pats: Vec<PatA>,
     /// Right-hand side
@@ -150,7 +98,7 @@ impl Display for Clause {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "| {} {}",
+            "  | {} {}",
             self.constraints.iter().join(" "),
             // self.constraints,
             self.user_pats.iter().join(" ")
@@ -172,13 +120,6 @@ impl Clause {
         }
     }
 }
-// A
-// x / C n m => CC n m
-// C i j / C n m => CC n m
-// Aa Ab
-// i / n, j / m => CC n m
-// 4   0  6   1
-// 0 => 4, 6 => 1
 
 impl Display for LshProblem {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -186,10 +127,10 @@ impl Display for LshProblem {
         for cls in &self.clauses {
             writeln!(f, "{}", cls)?;
         }
-        writeln!(f, "}}")?;
-        writeln!(f, "pats: {}", self.pats.iter().join(", "))?;
-        writeln!(f, "target: {}", self.target)?;
-        write!(f, "vars: {}", self.vars.iter().join(", "))
+        writeln!(f, "  }}")?;
+        writeln!(f, "  pats: {}", self.pats.iter().join(", "))?;
+        writeln!(f, "  target: {}", self.target)?;
+        write!(f, "  vars: {}", self.vars.iter().join(", "))
     }
 }
 
@@ -201,8 +142,6 @@ pub struct LshProblem {
     vars: Vec<DBI>,
     /// Core patterns being refined.
     pats: Vec<Pat>,
-    /// Ambient context.
-    // gamma: Ctx,
     /// Target type `rhs` should be equal too.
     target: Term,
 }
@@ -279,7 +218,7 @@ impl CaseTree {
                 debug_assert_eq!(i, j);
                 let cases = cases_a
                     .into_iter()
-                    .merge_join_by(cases_b, |(pat_a, ct_a), (pat_b, ct_b)| {
+                    .merge_join_by(cases_b, |(pat_a, _ct_a), (pat_b, _ct_b)| {
                         match (pat_a, pat_b) {
                             (Cons(forced_a, head_a, pats_a), Cons(forced_b, head_b, pats_b)) => {
                                 assert!(!forced_a && !forced_b);
@@ -297,7 +236,7 @@ impl CaseTree {
                             }
                             (Cons(..), Var(..)) => Ordering::Less,
                             (Var(..), Cons(..)) => Ordering::Greater,
-                            (a, b) => panic!("Can't merge patterns in a case tree"),
+                            (_, _) => panic!("Can't merge patterns in a case tree"),
                         }
                     })
                     .map(|choice| match choice {
@@ -305,7 +244,7 @@ impl CaseTree {
                             debug_assert_eq!(pat_a, pat_b);
                             let ct = match (ct_a, ct_b) {
                                 (Some(ct_a), Some(ct_b)) => Some(ct_a.merge(ct_b)),
-                                (a, None) => panic!(),
+                                (_, None) => panic!(),
                                 (None, _) => panic!(),
                             };
                             (pat_a, ct)
@@ -328,124 +267,6 @@ impl CaseTree {
     }
 }
 
-/*
-fn max (n : Nat) (m : Nat) : Nat => match n, m
-      | Z,        j       => j
-      | i,        Z       => i
-      | (S i),    (S j)   => S (max i j)
-
-Problem:
-(m : Nat) (n : Nat) |- P | max m n : Nat
-
-C1:
-E = [m /? Z, n /? j]
-Initial problem:
-    | [m /? Z],     [n /? j] => j
-
-Step 1 (split m):
-    | [Z     /? Z], [n /? j] => j
--x> | [(S p) /? Z], [n /? j] => j (remove this case, because of the absurdity pattern)
-Step 2 (subst j with n):
-    | [Z]           [n]      => n
-(no patterns left, finish)
-
-CT1 = match m
-      | Z => n
-
-C2:
-E = [m /? i, n /? Z]
-Initial problem:
-    | [m /? i],     [n /? Z]     => i
-
-Step 1 (split m):
-    | [Z   /? i],   [n /? Z] => i
-    | [S p /? i],   [n /? Z] => i
-Step 2 (subst i with Z and S p):
-    | [Z]           [n /? Z] => Z
-    | [S p]         [n /? Z] => (S p)
-Step 3 (split n):
-    | [Z]           [Z     /? Z] => Z
--x> | [Z]           [(S q) /? Z] => Z
-    | [S p]         [Z     /? Z] => (S p)
--x> | [S p]         [(S q) /? Z] => (S p)
-Step 4 (subst):
-    | [Z]           [Z]          => Z
-    | [S p]         [Z]          => (S p)
-
-CT2 = match m
-      | Z   => match n
-               | Z => Z
-      | S p => match n
-               | Z => (S p)
-
-C3:
-E = [m /? (S i), n /? (S j)]
-Initial problem:
-    | [m /? (S i)], [n /? (S j)] => S (max i j)
-
-Step 1 (split m):
--x> | [Z     /? (S i)], [n /? (S j)] => S (max i j)
-    | [(S p) /? (S i)], [n /? (S j)] => S (max i j)
-Simpl:
-    | [p /? i],         [n /? (S j)] => S (max i j)
-Step 2 (split n):
--x> | [p /? i],         [Z     /? (S j)] => S (max i j)
-    | [p /? i],         [(S q) /? (S j)] => S (max i j)
-Simpl:
-    | [p /? i],         [q /? j]         => S (max i j)
-Step 3 (subst):
-    | [p],              [q]              => S (max p q)
-
-CT3 = match m
-      | S p => match n
-               | S q => S (max p q)
-
-Merge:
-CT = match m
-     | Z   => n
-     | S p => match n
-              | Z   => (S p)
-              | S q => S (max p q)
-
-
-Example 2:
-fn non_triv (n : Nat) : Nat =>
-    match n
-        | (S (S i)) => S (S Z)
-        | (S i)     => S Z
-        | Z         => Z
-
-    | [n /? (S (S i))] => S (S Z)
-
- x  | [Z /? (S (S i))] => S (S Z)
-    | [S p /? (S (S i))] => S (S Z)
-
-    | [p /? (S i)] => S (S Z)
-
- x  | [Z /? (S i)] => S (S Z)
-    | [S pp /? (S i)] => S (S Z)
-
-    | [pp /? i] => S (S Z)
-
-CT1 = match n
-      | S p => match p
-               | S pp => S (S Z)
-
-CT2 = match n
-      | S p => S Z
-
-CT3 = match n
-      | Z => Z
-
-Final result:
-CT  = match n
-      | S p => match p
-               | S pp => S (S Z)
-               | p    => S Z
-      | Z => Z
-
-
-*/
 impl LshProblem {
     pub fn new(vars: Vec<DBI>, clauses: Vec<Clause>, target: Term) -> Self {
         LshProblem {
@@ -459,7 +280,6 @@ impl LshProblem {
     pub fn init(&mut self, tcs: &TypeCheckState) -> Result<()> {
         // Intro rule
         let vars_len = self.vars.len();
-        // let subst = Substitution::raise(vars_len);
         for clause in &mut self.clauses {
             let mut constraints = Vec::with_capacity(vars_len);
             let mut user_pats = clause.user_pats.iter();
@@ -477,7 +297,6 @@ impl LshProblem {
                     return Err(Error::TooFewPatterns);
                 }
             }
-            // self.clause.constraints = self.clause.constraints.clone().subst(subst.clone());
             clause.constraints.extend(constraints);
 
             // Remove handled user patterns
@@ -487,7 +306,6 @@ impl LshProblem {
                 return Err(Error::TooManyPatterns);
             }
         }
-        // self.pats = self.pats.clone().subst(subst);
         self.pats.extend((0..vars_len).rev().map(Pat::Var));
         Ok(())
     }
@@ -504,135 +322,16 @@ impl LshProblem {
             .enumerate()
             .find(|(_, x)| (x.pat.is_cons() || x.pat.is_abusrd()) && x.term.is_eta_var());
         if let Some((_ct_idx, ct)) = maybe_ct {
-            // Split rule
             match &ct.ty {
                 Term::Whnf(Val::Data(data)) => {
                     let x = ct.term.dbi_view().unwrap();
-                    let v_vec = &data.args;
+                    let data_args = &data.args;
                     match tcs.def(data.def).clone() {
                         Decl::Data(data) => {
                             if data.conses.is_empty() {
-                                if !ct.pat.is_abusrd() {
-                                    return Err(Error::ExpectedAbsurd(box ct.pat.clone()));
-                                }
-                                // SplitEmpty rule
-                                if clause_1.rhs.is_some() {
-                                    return Err(Error::UnexpectedRhs);
-                                }
-                                return Ok(CaseTree::Case(x, Vec::new()));
+                                return Self::split_empty(clause_1, ct, x);
                             }
-
-                            let mut ct_clauses = Vec::new();
-                            let conses = data
-                                .conses
-                                .iter()
-                                .map(|c| tcs.def(*c).as_cons().clone())
-                                .collect::<Vec<_>>();
-                            for (cons_ix, cons) in conses.into_iter().enumerate() {
-                                println!("\nSplitting constraint {} with {}", ct, cons.name);
-                                println!("Problem before: {}", &self);
-                                println!("Context before {}", tcs.gamma);
-
-                                // let delta = &data.params;
-                                let delta_i = &cons.params;
-                                let delta_tick_i = Ctx(delta_i.clone())
-                                    .subst(Substitution::parallel(v_vec.into_iter().cloned()))
-                                    .0;
-                                let mut gamma1 = tcs.gamma.clone();
-                                let (xx, mut gamma2) = gamma1.split(x);
-                                debug_assert_eq!(xx.ty, ct.ty);
-                                gamma1.extend(delta_tick_i.clone());
-                                let delta_tick_hat_i = (0..delta_tick_i.len())
-                                    .rev()
-                                    .map(|i| Term::from_dbi(i))
-                                    .collect::<Vec<_>>();
-                                let cons_gi = cons.data_gi + cons_ix + 1;
-                                let con_head = ConHead::new(cons.name.clone(), cons_gi);
-                                let alpha = Substitution::raise(delta_tick_i.len())
-                                    .cons(Term::cons(con_head.clone(), delta_tick_hat_i.clone()));
-                                gamma2 = gamma2.subst(alpha.clone());
-                                println!("α = {}", &alpha);
-                                let beta = alpha.clone().lift_by(gamma2.len());
-                                println!("β = {}", &beta);
-                                let target_new = self.target.clone().subst(beta.clone());
-                                let clauses_new = self
-                                    .clauses
-                                    .clone()
-                                    .into_iter()
-                                    .filter_map(|mut clause| {
-                                        clause.constraints =
-                                            clause.constraints.clone().subst(beta.clone());
-                                        print!("transforming clause: {}", &clause);
-                                        let mut constraints_new = Vec::new();
-                                        for cst in clause.constraints.clone() {
-                                            match (cst.term, cst.pat) {
-                                                (
-                                                    Term::Whnf(Val::Cons(
-                                                        con_head,
-                                                        delta_tick_hat_i,
-                                                    )),
-                                                    PatA::Cons(false, pat_head, es),
-                                                ) => {
-                                                    if con_head.cons_gi != pat_head.cons_gi {
-                                                        println!("  <-- removed");
-                                                        return None;
-                                                    }
-                                                    debug_assert_eq!(
-                                                        delta_tick_hat_i.len(),
-                                                        es.len()
-                                                    );
-                                                    constraints_new.extend(
-                                                        delta_tick_hat_i
-                                                            .into_iter()
-                                                            .zip(es.into_iter())
-                                                            .zip(delta_tick_i.iter().cloned())
-                                                            .map(|((delta_tick_hat_i, pat), bind)| {
-                                                                Constraint::new(
-                                                                    pat,
-                                                                    delta_tick_hat_i,
-                                                                    bind.ty,
-                                                                )
-                                                            }),
-                                                    );
-                                                }
-                                                (t, p) => constraints_new
-                                                    .push(Constraint::new(p, t, cst.ty)),
-                                            };
-                                        }
-                                        println!();
-
-                                        clause.constraints = constraints_new;
-                                        Some(clause)
-                                    })
-                                    .collect();
-                                let pats_new = self.pats.clone().subst(beta);
-                                let mut lhs_new = self.clone();
-                                lhs_new.target = target_new;
-                                lhs_new.pats = pats_new;
-                                lhs_new.clauses = clauses_new;
-                                gamma1.extend(gamma2);
-                                // let pat = lhs_new.pats[ct_idx].clone();
-                                let gamma_new = gamma1;
-                                let ct = tcs.under_ctx(gamma_new, |tcs| {
-                                    println!("Problem after: {}", &lhs_new);
-                                    println!("Context after {}", tcs.gamma);
-
-                                    lhs_new.check(tcs)
-                                })?;
-                                // TODO: use self.pats?
-                                let clause_pat = Pat::cons(
-                                    con_head,
-                                    delta_tick_hat_i
-                                        .into_iter()
-                                        .map(|x| match x {
-                                            Term::Whnf(Val::Var(i, _)) => Pat::Var(i),
-                                            _ => unreachable!(),
-                                        })
-                                        .collect(),
-                                );
-                                ct_clauses.push((clause_pat, Some(ct)));
-                            }
-                            return Ok(CaseTree::Case(x, ct_clauses));
+                            self.split_con(tcs, ct, x, data_args, data)
                         }
                         _ => unreachable!("Data type definition expected"),
                     }
@@ -640,30 +339,171 @@ impl LshProblem {
                 _ => unreachable!("Attempt to split on non-data type"),
             }
         } else {
-            // Done rule
             if clause_1
                 .constraints
                 .iter()
                 .all(|x| x.pat.is_var() && (x.term.is_eta_var() || x.term.is_cons()))
             {
-                let refined_user_pats = Rc::new(
-                    clause_1
-                        .constraints
-                        .iter()
-                        .map(|c| c.gen_abs_subst(tcs))
-                        .collect::<HashMap<_, _>>(),
-                );
-                let mut rhs1 = clause_1.rhs.clone().unwrap();
-                println!("rhs = {}", rhs1);
-                rhs1.subst_abs(refined_user_pats.clone());
-                println!("rhs_refined = {}", rhs1);
-
-                let checked_rhs = tcs.check(&rhs1, &tcs.simplify(self.target)?)?.ast;
-                return Ok(CaseTree::Leaf(checked_rhs));
+                Self::done(tcs, clause_1, self.target)
             } else {
-                panic!("wtf?");
+                unimplemented!("{}", clause_1.constraints.iter().join(", "));
             }
         }
+    }
+
+    fn split_empty(clause_1: &Clause, ct: &Constraint, x: DBI) -> Result<CaseTree> {
+        if !ct.pat.is_abusrd() {
+            return Err(Error::ExpectedAbsurd(box ct.pat.clone()));
+        }
+        if clause_1.rhs.is_some() {
+            return Err(Error::UnexpectedRhs);
+        }
+        return Ok(CaseTree::Case(x, Vec::new()));
+    }
+
+    fn split_con(
+        &self,
+        tcs: &mut TypeCheckState,
+        ct: &Constraint,
+        x: DBI,
+        data_args: &Vec<Term>,
+        data: DataInfo,
+    ) -> Result<CaseTree> {
+        let mut ct_clauses = Vec::new();
+        let conses = data
+            .conses
+            .iter()
+            .map(|c| tcs.def(*c).as_cons().clone())
+            .collect::<Vec<_>>();
+        for (cons_ix, cons) in conses.into_iter().enumerate() {
+            debug!("\nSplitting constraint {} with {}", ct, cons.name);
+            debug!("Problem before: {}", &self);
+            debug!("Context before {}", tcs.gamma);
+
+            let delta_len = data_args.len();
+            let delta_i = cons.signature.clone().tele_view().0;
+            let delta_tick_i = Ctx(delta_i.clone());
+            let mut gamma1 = tcs.gamma.clone();
+            let (xx, mut gamma2) = gamma1.split(dsp!(x));
+            debug_assert_eq!(xx.ty, ct.ty);
+            let mut delta_tick_hat_i =
+                (data_args.clone()).subst(Substitution::raise(cons.params.len()));
+            delta_tick_hat_i.extend((0..cons.params.len()).rev().map(|i| Term::from_dbi(i)));
+            let cons_gi = cons.data_gi + cons_ix + 1;
+            let con_head = ConHead::new(cons.name.clone(), cons_gi);
+            let alpha = Substitution::raise(cons.params.len())
+                .cons(Term::cons(con_head.clone(), delta_tick_hat_i.clone()));
+            gamma2 = gamma2.subst(alpha.clone());
+
+            debug!("α = {}", &alpha);
+            let beta = alpha.clone().lift_by(gamma2.len());
+            debug!("β = {}", &beta);
+            let target_new = self.target.clone().subst(beta.clone());
+            debug!("Γ1 = {}", gamma1);
+            let clauses_new = self
+                .clauses
+                .clone()
+                .into_iter()
+                .filter_map(|mut clause| {
+                    clause.constraints = clause.constraints.clone().subst(beta.clone());
+                    debug!("transforming clause: {}", &clause);
+                    let mut constraints_new = Vec::new();
+                    for cst in clause.constraints.clone() {
+                        match (cst.term, cst.pat) {
+                            (
+                                Term::Whnf(Val::Cons(con_head, delta_tick_hat_i)),
+                                PatA::Cons(false, pat_head, es),
+                            ) => {
+                                if con_head.cons_gi != pat_head.cons_gi {
+                                    debug!("  <-- removed");
+                                    return None;
+                                }
+                                debug_assert_eq!(delta_tick_hat_i.len(), es.len());
+                                let mut delta_tick_i_renamed =
+                                    delta_tick_i.clone().skipping(delta_len);
+                                delta_tick_i_renamed.iter_mut().zip(es.iter()).for_each(
+                                    |(x, y)| {
+                                        x.name = match y {
+                                            PatA::Var(i) => *i,
+                                            _ => panic!(),
+                                        };
+                                    },
+                                );
+
+                                gamma1.extend(delta_tick_i_renamed);
+
+                                constraints_new.extend(
+                                    delta_tick_hat_i
+                                        .into_iter()
+                                        .zip(es)
+                                        .zip(delta_tick_i.iter().cloned())
+                                        .map(|((delta_tick_hat_i, pat), bind)| {
+                                            Constraint::new(pat, delta_tick_hat_i, bind.ty)
+                                        }),
+                                );
+                            }
+                            v @ (Term::Whnf(Val::Cons(..)), PatA::Var(_)) => {
+                                let delta_tick_i_renamed = delta_tick_i.clone().skipping(delta_len);
+                                gamma1.extend(dsp!(delta_tick_i_renamed));
+
+                                constraints_new.push(Constraint::new(v.1, v.0, cst.ty));
+                            }
+                            (t, p) => constraints_new.push(Constraint::new(p, t, cst.ty)),
+                        };
+                    }
+                    debug!("");
+
+                    clause.constraints = constraints_new;
+                    Some(clause)
+                })
+                .collect();
+            debug!("Γ1Δ'i = {}", gamma1);
+
+            let pats_new = self.pats.clone().subst(beta);
+            let mut lhs_new = self.clone();
+            lhs_new.target = target_new;
+            lhs_new.pats = pats_new;
+            lhs_new.clauses = clauses_new;
+            gamma1.extend(gamma2);
+            let gamma_new = gamma1;
+            let ct = tcs.under_ctx(gamma_new, |tcs| {
+                debug!("Problem after: {}", &lhs_new);
+                debug!("Context after {}", tcs.gamma);
+                lhs_new.check(tcs)
+            })?;
+            // TODO: use self.pats?
+            let clause_pat = Pat::cons(
+                con_head,
+                delta_tick_hat_i
+                    .into_iter()
+                    .map(|x| match x {
+                        Term::Whnf(Val::Var(i, _)) => Pat::Var(i),
+                        _ => unreachable!(),
+                    })
+                    .collect(),
+            );
+            ct_clauses.push((clause_pat, Some(ct)));
+        }
+        return Ok(CaseTree::Case(x, ct_clauses));
+    }
+
+    fn done(tcs: &mut TypeCheckState, clause_1: &Clause, target: Term) -> Result<CaseTree> {
+        let refined_user_pats = Rc::new(
+            clause_1
+                .constraints
+                .iter()
+                .map(|c| c.gen_abs_subst(tcs))
+                .collect::<HashMap<_, _>>(),
+        );
+
+        let mut rhs1 = clause_1.rhs.clone().unwrap();
+        debug!("rhs = {}", rhs1);
+        debug!("new abs-subst = {:?}", refined_user_pats);
+        rhs1.subst_abs(refined_user_pats.clone());
+        debug!("rhs refined = {}", rhs1);
+
+        let checked_rhs = tcs.check(&rhs1, &tcs.simplify(target)?)?.ast;
+        return Ok(CaseTree::Leaf(checked_rhs));
     }
 }
 
@@ -672,11 +512,11 @@ mod tests {
     use super::*;
     use crate::check::Unify;
     use crate::parser::Parser;
-    use crate::syntax::core::{Elim, ValData};
+    use crate::pct;
+    use crate::syntax::core::{Elim, Func, ValData};
     use crate::syntax::desugar::desugar_prog;
     use crate::syntax::Plicitness::Explicit;
     use crate::syntax::{Bind, ConHead, Ident, Loc};
-    use crate::{pct, typeck};
 
     #[test]
     fn test_fail_build_case_tree() -> eyre::Result<()> {
@@ -684,18 +524,18 @@ mod tests {
         let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
-        let mut des = desugar_prog(p.parse_prog(
+        let des = desugar_prog(p.parse_prog(
             r#"
-        data Nat : Type
-            | zero
-            | suc Nat
+         data Nat : Type
+             | zero
+             | suc Nat
 
-        data Empty : Type
+         data Empty : Type
 
-        fn absurd (x : Empty) : Nat := match x {
-            | !, zero
-        }
-       "#,
+         fn absurd (x : Empty) : Nat := match x {
+             | !, zero
+         }
+        "#,
         )?)?;
 
         assert_eq!(
@@ -705,18 +545,18 @@ mod tests {
 
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
-        let mut des = desugar_prog(p.parse_prog(
+        let des = desugar_prog(p.parse_prog(
             r#"
-        data Nat : Type
-            | zero
-            | suc Nat
+         data Nat : Type
+             | zero
+             | suc Nat
 
-        data Empty : Type
+         data Empty : Type
 
-        fn f (x : Nat) (y : Nat) : Nat := match x, y {
-            | x => x
-        }
-       "#,
+         fn f (x : Nat) (y : Nat) : Nat := match x, y {
+             | x => x
+         }
+        "#,
         )?)?;
 
         assert_eq!(
@@ -726,7 +566,7 @@ mod tests {
 
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
-        let mut des = desugar_prog(p.parse_prog(
+        let des = desugar_prog(p.parse_prog(
             r#"
         data Nat : Type
             | zero
@@ -758,7 +598,7 @@ mod tests {
         let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
-        let mut des = desugar_prog(p.parse_prog(
+        let des = desugar_prog(p.parse_prog(
             r#"
         data Nat : Type
             | zero
@@ -767,7 +607,7 @@ mod tests {
         fn max (x : Nat) (y : Nat) : Nat := match x, y {
               | x,        zero    => x
               | zero,     y       => y
-              | (suc x),  (suc y) => suc x
+              | (suc x),  (suc y) => suc (max x y)
         }
 
         data Empty : Type
@@ -793,7 +633,7 @@ mod tests {
          | zero => @0
          | (suc 0) => match 1 {
              | zero => (suc @0)
-             | (suc 0) => (suc @1)
+             | (suc 0) => (suc @1 @0)
             }
         }
          */
@@ -875,7 +715,20 @@ mod tests {
                                         },
                                         cons_gi: 2,
                                     },
-                                    vec![Term::from_dbi(1)],
+                                    vec![Redex(
+                                        Func::Index(3),
+                                        Ident {
+                                            text: "max".to_owned(),
+                                            loc: Loc {
+                                                start: 244,
+                                                end: 247,
+                                            },
+                                        },
+                                        vec![
+                                            Elim::App(box Term::from_dbi(1)),
+                                            Elim::App(box Term::from_dbi(0)),
+                                        ],
+                                    )],
                                 ),
                             },
                         ],
@@ -900,7 +753,137 @@ mod tests {
     }
 
     #[test]
-    fn test_eval_case_tree() -> eyre::Result<()> {
+    fn test_build_case_tree_pairs() -> eyre::Result<()> {
+        use crate::syntax::pattern::Pat::*;
+
+        let _ = env_logger::try_init();
+        let mut p = Parser::default();
+        let mut env = TypeCheckState::default();
+        env.indentation_size(2);
+        let des = desugar_prog(p.parse_prog(
+            r#"
+        data Nat : Type
+            | zero
+            | suc Nat
+
+        data Pair (A : Type) (B : Type) : Type1
+            | mkPair A B
+
+        fn proj1 (A : Type) (B : Type) (x : Pair A B) : A := match x {
+            | (mkPair t1 t2 a b) => a
+        }
+
+        fn proj2 (A : Type) (B : Type) (x : Pair A B) : B := match x {
+            | (mkPair t1 t2 a b) => b
+        }
+       "#,
+        )?)?;
+        env.check_prog(des.clone())?;
+
+        let ct = env
+            .def(*des.decls_map.get("proj1").unwrap())
+            .as_func()
+            .body
+            .clone()
+            .unwrap()
+            .tele_view()
+            .1;
+        let cte = Term::mat(
+            0,
+            [Case {
+                pattern: Cons(
+                    false,
+                    ConHead {
+                        name: Ident {
+                            text: "mkPair".to_owned(),
+                            loc: Loc {
+                                start: 129,
+                                end: 135,
+                            },
+                        },
+                        cons_gi: 4,
+                    },
+                    vec![
+                        Pat::from_dbi(3),
+                        Pat::from_dbi(2),
+                        Pat::from_dbi(1),
+                        Pat::from_dbi(0),
+                    ],
+                ),
+                body: Term::from_dbi(1),
+            }],
+        );
+        assert_eq!(ct, cte);
+
+        let ct = env
+            .def(*des.decls_map.get("proj2").unwrap())
+            .as_func()
+            .body
+            .clone()
+            .unwrap()
+            .tele_view()
+            .1;
+        let cte = Term::mat(
+            0,
+            [Case {
+                pattern: Cons(
+                    false,
+                    ConHead {
+                        name: Ident {
+                            text: "mkPair".to_owned(),
+                            loc: Loc {
+                                start: 129,
+                                end: 135,
+                            },
+                        },
+                        cons_gi: 4,
+                    },
+                    vec![
+                        Pat::from_dbi(3),
+                        Pat::from_dbi(2),
+                        Pat::from_dbi(1),
+                        Pat::from_dbi(0),
+                    ],
+                ),
+                body: Term::from_dbi(0),
+            }],
+        );
+        assert_eq!(ct, cte);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_eval_case_tree_1() -> eyre::Result<()> {
+        let _ = env_logger::try_init();
+        let mut p = Parser::default();
+        let mut env = TypeCheckState::default();
+        env.indentation_size(2);
+        let mut des = desugar_prog(p.parse_prog(
+            r#"
+        data Nat : Type
+            | zero
+            | suc Nat
+
+        data Single : Type
+            | cons Nat Nat
+
+        fn foo (s : Single) : Nat := match s {
+              | (cons n m) => n
+        }
+
+        fn main : Nat := foo (cons (suc zero) zero)
+       "#,
+        )?)?;
+        env.check_prog(des.clone())?;
+        let val = pct!(p, des, env, "main");
+        let val1 = pct!(p, des, env, "(suc zero)");
+        Val::unify(&mut env, &val1, &val)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_eval_case_tree_2() -> eyre::Result<()> {
         let _ = env_logger::try_init();
         let mut p = Parser::default();
         let mut env = TypeCheckState::default();
@@ -921,9 +904,83 @@ mod tests {
        "#,
         )?)?;
         env.check_prog(des.clone())?;
+        let ct = env
+            .def(*des.decls_map.get("max").unwrap())
+            .as_func()
+            .body
+            .clone()
+            .unwrap()
+            .tele_view()
+            .1;
+        println!("{}", ct);
+        /*
+        match 0 { -- x
+         | zero => @0
+         | (suc 0) => match 1 { -- y
+             | zero => (suc @0)
+             | (suc 0) => (suc (max @1 @1)) -- suc (max @1 @1)
+            }
+        }
+         */
         let val = pct!(p, des, env, "main");
         let val1 = pct!(p, des, env, "(suc (suc zero))");
-        Val::unify(&mut env, &val, &val1)?;
+        Val::unify(&mut env, &val1, &val)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_eval_case_tree_3() -> eyre::Result<()> {
+        let _ = env_logger::try_init();
+        let mut p = Parser::default();
+        let mut env = TypeCheckState::default();
+        env.indentation_size(2);
+        let mut des = desugar_prog(p.parse_prog(
+            r#"
+        data Sigma (A : Type) (B : A -> Type) : Type1
+            | mkSigma (x : A) (y : B x)
+
+        data Nat : Type
+            | zero
+            | suc Nat
+
+        data Pair (A : Type) (B : Type) : Type1
+            | mkPair A B
+
+        fn proj1 (A : Type) (B : Type) (x : Pair A B) : A := match x {
+            | (mkPair t1 t2 a b) => a
+        }
+
+        fn proj2 (A : Type) (B : Type) (x : Pair A B) : B := match x {
+            | (mkPair t1 t2 a b) => b
+        }
+
+        fn pair := mkPair Nat Nat (suc zero) zero
+        fn tst1 : Nat := proj1 Nat Nat (mkPair Nat Nat (suc zero) zero)
+        fn tst2 : Nat := proj2 Nat Nat (mkPair Nat Nat (suc zero) zero)
+       "#,
+        )?)?;
+        env.check_prog(des.clone())?;
+        let ct = env
+            .def(*des.decls_map.get("tst1").unwrap())
+            .as_func()
+            .body
+            .clone()
+            .unwrap()
+            .tele_view()
+            .1;
+        println!("{}", ct);
+        /*
+        match 0 { -- x
+         | zero => @0
+         | (suc 0) => match 1 { -- y
+             | zero => (suc @0)
+             | (suc 0) => (suc (max @1 @1)) -- suc (max @1 @1)
+            }
+        }
+        */
+        let val = pct!(p, des, env, "tst1");
+        let val1 = pct!(p, des, env, "(suc zero)");
+        Val::unify(&mut env, &val1, &val)?;
         Ok(())
     }
 
@@ -974,9 +1031,9 @@ mod tests {
             print!("{}, ", b);
         }
         println!();
-        let b = gamma.remove(1);
+        let _b = gamma.remove(1);
         let mut gamma1 = gamma.clone();
-        let mut gamma2 = gamma1.split_off(1);
+        let gamma2 = gamma1.split_off(1);
         let delta = vec![
             Bind::new(
                 Explicit,

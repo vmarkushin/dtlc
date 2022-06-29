@@ -124,6 +124,17 @@ pub struct Bind<T> {
     pub loc: Loc,
 }
 
+impl<T> From<(UID, T)> for Bind<T> {
+    fn from((name, ty): (UID, T)) -> Self {
+        Bind {
+            licit: Plicitness::Explicit,
+            name,
+            ty,
+            loc: Loc::default(),
+        }
+    }
+}
+
 impl<T: Display> Display for Bind<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if self.licit == Plicitness::Implicit {
@@ -178,12 +189,18 @@ impl<T> Bind<Box<T>> {
 
 /// Constructor information.
 /// [Agda](https://hackage.haskell.org/package/Agda-2.6.0.1/docs/src/Agda.Syntax.Internal.html#ConHead).
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, Eq, Clone)]
 pub struct ConHead {
     /// Constructor name.
     pub name: Ident,
     /// Index of the constructor.
     pub cons_gi: GI,
+}
+
+impl PartialEq for ConHead {
+    fn eq(&self, other: &Self) -> bool {
+        self.cons_gi == other.cons_gi
+    }
 }
 
 impl ConHead {

@@ -77,7 +77,12 @@ impl Unify for Term {
             (Redex(Func::Lam(_i), _, a), Redex(Func::Lam(_j), _, b)) if a.len() == b.len() => {
                 todo!("lambda reduction unification")
             }
-            (a, b) => Err(Error::DifferentTerm(box a.clone(), box b.clone())),
+            (a, b) => {
+                let a_simp = tcs.simplify(a.clone())?;
+                let b_simp = tcs.simplify(b.clone())?;
+                Val::unify(tcs, &a_simp, &b_simp)
+                // Err(Error::DifferentTerm(box a.clone(), box b.clone()))
+            }
         }
     }
 }

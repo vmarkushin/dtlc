@@ -1,3 +1,7 @@
+use crate::syntax::core::{Pat, Substitution, Term, Val};
+use itertools::Itertools;
+use std::rc::Rc;
+
 /// `Simplification` in
 /// [Agda](https://hackage.haskell.org/package/Agda-2.6.0.1/docs/src/Agda.TypeChecking.Monad.Base.html#Simplification).
 #[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Debug, Hash)]
@@ -38,6 +42,28 @@ impl std::ops::Add for Simpl {
         match self {
             Simpl::Yes => Simpl::Yes,
             Simpl::No => rhs,
+        }
+    }
+}
+
+impl Pat {
+    /// Fig. 6 in Norell's PhD.
+    pub(crate) fn match_term(&self, t: &Term) -> Option<Rc<Substitution>> {
+        println!("match_term [{}/{}]", self, t);
+        match (t, self) {
+            (v, Pat::Var(_)) => Some(Substitution::one(v.clone())),
+            (_, Pat::Forced(..)) => Some(Substitution::id()),
+            (Term::Whnf(Val::Cons(con_head, us)), Pat::Cons(forced, pat_head, ps)) => {
+                if !*forced && con_head != pat_head {
+                    return None;
+                }
+                debug_assert_eq!(us.len(), ps.len());
+                us.into_iter()
+                    .zip(ps.into_iter())
+                    .map(|(u, p)| p.match_term(u))
+                    .fold_options(Substitution::id(), Substitution::union)
+            }
+            (_u, _p) => None,
         }
     }
 }

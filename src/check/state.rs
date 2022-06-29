@@ -1,9 +1,9 @@
 use crate::check::meta::MetaContext;
 use crate::syntax::core::{
-    Bind, Ctx, DeBruijn, Decl, Indentation, Subst, Substitution, Tele, Term, Val,
+    Bind, Ctx, DeBruijn, Decl, Indentation, Subst, Substitution, Term, Val,
 };
 use crate::syntax::{DBI, GI, UID};
-use std::fmt::{Display, Error, Formatter, Write};
+use std::fmt::{Display};
 use std::mem::swap;
 
 /// Typing context.
