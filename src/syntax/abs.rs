@@ -195,7 +195,7 @@ impl Expr {
             Expr::Cons(_, _) => {}
             Expr::Proj(_, _) => {}
             Expr::Meta(_, _) => {}
-            Expr::Match(xs, cs) => {
+            Expr::Match(Match { xs, cases: cs }) => {
                 xs.iter_mut().for_each(|x| x.subst_abs(subst.clone()));
                 cs.iter_mut().for_each(|x| x.subst_abs(subst.clone()));
             }
@@ -235,6 +235,33 @@ impl Display for Case {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Match {
+    pub xs: Vec1<Expr>,
+    pub cases: Vec<Case>,
+}
+
+impl Match {
+    pub fn loc(&self) -> Loc {
+        self.xs.last().loc()
+    }
+
+    pub fn new(xs: Vec1<Expr>, cases: Vec<Case>) -> Self {
+        Self { xs, cases }
+    }
+}
+
+impl Display for Match {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "match {} {{ {} }}",
+            self.xs.iter().join(", "),
+            self.cases.iter().join("")
+        )
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expr {
     Var(Ident, UID),
     Lam(Loc, Bind<Box<Option<Self>>>, Box<Self>),
@@ -246,7 +273,7 @@ pub enum Expr {
     Cons(Ident, GI),
     Proj(Ident, GI),
     Meta(Ident, MI),
-    Match(Vec1<Self>, Vec<Case>),
+    Match(Match),
 }
 
 impl Expr {
@@ -310,7 +337,7 @@ impl Expr {
             | Cons(ident, ..)
             | Def(ident, ..)
             | Meta(ident, ..) => ident.loc,
-            Match(e, _) => e.last().loc(),
+            Match(m) => m.loc(),
         }
     }
 
@@ -424,13 +451,8 @@ impl Display for Expr {
             Cons(ident, _) => write!(f, "{}", ident),
             Proj(ident, _) => write!(f, "{}", ident),
             Meta(ident, _) => write!(f, "?{}", ident),
-            Match(x, cs) => {
-                write!(
-                    f,
-                    "match {} {{ {} }}",
-                    x.iter().join(", "),
-                    cs.iter().join("")
-                )
+            Match(m) => {
+                write!(f, "{}", m)
             }
         }
     }

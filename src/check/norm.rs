@@ -18,10 +18,11 @@ fn elims_to_terms(elims: Vec<Elim>) -> Result<Vec<Term>> {
 
 /// Returns `Some(i, n)` for ith-matched case with n new variables bound, and None
 /// for a stuck match.
-pub fn try_match(x: &Term, cs: &[Case]) -> Option<(usize, Rc<Substitution>)> {
+pub fn try_match(x: &Val, cs: &[Case]) -> Option<(usize, Rc<Substitution>)> {
+    let term = x.clone().into();
     cs.into_iter()
         .enumerate()
-        .filter_map(|(i, c)| c.pattern.match_term(x).map(|j| (i, j)))
+        .filter_map(|(i, c)| c.pattern.match_term(&term).map(|j| (i, j)))
         .next()
 }
 
@@ -65,20 +66,17 @@ impl TypeCheckState {
                     self.simplify(*term)
                 }
             },
-            Term::Match(x, mut cs) => {
-                match try_match(&x, &cs) {
-                    Some((i, sigma)) => {
-                        debug!("matched {} with new {} vars", i, sigma);
-                        let matched_case = cs.remove(i);
-                        self.simplify(matched_case.body.subst(sigma))
-                    }
-                    None => {
-                        // Ok(Term::Match(x, cs))
-                        // TODO: fix error
-                        Err(Error::Blocked(box Blocked::new(Stuck::MissingClauses, *x)))
-                    }
+            Term::Match(x, mut cs) => match try_match(&self.simplify(*x.clone())?, &cs) {
+                Some((i, sigma)) => {
+                    debug!("matched {} with new {} vars", i, sigma);
+                    let matched_case = cs.remove(i);
+                    self.simplify(matched_case.body.subst(sigma))
                 }
-            }
+                None => Err(Error::Blocked(box Blocked::new(
+                    Stuck::OnElim(Elim::App(x.clone())),
+                    Term::Match(x, cs),
+                ))),
+            },
         }
     }
 

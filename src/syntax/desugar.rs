@@ -1,6 +1,6 @@
 use crate::syntax::abs::{
     Bind, Case as CaseA, ConsInfo as ConsInfoA, DataInfo as DataInfoA, Decl as DeclA,
-    Expr as ExprA, Func as FuncA, Pat as PatA, Tele as TeleA,
+    Expr as ExprA, Func as FuncA, Match, Pat as PatA, Tele as TeleA,
 };
 use crate::syntax::surf::{Case, Data, Decl, Expr, Func, NamedTele, Param, Pat};
 use crate::syntax::{ConHead, Ident, Plicitness, GI, MI, UID};
@@ -284,7 +284,10 @@ impl DesugarState {
                     .into_iter()
                     .map(|case| self.desugar_case(case))
                     .collect::<Result<Vec<_>>>()?;
-                Ok(ExprA::Match(Vec1::try_from_vec(exprs).unwrap(), cases))
+                Ok(ExprA::Match(Match::new(
+                    Vec1::try_from_vec(exprs).unwrap(),
+                    cases,
+                )))
             }
         }
     }
@@ -409,7 +412,7 @@ mod tests {
     use crate::syntax::abs::Expr::Def;
     use crate::syntax::desugar::desugar_prog;
     use crate::syntax::Plicitness::Explicit;
-    use crate::syntax::{Ident, Loc, Universe};
+    use crate::syntax::{abs, Ident, Loc, Universe};
     use itertools::Itertools;
     use vec1::{vec1, Vec1};
 
@@ -493,7 +496,7 @@ fn foo (p : Nat) := match p {
                                 )),
                                 loc: Loc::new(46, 47)
                             },
-                            box Match(
+                            box Match(abs::Match::new(
                                 vec1![Var(
                                     Ident {
                                         text: "p".to_owned(),
@@ -635,7 +638,7 @@ fn foo (p : Nat) := match p {
                                         ))
                                     }
                                 ]
-                            )
+                            ))
                         )),
                         Some(Pi(
                             Loc::new(50, 44),

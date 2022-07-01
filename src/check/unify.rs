@@ -2,7 +2,7 @@ use crate::check::meta::MetaSol;
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
 use crate::syntax::core::{
-    Closure, Elim, FoldVal, Func, Lambda, Subst, Substitution, Term, Val, ValData,
+    Case, Closure, Elim, FoldVal, Func, Lambda, Pat, Subst, Substitution, Term, Val, ValData,
 };
 use crate::syntax::{GI, MI};
 use std::cmp::Ordering;
@@ -14,9 +14,9 @@ impl TypeCheckState {
         }
         let depth_ws = self.tc_depth_ws();
         self.tc_deeper();
-        debug!("{}Checking {} <= {}", depth_ws, sub, sup);
+        debug!("{}Checking subtyping {} <= {}", depth_ws, sub, sup);
         self.subtype_impl(sub, sup).map_err(|e| {
-            debug!("{}Subtyping {} <= {}", depth_ws, sub, sup);
+            debug!("{}Error checking subtyping {} <= {}", depth_ws, sub, sup);
             e
         })?;
         if self.current_checking_def.is_some() {
@@ -65,6 +65,32 @@ impl<T: Unify> Unify for Box<T> {
     }
 }
 
+impl Unify for Pat {
+    fn unify(tcs: &mut TypeCheckState, left: &Self, right: &Self) -> Result<()> {
+        match (left, right) {
+            (Pat::Var(x), Pat::Var(y)) if x == y => Ok(()),
+            (Pat::Cons(forced1, a_head, a_args), Pat::Cons(forced2, b_head, b_args))
+                if forced1 == forced2 && a_head.cons_gi == b_head.cons_gi =>
+            {
+                Unify::unify(tcs, a_args.as_slice(), b_args.as_slice())
+            }
+            (Pat::Forced(x), Pat::Forced(y)) => Unify::unify(tcs, x, y),
+            (Pat::Absurd, Pat::Absurd) => Ok(()),
+            (Pat::Wildcard, Pat::Wildcard) => Ok(()),
+            (Pat::Wildcard, Pat::Var(..)) => Ok(()),
+            (Pat::Var(..), Pat::Wildcard) => Ok(()),
+            (a, b) => Err(Error::DifferentPat(box a.clone(), box b.clone())),
+        }
+    }
+}
+
+impl Unify for Case {
+    fn unify(tcs: &mut TypeCheckState, left: &Self, right: &Self) -> Result<()> {
+        Unify::unify(tcs, &left.pattern, &right.pattern)?;
+        Unify::unify(tcs, &left.body, &right.body)
+    }
+}
+
 impl Unify for Term {
     fn unify(tcs: &mut TypeCheckState, left: &Self, right: &Self) -> Result<()> {
         use Term::*;
@@ -76,6 +102,10 @@ impl Unify for Term {
             }
             (Redex(Func::Lam(_i), _, a), Redex(Func::Lam(_j), _, b)) if a.len() == b.len() => {
                 todo!("lambda reduction unification")
+            }
+            (Match(x, cs1), Match(y, cs2)) => {
+                Unify::unify(tcs, x, y)?;
+                Unify::unify(tcs, cs1.as_slice(), cs2.as_slice())
             }
             (a, b) => {
                 let a_simp = tcs.simplify(a.clone())?;

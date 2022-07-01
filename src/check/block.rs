@@ -71,6 +71,13 @@ impl Stuck {
             _ => None,
         }
     }
+
+    pub fn is_elim(&self) -> bool {
+        match self {
+            Stuck::OnElim(_) => true,
+            _ => false,
+        }
+    }
 }
 
 /// Something where a meta variable may block reduction.
@@ -96,6 +103,10 @@ impl<T> Blocked<T> {
         self.stuck.is_meta()
     }
 
+    pub fn is_elim(&self) -> bool {
+        self.stuck.is_elim()
+    }
+
     pub fn new(stuck: Stuck, anyway: T) -> Self {
         Self { stuck, anyway }
     }
@@ -107,10 +118,6 @@ impl<T> Blocked<T> {
 
 impl<T: Display> Display for Blocked<T> {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
-        write!(
-            f,
-            "I'm not sure if I should give `{}` because I'm {}.",
-            self.anyway, self.stuck
-        )
+        write!(f, "{} in term `{}`", self.stuck, self.anyway,)
     }
 }

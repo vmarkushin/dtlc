@@ -75,63 +75,70 @@ impl Subst for Term {
             }
             Term::Match(x, mut cs) => {
                 let x_inst = x.clone().subst(subst.clone());
-                if let Term::Whnf(Val::Var(x, _es)) = &x_inst {
-                    let (subst1, subst2) = subst.clone().split(*x);
-                    debug!("{} = {} ⊎ {}", subst, subst1, subst2);
-                    let rc = subst1.drop_by(1);
-                    let new_subst = rc.clone().union(subst2.clone());
-                    debug!("new {} = {} ⊎ {} ", new_subst, rc, subst2);
-                    let cs = cs.into_iter().map(|c| c.subst(new_subst.clone())).collect();
-                    Term::Match(box x_inst, cs)
-                } else {
-                    /*
-                    Given:
-                    Γ = (a : A) (b : B) (c : C)
-                         2       1       0         -- DeBruijn indices
-                    σ = { 0 := x, 1 := y, 2 := z }
-                    self = match b {
-                        | C i j => t
+                match &x_inst {
+                    Term::Whnf(Val::Var(x, _es)) => {
+                        let (subst1, subst2) = subst.clone().split(*x);
+                        debug!("{} = {} ⊎ {}", subst, subst1, subst2);
+                        let rc = subst1.drop_by(1);
+                        let new_subst = rc.clone().union(subst2.clone());
+                        debug!("new {} = {} ⊎ {} ", new_subst, rc, subst2);
+                        let cs = cs.into_iter().map(|c| c.subst(new_subst.clone())).collect();
+                        Term::Match(box x_inst, cs)
                     }
-
-                    1) On match:
-                       Γ' = (a : A) (i : Ba) (j : Bb) (c : C)
-                             3       2        1        0
-                       ρ ⊎ τ = σ
-                       σ' = ρ.drop(1).lift(n) ⊎ τ
-                       where `n` is number of newly bound variables in the pattern (2 in this case)
-                       result: tσ'
-
-                    2) On stuck match:
-                       Perform ordinary substitution in each sub-term
-                    */
-                    match try_match(&x_inst, &cs) {
-                        Some((i, sigma)) => {
-                            debug!("matched {} with new {} vars", i, sigma);
-
-                            let new_subst = match &*x {
-                                Term::Whnf(Val::Var(x, es)) if es.is_empty() => {
-                                    let (subst1, subst2) = subst.clone().split(*x);
-                                    debug!("{} = {} ⊎ {}", subst, subst1, subst2);
-                                    let rc = subst1.drop_by(1).union(sigma);
-                                    let new_subst = rc.clone().union(subst2.clone());
-                                    debug!("new {} = {} ⊎ {} ", new_subst, rc, subst2);
-                                    new_subst
-                                }
-                                _ => {
-                                    let subst = subst.clone().drop_by(1);
-                                    // let new_subst = subst.clone().union(sigma.clone());
-                                    let new_subst = sigma.clone().union(subst.clone());
-                                    debug!("new' {} = {} ⊎ {} ", new_subst, sigma, subst);
-                                    new_subst
-                                }
-                            };
-                            let matched_case = cs.remove(i);
-                            matched_case.body.subst(new_subst)
+                    Term::Whnf(val) if val.is_cons() => {
+                        /*
+                        Given:
+                        Γ = (a : A) (b : B) (c : C)
+                             2       1       0         -- DeBruijn indices
+                        σ = { 0 := x, 1 := y, 2 := z }
+                        self = match b {
+                            | C i j => t
                         }
-                        None => {
-                            let cs = cs.into_iter().map(|c| c.subst(subst.clone())).collect();
-                            Term::Match(box x_inst, cs)
+
+                        1) On match:
+                           Γ' = (a : A) (i : Ba) (j : Bb) (c : C)
+                                 3       2        1        0
+                           ρ ⊎ τ = σ
+                           σ' = ρ.drop(1).lift(n) ⊎ τ
+                           where `n` is number of newly bound variables in the pattern (2 in this case)
+                           result: tσ'
+
+                        2) On stuck match:
+                           Perform ordinary substitution in each sub-term
+                        */
+                        match try_match(&val, &cs) {
+                            Some((i, sigma)) => {
+                                debug!("matched {} with new {} vars", i, sigma);
+
+                                let new_subst = match &*x {
+                                    Term::Whnf(Val::Var(x, es)) if es.is_empty() => {
+                                        let (subst1, subst2) = subst.clone().split(*x);
+                                        debug!("{} = {} ⊎ {}", subst, subst1, subst2);
+                                        let rc = subst1.drop_by(1).union(sigma);
+                                        let new_subst = rc.clone().union(subst2.clone());
+                                        debug!("new {} = {} ⊎ {} ", new_subst, rc, subst2);
+                                        new_subst
+                                    }
+                                    _ => {
+                                        let subst = subst.clone().drop_by(1);
+                                        // let new_subst = subst.clone().union(sigma.clone());
+                                        let new_subst = sigma.clone().union(subst.clone());
+                                        debug!("new' {} = {} ⊎ {} ", new_subst, sigma, subst);
+                                        new_subst
+                                    }
+                                };
+                                let matched_case = cs.remove(i);
+                                matched_case.body.subst(new_subst)
+                            }
+                            None => {
+                                let cs = cs.into_iter().map(|c| c.subst(subst.clone())).collect();
+                                Term::Match(box x_inst, cs)
+                            }
                         }
+                    }
+                    _ => {
+                        let cs = cs.into_iter().map(|c| c.subst(subst.clone())).collect();
+                        Term::Match(box x_inst, cs)
                     }
                 }
             }

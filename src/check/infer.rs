@@ -1,6 +1,7 @@
+use crate::check::block::Blocked;
 use crate::check::state::TypeCheckState;
 use crate::check::{Clause, Error, LshProblem, Result};
-use crate::syntax::abs::{AppView, Expr};
+use crate::syntax::abs::{AppView, Expr, Match};
 use crate::syntax::core::Closure;
 use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, Val, ValData};
 use crate::syntax::{ConHead, Ident, Loc, Universe, GI};
@@ -253,16 +254,32 @@ impl TypeCheckState {
 
     pub(crate) fn check(&mut self, input_term: &Expr, against: &Val) -> Result<TermInfo> {
         if !self.trace_tc {
-            return self.check_impl(input_term, against);
+            return match self.check_impl(input_term, against) {
+                Err(Error::Blocked(blocked)) if blocked.is_elim() => {
+                    debug!("{}, trying another way", blocked);
+                    self.check_blocked_impl(input_term, Term::Whnf(against.clone()))
+                }
+                x => x,
+            };
         }
         let depth_ws = self.tc_depth_ws();
         debug!("{}⊢ {} ↑? {}", depth_ws, input_term, against);
         self.tc_deeper();
-        let a = self.check_impl(input_term, against).map_err(|e| {
-            debug!("{}Error checking {} : {}", depth_ws, input_term, against);
+        let a = match self.check_impl(input_term, against) {
+            Err(Error::Blocked(blocked)) if blocked.is_elim() => {
+                debug!("{}, trying another way", blocked);
+                self.check_blocked_impl(input_term, Term::Whnf(against.clone()))
+            }
+            Err(Error::Blocked(blocked)) => {
+                panic!("{}", blocked);
+            }
+            x => x,
+        };
+        let a = a.map_err(|e| {
+            debug!("{}Error checking {} ↑ {}", depth_ws, input_term, against);
             e
         })?;
-        debug!("{}⊢ {} ↑ {} ⇝ {}", depth_ws, input_term, against, a.ast);
+        debug!("{}⊢ {} ↑ {} ~> {}", depth_ws, input_term, against, a.ast);
         self.tc_shallower();
         Ok(a)
     }
@@ -314,33 +331,54 @@ impl TypeCheckState {
                 let Closure::Plain(ret_pi) = ret_pi;
                 let bind_new = Bind::boxing(bind.licit, bind.name, bind_ty.ast, bind_ty.loc);
                 self.gamma.push(bind_new.clone().unboxed());
-                let body = self.check(&*ret, &self.simplify(*ret_pi.clone())?)?;
+                let body = match self.simplify(*ret_pi.clone()) {
+                    Ok(val) => self.check(&*ret, &val)?,
+                    Err(Error::Blocked(blocked)) if blocked.is_elim() => {
+                        debug!("Term has blocked, trying checking with check_blocked");
+                        self.check_blocked_impl(&*ret, blocked.anyway)?
+                    }
+                    Err(e) => return Err(e),
+                };
                 self.gamma.pop();
                 Ok(Term::lam(bind_new, body.ast).at(bind_ty.loc))
             }
-            (Expr::Match(xs, cs), against) => {
-                let vars = xs
-                    .iter()
-                    .map(|x| self.infer(x).map(|x| x.0))
-                    .collect::<Result<Vec<_>>>()?;
-                let vars = vars
-                    .into_iter()
-                    .map(|ti| match ti.ast {
-                        Term::Whnf(Val::Var(idx, _)) => idx,
-                        _ => unimplemented!("Match on non-var"),
-                    })
-                    .collect::<Vec<_>>();
-                let clauses = cs
-                    .iter()
-                    .map(|c| Clause::new(c.patterns.clone(), c.body.clone()))
-                    .collect::<Vec<_>>();
-                let mut lhs = LshProblem::new(vars, clauses, Term::Whnf(against.clone()));
-                lhs.init(self)?;
-                let case_tree = lhs.check(self)?;
-                Ok(case_tree.into_term().at(Loc::default()))
-            }
+            (Expr::Match(m), against) => self.check_match(m, Term::Whnf(against.clone())),
             (expr, anything) => self.check_fallback(expr.clone(), anything),
         }
+    }
+
+    fn check_blocked_impl(&mut self, abs: &Expr, blocked: Term) -> Result<TermInfo> {
+        match (abs, blocked) {
+            (Expr::Match(m), against) => self.check_match(m, against),
+            (expr, anything) => {
+                error!("Checking blocked failed");
+                self.check_fallback(expr.clone(), &self.simplify(anything)?)
+            }
+        }
+    }
+
+    pub fn check_match(&mut self, m: &Match, target: Term) -> Result<TermInfo> {
+        let vars =
+            m.xs.iter()
+                .map(|x| self.infer(x).map(|x| x.0))
+                .collect::<Result<Vec<_>>>()?;
+        let vars = vars
+            .into_iter()
+            .map(|ti| match ti.ast {
+                Term::Whnf(Val::Var(idx, _)) => idx,
+                _ => unimplemented!("Match on non-var"),
+            })
+            .collect::<Vec<_>>();
+        let clauses = m
+            .cases
+            .iter()
+            .map(|c| Clause::new(c.patterns.clone(), c.body.clone()))
+            .collect::<Vec<_>>();
+        let mut lhs = LshProblem::new(vars, clauses, target);
+        lhs.init(self)?;
+        let case_tree = lhs.check(self)?;
+        debug!("inferred case tree: {}", case_tree);
+        Ok(case_tree.into_term().at(Loc::default()))
     }
 
     pub fn check_fallback(&mut self, expr: Expr, expected_type: &Val) -> Result<TermInfo> {

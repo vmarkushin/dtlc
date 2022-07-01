@@ -57,6 +57,13 @@ pub enum Val {
 }
 
 impl Val {
+    pub(crate) fn is_cons(&self) -> bool {
+        match self {
+            Val::Cons(_, _) => true,
+            _ => false,
+        }
+    }
+
     #[allow(unused)]
     pub(crate) fn into_pi(self) -> Either<Val, (Bind<Box<Term>>, Closure)> {
         match self {

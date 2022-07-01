@@ -1,6 +1,6 @@
 use crate::check::block::Blocked;
 use crate::syntax::abs::{Expr, Pat as PatA};
-use crate::syntax::core::{Elim, Term, Val};
+use crate::syntax::core::{Elim, Pat, Term, Val};
 use crate::syntax::{Ident, Loc, Universe, MI};
 
 pub use crate::check::norm::try_match;
@@ -36,13 +36,15 @@ pub enum Error {
     DifferentUniverse(Loc, Universe, Universe),
     #[error("Expected `{0}`, got `{1}`")]
     DifferentTerm(Box<Term>, Box<Term>),
+    #[error("Expected `{0}`, got `{1}`")]
+    DifferentPat(Box<Pat>, Box<Pat>),
     #[error("Different elim: `{0}` and `{1}`")]
     DifferentElim(Box<Elim>, Box<Elim>),
     #[error("Different name: `{0}` and `{1}`")]
     DifferentName(Ident, Ident),
     #[error("Π components should be of type `Type`, but got: `{0}` and `{1}`")]
     InvalidPi(Box<Val>, Box<Val>),
-    #[error("Blocked: `{0}`")]
+    #[error("Blocked: {0}")]
     Blocked(Box<Blocked<Term>>),
     #[error("Expected universe for data declaration `{0}`")]
     ExpectedUniverseForData(Ident),

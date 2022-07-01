@@ -6,6 +6,7 @@ use crate::syntax::core::{
     Case, Ctx, DataInfo, DeBruijn, Decl, Pat, PrimSubst, Subst, Substitution, Term, Val,
 };
 use crate::syntax::{ConHead, DBI, UID};
+use derive_more::Display;
 use itertools::{EitherOrBoth, Itertools};
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -152,6 +153,25 @@ pub struct LshProblem {
 pub enum CaseTree {
     Leaf(Term),
     Case(Term, Vec<(Pat, Option<CaseTree>)>),
+}
+
+impl Display for CaseTree {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CaseTree::Leaf(t) => write!(f, "{}", t),
+            CaseTree::Case(t, cases) => {
+                write!(f, "case {} of", t)?;
+                for (pat, tree) in cases {
+                    write!(f, " {}", pat)?;
+                    if let Some(tree) = tree {
+                        write!(f, " => ")?;
+                        write!(f, "{}", tree)?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
 impl CaseTree {
@@ -975,37 +995,71 @@ mod tests {
              | (mkSigma t1 t2 a b) => b
         }
 
+        fn dep_fn (x : Nat) : (match x { | zero => Nat | (suc n) => Bool }) := match x {
+            | zero => zero
+            | (suc n) => false
+        }
+
+        fn sigma_test1 : Sigma Nat (lam z : Nat => match z { | zero => Nat | (suc n) => Bool }) :=
+            mkSigma
+                Nat
+                (lam z : Nat => match z { | zero => Nat | (suc n) => Bool })
+                zero
+                zero
+
+        fn sigma_test2 : Sigma Nat (lam z : Nat => match z { | zero => Nat | (suc n) => Bool }) :=
+            mkSigma
+                Nat
+                (lam z : Nat => match z { | zero => Nat | (suc n) => Bool })
+                (suc zero)
+                true
+
         fn pair := mkPair Nat Nat (suc zero) zero
-        fn tst1 : Nat := proj1 Nat Nat (mkPair Nat Nat (suc zero) zero)
-        fn tst2 : Nat := proj2 Nat Nat (mkPair Nat Nat (suc zero) zero)
-        fn tst3 : Nat := sproj1 Nat (lam z : Nat => Nat) (mkSigma Nat (lam z : Nat => Nat) (suc zero) zero)
-        fn tst4 : Nat := sproj2 Nat (lam z : Nat => Nat) (mkSigma Nat (lam z : Nat => Nat) (suc zero) zero)
+        fn tst1 : Nat := proj1 Nat Nat pair
+        fn tst2 : Nat := proj2 Nat Nat pair
+
+        fn sigma := mkSigma Nat (lam z : Nat => Nat) (suc zero) zero
+        fn tst3 : Nat := sproj1 Nat (lam z : Nat => Nat) sigma
+        fn tst4 : Nat := sproj2 Nat (lam z : Nat => Nat) sigma
         fn tst5 : Nat := sproj2 Nat (lam z : Nat => match z { | zero => Nat | o => Bool }) (mkSigma Nat (lam z : Nat => match z { | zero => Nat | o => Bool }) zero zero)
-        -- fn tst6 : Bool := sproj2 Nat (lam z : Nat => match z { | zero => Nat | o => Bool }) (mkSigma Nat (lam z : Nat => match z { | zero => Nat | o => Bool }) (suc zero) true)
+        fn tst6 : Bool := sproj2 Nat (lam z : Nat => match z { | zero => Nat | o => Bool }) (mkSigma Nat (lam z : Nat => match z { | zero => Nat | o => Bool }) (suc zero) true)
+        fn tst7 : Nat := dep_fn zero
+        fn tst8 : Bool := dep_fn (suc zero)
        "#,
         )?)?;
         env.check_prog(des.clone())?;
 
-        // let val = pct!(p, des, env, "tst1");
-        // let val1 = pct!(p, des, env, "(suc zero)");
-        // Val::unify(&mut env, &val1, &val)?;
-        //
-        // let val = pct!(p, des, env, "tst2");
-        // let val1 = pct!(p, des, env, "zero");
-        // Val::unify(&mut env, &val1, &val)?;
-        //
-        // let val = pct!(p, des, env, "tst3");
-        // let val1 = pct!(p, des, env, "(suc zero)");
-        // Val::unify(&mut env, &val1, &val)?;
-        //
-        // let val = pct!(p, des, env, "tst4");
-        // let val1 = pct!(p, des, env, "zero");
-        // Val::unify(&mut env, &val1, &val)?;
+        let val = pct!(p, des, env, "tst1");
+        let val1 = pct!(p, des, env, "(suc zero)");
+        Val::unify(&mut env, &val1, &val)?;
 
-        // debug!("ll");
-        // let val = pct!(p, des, env, "tst5");
-        // let val1 = pct!(p, des, env, "zero");
-        // Val::unify(&mut env, &val1, &val)?;
+        let val = pct!(p, des, env, "tst2");
+        let val1 = pct!(p, des, env, "zero");
+        Val::unify(&mut env, &val1, &val)?;
+
+        let val = pct!(p, des, env, "tst3");
+        let val1 = pct!(p, des, env, "(suc zero)");
+        Val::unify(&mut env, &val1, &val)?;
+
+        let val = pct!(p, des, env, "tst4");
+        let val1 = pct!(p, des, env, "zero");
+        Val::unify(&mut env, &val1, &val)?;
+
+        let val = pct!(p, des, env, "tst5");
+        let val1 = pct!(p, des, env, "zero");
+        Val::unify(&mut env, &val1, &val)?;
+
+        let val = pct!(p, des, env, "tst6");
+        let val1 = pct!(p, des, env, "true");
+        Val::unify(&mut env, &val1, &val)?;
+
+        let val = pct!(p, des, env, "tst7");
+        let val1 = pct!(p, des, env, "zero");
+        Val::unify(&mut env, &val1, &val)?;
+
+        let val = pct!(p, des, env, "tst8");
+        let val1 = pct!(p, des, env, "false");
+        Val::unify(&mut env, &val1, &val)?;
 
         Ok(())
     }
