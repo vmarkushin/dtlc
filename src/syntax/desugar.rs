@@ -388,14 +388,20 @@ impl DesugarState {
                     let ty = self.desugar_expr(ty_new)?;
                     let partial_decl = DeclA::Fn(FuncA::new(name, None, Some(ty))); // TODO: get rid of Option?
                     self.insert_decl(partial_decl.clone())?;
+                    // The `insert_decl` call committed information about metas to the state,
+                    // but since we haven't parsed the body yet, there can be more metas potentially.
+                    // So, we're postponing the commit after the definition is fully desugared.
+                    self.cur_meta_id.pop();
                     let expr = self.desugar_expr(body_new)?;
                     expr
                 };
-                self.clear_local();
                 let expr = res?;
                 let decl = self.decls.last_mut().unwrap().as_func_mut();
                 decl.expr = Some(expr);
-                Ok(DeclA::Fn(decl.clone()))
+                let func = decl.clone();
+                self.cur_meta_id.push(Default::default());
+                self.clear_local();
+                Ok(DeclA::Fn(func))
             }
         }
     }

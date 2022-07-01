@@ -991,7 +991,8 @@ mod tests {
             | (mkSigma t1 t2 a b) => a
         }
 
-        fn sproj2 (A : Type) (B : A -> Type) (x : Sigma A B) : B (match x { | (mkSigma t1 t2 a b) => a }) := match x {
+        fn sproj2 (A : Type) (B : A -> Type) (x : Sigma A B)
+            : B (match x { | (mkSigma t1 t2 a b) => a }) := match x {
              | (mkSigma t1 t2 a b) => b
         }
 
@@ -1001,28 +1002,20 @@ mod tests {
         }
 
         fn sigma_test1 : Sigma Nat (lam z : Nat => match z { | zero => Nat | (suc n) => Bool }) :=
-            mkSigma
-                Nat
-                (lam z : Nat => match z { | zero => Nat | (suc n) => Bool })
-                zero
-                zero
+            mkSigma _ _ zero zero
 
         fn sigma_test2 : Sigma Nat (lam z : Nat => match z { | zero => Nat | (suc n) => Bool }) :=
-            mkSigma
-                Nat
-                (lam z : Nat => match z { | zero => Nat | (suc n) => Bool })
-                (suc zero)
-                true
+            mkSigma _ _ (suc zero) true
 
-        fn pair := mkPair Nat Nat (suc zero) zero
-        fn tst1 : Nat := proj1 Nat Nat pair
-        fn tst2 : Nat := proj2 Nat Nat pair
+        fn pair : Pair Nat Nat := mkPair _ _ (suc zero) zero
+        fn tst1 := proj1 _ _ pair
+        fn tst2 := proj2 _ _ pair
 
-        fn sigma := mkSigma Nat (lam z : Nat => Nat) (suc zero) zero
-        fn tst3 : Nat := sproj1 Nat (lam z : Nat => Nat) sigma
-        fn tst4 : Nat := sproj2 Nat (lam z : Nat => Nat) sigma
-        fn tst5 : Nat := sproj2 Nat (lam z : Nat => match z { | zero => Nat | o => Bool }) (mkSigma Nat (lam z : Nat => match z { | zero => Nat | o => Bool }) zero zero)
-        fn tst6 : Bool := sproj2 Nat (lam z : Nat => match z { | zero => Nat | o => Bool }) (mkSigma Nat (lam z : Nat => match z { | zero => Nat | o => Bool }) (suc zero) true)
+        fn sigma : Sigma Nat (lam z : Nat => Nat) := mkSigma _ _ (suc zero) zero
+        fn tst3 : Nat := sproj1 _ _ sigma
+        fn tst4 : Nat := sproj2 _ _ sigma
+        fn tst5 : Nat := sproj2 _ (lam z : Nat => match z { | zero => Nat | o => Bool }) (mkSigma _ _ zero zero)
+        fn tst6 : Bool := sproj2 _ (lam z : Nat => match z { | zero => Nat | o => Bool }) (mkSigma _ _ (suc zero) true)
         fn tst7 : Nat := dep_fn zero
         fn tst8 : Bool := dep_fn (suc zero)
        "#,

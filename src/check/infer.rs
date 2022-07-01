@@ -201,7 +201,7 @@ impl TypeCheckState {
             e
         })?;
         debug!(
-            "{}\u{22A2} {} : {} \u{2192} {}",
+            "{}⊢ {} : {} → {}",
             depth_ws, input_term, inferred_ty, evaluated.ast
         );
         self.tc_shallower();
@@ -245,7 +245,9 @@ impl TypeCheckState {
             }
             Meta(ident, mi) => {
                 let ty = Term::meta(*mi, vec![]);
+                debug!("{}", self.mut_meta_ctx());
                 let tyty = self.fresh_meta();
+                debug!("inferring head of meta {} to {} ", mi, tyty);
                 Ok((ty.at(ident.loc), tyty))
             }
             e => Err(Error::NotHead(e.clone())),
@@ -511,7 +513,7 @@ mod tests {
             | nil
             | cons T (List T)
 
-        fn main := cons Nat (S (S O)) (cons Nat (S O) (cons Nat O (nil Nat)))
+        fn main := cons _ (S (S O)) (cons _ (S O) (cons _ O (nil _)))
        "#,
         )?)?;
 
