@@ -44,7 +44,7 @@ impl TypeCheckState {
 
 impl TypeCheckState {
     pub(crate) fn lookup(&self, p0: DBI) -> &Bind {
-        &self.gamma.lookup(p0)
+        self.gamma.lookup(p0)
     }
 }
 

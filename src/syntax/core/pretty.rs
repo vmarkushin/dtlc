@@ -117,7 +117,7 @@ pub fn pretty_list(
     delim: impl Display,
 ) -> Result<(), Error> {
     if a.is_empty() {
-        return Ok(());
+        Ok(())
     } else {
         write!(f, "{}", a[0])?;
         for x in &a[1..] {

@@ -20,17 +20,11 @@ pub enum Pat<Ix, Term> {
 
 impl<Ix, Term> Pat<Ix, Term> {
     pub(crate) fn is_abusrd(&self) -> bool {
-        match self {
-            Pat::Absurd => true,
-            _ => false,
-        }
+        matches!(self, Pat::Absurd)
     }
 
     pub(crate) fn is_cons(&self) -> bool {
-        match self {
-            Pat::Cons(_, _, _) => true,
-            _ => false,
-        }
+        matches!(self, Pat::Cons(..))
     }
 
     pub fn cons_surf(forced: bool, ident: Ident, args: Vec<Self>) -> Self {

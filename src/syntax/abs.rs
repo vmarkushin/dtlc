@@ -229,7 +229,7 @@ impl Display for Case {
         if let Some(body) = &self.body {
             writeln!(f, " => {}", body)
         } else {
-            writeln!(f, "")
+            writeln!(f)
         }
     }
 }

@@ -1,4 +1,3 @@
-use crate::check::block::Blocked;
 use crate::check::state::TypeCheckState;
 use crate::check::{Clause, Error, LshProblem, Result};
 use crate::syntax::abs::{AppView, Expr, Match};
@@ -106,7 +105,6 @@ impl TypeCheckState {
                     let param_ty = self.simplify(*param.ty)?;
                     let arg = self.check(&arg, &param_ty)?;
                     ty = clos.instantiate(arg.ast.clone());
-                    // TODO: nahuya?
                     elims.push(Elim::app(arg.ast));
                 }
                 Ok((head.map_ast(|t| t.apply_elim(elims)), ty))
@@ -245,9 +243,7 @@ impl TypeCheckState {
             }
             Meta(ident, mi) => {
                 let ty = Term::meta(*mi, vec![]);
-                debug!("{}", self.mut_meta_ctx());
                 let tyty = self.fresh_meta();
-                debug!("inferring head of meta {} to {} ", mi, tyty);
                 Ok((ty.at(ident.loc), tyty))
             }
             e => Err(Error::NotHead(e.clone())),
@@ -271,9 +267,6 @@ impl TypeCheckState {
             Err(Error::Blocked(blocked)) if blocked.is_elim() => {
                 debug!("{}, trying another way", blocked);
                 self.check_blocked_impl(input_term, Term::Whnf(against.clone()))
-            }
-            Err(Error::Blocked(blocked)) => {
-                panic!("{}", blocked);
             }
             x => x,
         };
@@ -379,7 +372,7 @@ impl TypeCheckState {
         let mut lhs = LshProblem::new(vars, clauses, target);
         lhs.init(self)?;
         let case_tree = lhs.check(self)?;
-        debug!("inferred case tree: {}", case_tree);
+        debug!("{}⊢ Checked case tree: {}", self.indentation, case_tree);
         Ok(case_tree.into_term().at(Loc::default()))
     }
 

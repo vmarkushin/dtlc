@@ -20,7 +20,7 @@ fn elims_to_terms(elims: Vec<Elim>) -> Result<Vec<Term>> {
 /// for a stuck match.
 pub fn try_match(x: &Val, cs: &[Case]) -> Option<(usize, Rc<Substitution>)> {
     let term = x.clone().into();
-    cs.into_iter()
+    cs.iter()
         .enumerate()
         .filter_map(|(i, c)| c.pattern.match_term(&term).map(|j| (i, j)))
         .next()
@@ -68,7 +68,6 @@ impl TypeCheckState {
             },
             Term::Match(x, mut cs) => match try_match(&self.simplify(*x.clone())?, &cs) {
                 Some((i, sigma)) => {
-                    debug!("matched {} with new {} vars", i, sigma);
                     let matched_case = cs.remove(i);
                     self.simplify(matched_case.body.subst(sigma))
                 }
@@ -90,17 +89,11 @@ impl TypeCheckState {
     ) -> Result<(Simpl, Term), Blocked<Term>> {
         let mut es = elims;
         let es_len = es.len();
-        // dsp!(&body);
         let (tele, body) = body.tele_view_n(es_len);
-        // dsp!(&body);
-        // dbg!(&tele);
-        // dbg!(&es);
-        // debug_assert!(es.len() <= tele.len());
 
         let tele_len = tele.len();
         let rest = es.split_off(tele_len);
         let vs = (0..es_len)
-            // let vs = ((tele_len - es_len)..tele_len)
             .into_iter()
             .rev()
             .zip(&es)

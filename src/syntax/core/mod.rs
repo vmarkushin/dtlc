@@ -89,10 +89,6 @@ impl Ctx {
         self.0.iter()
     }
 
-    pub fn into_iter(self) -> impl Iterator<Item = Bind> {
-        self.0.into_iter()
-    }
-
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Bind> {
         self.0.iter_mut()
     }

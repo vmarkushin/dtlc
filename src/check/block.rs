@@ -73,10 +73,7 @@ impl Stuck {
     }
 
     pub fn is_elim(&self) -> bool {
-        match self {
-            Stuck::OnElim(_) => true,
-            _ => false,
-        }
+        matches!(self, Stuck::OnElim(_))
     }
 }
 

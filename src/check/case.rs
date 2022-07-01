@@ -1,12 +1,10 @@
 use crate::check::meta::HasMeta;
 use crate::check::{Error, Result, TypeCheckState};
-use crate::dsp;
 use crate::syntax::abs::{Expr, Pat as PatA};
 use crate::syntax::core::{
     Case, Ctx, DataInfo, DeBruijn, Decl, Pat, PrimSubst, Subst, Substitution, Term, Val,
 };
 use crate::syntax::{ConHead, DBI, UID};
-use derive_more::Display;
 use itertools::{EitherOrBoth, Itertools};
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -101,7 +99,6 @@ impl Display for Clause {
             f,
             "  | {} {}",
             self.constraints.iter().join(" "),
-            // self.constraints,
             self.user_pats.iter().join(" ")
         )?;
         if let Some(rhs) = &self.rhs {
@@ -115,7 +112,6 @@ impl Clause {
     pub fn new(user_pats: Vec<PatA>, rhs: Option<Expr>) -> Self {
         Clause {
             constraints: Vec::new(),
-            // constraints: Constraints::new(),
             user_pats,
             rhs,
         }
@@ -182,7 +178,7 @@ impl CaseTree {
     /// Converts an elaborated case tree to a core term. Panics if the tree is not fully elaborated.
     pub(crate) fn into_term(self) -> Term {
         match self {
-            CaseTree::Leaf(t) => t.clone(),
+            CaseTree::Leaf(t) => t,
             CaseTree::Case(i, cases) => {
                 let cases = cases
                     .into_iter()
@@ -317,7 +313,6 @@ impl LshProblem {
                         bind.ty.clone(),
                     ))
                 } else {
-                    // All patterns were handled
                     return Err(Error::TooFewPatterns);
                 }
             }
@@ -366,16 +361,14 @@ impl LshProblem {
                 },
                 _ => unreachable!("Attempt to split on non-data type"),
             }
+        } else if clause_1
+            .constraints
+            .iter()
+            .all(|x| x.pat.is_var() && (x.term.is_eta_var() || x.term.is_cons()))
+        {
+            Self::done(tcs, clause_1, self.target)
         } else {
-            if clause_1
-                .constraints
-                .iter()
-                .all(|x| x.pat.is_var() && (x.term.is_eta_var() || x.term.is_cons()))
-            {
-                Self::done(tcs, clause_1, self.target)
-            } else {
-                unimplemented!("{}", clause_1.constraints.iter().join(", "));
-            }
+            unimplemented!("{}", clause_1.constraints.iter().join(", "));
         }
     }
 
@@ -386,7 +379,7 @@ impl LshProblem {
         if clause_1.rhs.is_some() {
             return Err(Error::UnexpectedRhs);
         }
-        return Ok(CaseTree::case(x, Vec::new()));
+        Ok(CaseTree::case(x, Vec::new()))
     }
 
     fn split_con(
@@ -398,15 +391,17 @@ impl LshProblem {
         data: DataInfo,
     ) -> Result<CaseTree> {
         let mut ct_clauses = Vec::new();
+        // TODO: clippy::needless_collect
+        #[allow(clippy::needless_collect)]
         let conses = data
             .conses
             .iter()
             .map(|c| tcs.def(*c).as_cons().clone())
             .collect::<Vec<_>>();
         for (cons_ix, cons) in conses.into_iter().enumerate() {
-            debug!("\nSplitting constraint {} with {}", ct, cons.name);
-            debug!("Problem before: {}", &self);
-            debug!("Context before {}", tcs.gamma);
+            trace!("\nSplitting constraint {} with {}", ct, cons.name);
+            trace!("Problem before: {}", &self);
+            trace!("Context before {}", tcs.gamma);
 
             let delta_len = data_args.len();
             let delta_i = cons.signature.clone().tele_view().0;
@@ -416,25 +411,25 @@ impl LshProblem {
             debug_assert_eq!(xx.ty, ct.ty);
             let mut delta_tick_hat_i =
                 (data_args.clone()).subst(Substitution::raise(cons.params.len()));
-            delta_tick_hat_i.extend((0..cons.params.len()).rev().map(|i| Term::from_dbi(i)));
+            delta_tick_hat_i.extend((0..cons.params.len()).rev().map(Term::from_dbi));
             let cons_gi = cons.data_gi + cons_ix + 1;
             let con_head = ConHead::new(cons.name.clone(), cons_gi);
             let alpha = Substitution::raise(cons.params.len())
                 .cons(Term::cons(con_head.clone(), delta_tick_hat_i.clone()));
             gamma2 = gamma2.subst(alpha.clone());
 
-            debug!("α = {}", &alpha);
+            trace!("α = {}", &alpha);
             let beta = alpha.clone().lift_by(gamma2.len());
-            debug!("β = {}", &beta);
+            trace!("β = {}", &beta);
             let target_new = self.target.clone().subst(beta.clone());
-            debug!("Γ1 = {}", gamma1);
+            trace!("Γ1 = {}", gamma1);
             let clauses_new = self
                 .clauses
                 .clone()
                 .into_iter()
                 .filter_map(|mut clause| {
                     clause.constraints = clause.constraints.clone().subst(beta.clone());
-                    debug!("transforming clause: {}", &clause);
+                    trace!("transforming clause: {}", &clause);
                     let mut constraints_new = Vec::new();
                     for cst in clause.constraints.clone() {
                         match (cst.term, cst.pat) {
@@ -443,7 +438,7 @@ impl LshProblem {
                                 PatA::Cons(false, pat_head, es),
                             ) => {
                                 if con_head.cons_gi != pat_head.cons_gi {
-                                    debug!("  <-- removed");
+                                    trace!("  <-- removed");
                                     return None;
                                 }
                                 debug_assert_eq!(delta_tick_hat_i.len(), es.len());
@@ -479,13 +474,13 @@ impl LshProblem {
                             (t, p) => constraints_new.push(Constraint::new(p, t, cst.ty)),
                         };
                     }
-                    debug!("");
+                    trace!("");
 
                     clause.constraints = constraints_new;
                     Some(clause)
                 })
                 .collect();
-            debug!("Γ1Δ'i = {}", gamma1);
+            trace!("Γ1Δ'i = {}", gamma1);
 
             let pats_new = self.pats.clone().subst(beta);
             let mut lhs_new = self.clone();
@@ -495,8 +490,8 @@ impl LshProblem {
             gamma1.extend(gamma2);
             let gamma_new = gamma1;
             let ct = tcs.under_ctx(gamma_new, |tcs| {
-                debug!("Problem after: {}", &lhs_new);
-                debug!("Context after {}", tcs.gamma);
+                trace!("Problem after: {}", &lhs_new);
+                trace!("Context after {}", tcs.gamma);
                 lhs_new.check(tcs)
             })?;
             // TODO: use self.pats?
@@ -512,7 +507,7 @@ impl LshProblem {
             );
             ct_clauses.push((clause_pat, Some(ct)));
         }
-        return Ok(CaseTree::case(x, ct_clauses));
+        Ok(CaseTree::case(x, ct_clauses))
     }
 
     fn done(tcs: &mut TypeCheckState, clause_1: &Clause, target: Term) -> Result<CaseTree> {
@@ -525,13 +520,13 @@ impl LshProblem {
         );
 
         let mut rhs1 = clause_1.rhs.clone().unwrap();
-        debug!("rhs = {}", rhs1);
-        debug!("new abs-subst = {:?}", refined_user_pats);
-        rhs1.subst_abs(refined_user_pats.clone());
-        debug!("rhs refined = {}", rhs1);
-        debug!("target = {}", target);
+        trace!("rhs = {}", rhs1);
+        trace!("new abs-subst = {:?}", refined_user_pats);
+        rhs1.subst_abs(refined_user_pats);
+        trace!("rhs refined = {}", rhs1);
+        trace!("target = {}", target);
         let checked_rhs = tcs.check(&rhs1, &tcs.simplify(target)?)?.ast;
-        return Ok(CaseTree::Leaf(checked_rhs));
+        Ok(CaseTree::Leaf(checked_rhs))
     }
 }
 
@@ -566,10 +561,7 @@ mod tests {
         "#,
         )?)?;
 
-        assert_eq!(
-            env.check_prog(des.clone()).unwrap_err(),
-            Error::TooManyPatterns
-        );
+        assert_eq!(env.check_prog(des).unwrap_err(), Error::TooManyPatterns);
 
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
@@ -587,10 +579,7 @@ mod tests {
         "#,
         )?)?;
 
-        assert_eq!(
-            env.check_prog(des.clone()).unwrap_err(),
-            Error::TooFewPatterns
-        );
+        assert_eq!(env.check_prog(des).unwrap_err(), Error::TooFewPatterns);
 
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
@@ -609,10 +598,7 @@ mod tests {
        "#,
         )?)?;
 
-        assert_eq!(
-            env.check_prog(des.clone()).unwrap_err(),
-            Error::NonExhaustiveMatch
-        );
+        assert_eq!(env.check_prog(des).unwrap_err(), Error::NonExhaustiveMatch);
 
         Ok(())
     }
@@ -1130,7 +1116,7 @@ mod tests {
         gamma1.extend(delta.clone());
         let cons = Term::cons(
             ConHead::new(Ident::new("Cons", Loc::default()), 7),
-            (0..delta.len()).rev().map(|i| Term::from_dbi(i)).collect(),
+            (0..delta.len()).rev().map(Term::from_dbi).collect(),
         );
         let rise = delta.len();
         for b in &gamma2 {
@@ -1157,14 +1143,14 @@ mod tests {
         // A Ba Bb Bc C D
         let cons = Term::cons(
             ConHead::new(Ident::new("CC", Loc::default()), 7),
-            [2, 1, 3].into_iter().map(|i| Term::from_dbi(i)).collect(),
+            [2, 1, 3].into_iter().map(Term::from_dbi).collect(),
         );
         // CC B C A
         // CC (Cons Ba Bb Bc) C A
         let term = cons.clone().apply(vec![Term::from_dbi(2)]);
         let cons2 = Term::cons(
             ConHead::new(Ident::new("Cons", Loc::default()), 7),
-            (0..3).rev().map(|i| Term::from_dbi(i)).collect(),
+            (0..3).rev().map(Term::from_dbi).collect(),
         );
         let rise = 3;
         debug!("{}", term);
@@ -1177,7 +1163,7 @@ mod tests {
         let x = Term::from_dbi(1);
         let cons2 = Term::cons(
             ConHead::new(Ident::new("C2", Loc::default()), 7),
-            [2, 1, 3].into_iter().map(|i| Term::from_dbi(i)).collect(),
+            [2, 1, 3].into_iter().map(Term::from_dbi).collect(),
         );
         let rc = Substitution::one(cons).cons(cons2);
         debug!("{}", rc);
@@ -1234,7 +1220,7 @@ mod tests {
                         vec![(
                             // Γ = ε
                             pat_z.clone(),
-                            Some(Leaf(Term::cons(con_z.clone(), vec![]))),
+                            Some(Leaf(Term::cons(con_z, vec![]))),
                         )],
                     )),
                 ),
@@ -1296,7 +1282,7 @@ mod tests {
                         vec![
                             (
                                 // Γ = (p : Nat)
-                                pat_z.clone(),
+                                pat_z,
                                 Some(Leaf(Term::cons(con_s.clone(), vec![Term::from_dbi(0)]))),
                             ),
                             (

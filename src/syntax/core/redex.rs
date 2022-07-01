@@ -1,9 +1,7 @@
 use super::Term;
 use crate::check::try_match;
-use crate::dsp;
 use crate::syntax::core::subst::{PrimSubst, Substitution};
 use crate::syntax::core::term::Lambda;
-use crate::syntax::core::Case;
 use crate::syntax::core::{Closure, Elim, Func, Val, ValData};
 use crate::syntax::pattern::Pat;
 use crate::syntax::{Bind, Ident, DBI, GI};
@@ -106,7 +104,7 @@ impl Subst for Term {
                         2) On stuck match:
                            Perform ordinary substitution in each sub-term
                         */
-                        match try_match(&val, &cs) {
+                        match try_match(val, &cs) {
                             Some((i, sigma)) => {
                                 debug!("matched {} with new {} vars", i, sigma);
 
@@ -120,7 +118,7 @@ impl Subst for Term {
                                         new_subst
                                     }
                                     _ => {
-                                        let subst = subst.clone().drop_by(1);
+                                        let subst = subst.drop_by(1);
                                         // let new_subst = subst.clone().union(sigma.clone());
                                         let new_subst = sigma.clone().union(subst.clone());
                                         debug!("new' {} = {} ⊎ {} ", new_subst, sigma, subst);

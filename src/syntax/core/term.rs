@@ -58,10 +58,7 @@ pub enum Val {
 
 impl Val {
     pub(crate) fn is_cons(&self) -> bool {
-        match self {
-            Val::Cons(_, _) => true,
-            _ => false,
-        }
+        matches!(self, Val::Cons(..))
     }
 
     #[allow(unused)]
@@ -86,7 +83,7 @@ pub struct Case {
 }
 impl Subst for Case {
     fn subst(mut self, subst: Rc<Substitution>) -> Case {
-        // self.pattern = self.pattern.subst(subst.clone());
+        self.pattern = self.pattern.subst(subst.clone());
         let new_tele_len = self.pattern.vars().len();
         self.body = self.body.subst(subst.lift_by(new_tele_len));
         self
@@ -136,17 +133,11 @@ impl From<DBI> for Term {
 
 impl Term {
     pub(crate) fn is_cons(&self) -> bool {
-        match self {
-            Term::Whnf(Val::Cons(..)) => true,
-            _ => false,
-        }
+        matches!(self, Term::Whnf(Val::Cons(..)))
     }
 
     pub(crate) fn is_eta_var(&self) -> bool {
-        match self {
-            Term::Whnf(Val::Var(_, es)) if es.is_empty() => true,
-            _ => false,
-        }
+        matches!(self, Term::Whnf(Val::Var(_, es)) if es.is_empty())
     }
 
     #[allow(unused)]
@@ -154,7 +145,6 @@ impl Term {
         match self {
             Self::Whnf(v) => match v {
                 Val::Pi(_, Closure::Plain(t)) => t.tele_len() + 1,
-                // Val::Lam(Lambda(_, Closure::Plain(t))) => t.tele_len() + 1,
                 _ => 0,
             },
             Self::Redex(..) => 0,
