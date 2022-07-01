@@ -1,6 +1,7 @@
 use crate::syntax;
 use crate::syntax::core::pretty_application;
 use crate::syntax::{pattern, Ident, Loc, Plicitness, Universe, GI, MI, UID};
+use itertools::Itertools;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
@@ -222,6 +223,17 @@ impl Case {
     }
 }
 
+impl Display for Case {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "  | {}", self.patterns.iter().join(", "))?;
+        if let Some(body) = &self.body {
+            writeln!(f, " => {}", body)
+        } else {
+            writeln!(f, "")
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expr {
     Var(Ident, UID),
@@ -412,8 +424,13 @@ impl Display for Expr {
             Cons(ident, _) => write!(f, "{}", ident),
             Proj(ident, _) => write!(f, "{}", ident),
             Meta(ident, _) => write!(f, "?{}", ident),
-            Match(_, _) => {
-                todo!()
+            Match(x, cs) => {
+                write!(
+                    f,
+                    "match {} {{ {} }}",
+                    x.iter().join(", "),
+                    cs.iter().join("")
+                )
             }
         }
     }

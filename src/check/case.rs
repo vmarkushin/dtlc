@@ -138,7 +138,7 @@ impl Display for LshProblem {
 pub struct LshProblem {
     /// User patterns with constraints. P = {q_vec_i -> rhs_i | i = 1...n}.
     clauses: Vec<Clause>,
-    /// Variables referring to Γ being matched on.
+    /// Variables referring to Γ or lets being matched on.
     vars: Vec<DBI>,
     /// Core patterns being refined.
     pats: Vec<Pat>,
@@ -151,10 +151,14 @@ pub struct LshProblem {
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub enum CaseTree {
     Leaf(Term),
-    Case(DBI, Vec<(Pat, Option<CaseTree>)>),
+    Case(Term, Vec<(Pat, Option<CaseTree>)>),
 }
 
 impl CaseTree {
+    pub fn case(term: impl Into<Term>, cases: impl Into<Vec<(Pat, Option<CaseTree>)>>) -> Self {
+        Self::Case(term.into(), cases.into())
+    }
+
     /// Converts an elaborated case tree to a core term. Panics if the tree is not fully elaborated.
     pub(crate) fn into_term(self) -> Term {
         match self {
@@ -184,7 +188,7 @@ impl CaseTree {
                         }
                     })
                     .collect();
-                Term::Match(i, cases)
+                Term::Match(box i, cases)
             }
         }
     }
@@ -323,19 +327,23 @@ impl LshProblem {
             .find(|(_, x)| (x.pat.is_cons() || x.pat.is_abusrd()) && x.term.is_eta_var());
         if let Some((_ct_idx, ct)) = maybe_ct {
             match &ct.ty {
-                Term::Whnf(Val::Data(data)) => {
-                    let x = ct.term.dbi_view().unwrap();
-                    let data_args = &data.args;
-                    match tcs.def(data.def).clone() {
-                        Decl::Data(data) => {
-                            if data.conses.is_empty() {
-                                return Self::split_empty(clause_1, ct, x);
+                Term::Whnf(Val::Data(data)) => match ct.term.dbi_view() {
+                    Some(x) => {
+                        let data_args = &data.args;
+                        match tcs.def(data.def).clone() {
+                            Decl::Data(data) => {
+                                if data.conses.is_empty() {
+                                    return Self::split_empty(clause_1, ct, x);
+                                }
+                                self.split_con(tcs, ct, x, data_args, data)
                             }
-                            self.split_con(tcs, ct, x, data_args, data)
+                            _ => unreachable!("Data type definition expected"),
                         }
-                        _ => unreachable!("Data type definition expected"),
                     }
-                }
+                    None => {
+                        unimplemented!("Eta var expected");
+                    }
+                },
                 _ => unreachable!("Attempt to split on non-data type"),
             }
         } else {
@@ -358,7 +366,7 @@ impl LshProblem {
         if clause_1.rhs.is_some() {
             return Err(Error::UnexpectedRhs);
         }
-        return Ok(CaseTree::Case(x, Vec::new()));
+        return Ok(CaseTree::case(x, Vec::new()));
     }
 
     fn split_con(
@@ -384,7 +392,7 @@ impl LshProblem {
             let delta_i = cons.signature.clone().tele_view().0;
             let delta_tick_i = Ctx(delta_i.clone());
             let mut gamma1 = tcs.gamma.clone();
-            let (xx, mut gamma2) = gamma1.split(dsp!(x));
+            let (xx, mut gamma2) = gamma1.split(x);
             debug_assert_eq!(xx.ty, ct.ty);
             let mut delta_tick_hat_i =
                 (data_args.clone()).subst(Substitution::raise(cons.params.len()));
@@ -444,7 +452,7 @@ impl LshProblem {
                             }
                             v @ (Term::Whnf(Val::Cons(..)), PatA::Var(_)) => {
                                 let delta_tick_i_renamed = delta_tick_i.clone().skipping(delta_len);
-                                gamma1.extend(dsp!(delta_tick_i_renamed));
+                                gamma1.extend(delta_tick_i_renamed);
 
                                 constraints_new.push(Constraint::new(v.1, v.0, cst.ty));
                             }
@@ -484,7 +492,7 @@ impl LshProblem {
             );
             ct_clauses.push((clause_pat, Some(ct)));
         }
-        return Ok(CaseTree::Case(x, ct_clauses));
+        return Ok(CaseTree::case(x, ct_clauses));
     }
 
     fn done(tcs: &mut TypeCheckState, clause_1: &Clause, target: Term) -> Result<CaseTree> {
@@ -501,7 +509,7 @@ impl LshProblem {
         debug!("new abs-subst = {:?}", refined_user_pats);
         rhs1.subst_abs(refined_user_pats.clone());
         debug!("rhs refined = {}", rhs1);
-
+        debug!("target = {}", target);
         let checked_rhs = tcs.check(&rhs1, &tcs.simplify(target)?)?.ast;
         return Ok(CaseTree::Leaf(checked_rhs));
     }
@@ -637,7 +645,7 @@ mod tests {
             }
         }
          */
-        let cte = Term::mat(
+        let cte = Term::mat_elim(
             0,
             [
                 Case {
@@ -667,7 +675,7 @@ mod tests {
                         vec![Pat::from_dbi(0)],
                     ),
                     body: Match(
-                        1,
+                        box Term::from_dbi(1),
                         vec![
                             Case {
                                 pattern: Cons(
@@ -746,7 +754,7 @@ mod tests {
             .unwrap()
             .tele_view()
             .1;
-        let cte = Term::mat(0, []);
+        let cte = Term::mat_elim(0, []);
         assert_eq!(ct, cte);
 
         Ok(())
@@ -788,7 +796,7 @@ mod tests {
             .unwrap()
             .tele_view()
             .1;
-        let cte = Term::mat(
+        let cte = Term::mat_elim(
             0,
             [Case {
                 pattern: Cons(
@@ -823,7 +831,7 @@ mod tests {
             .unwrap()
             .tele_view()
             .1;
-        let cte = Term::mat(
+        let cte = Term::mat_elim(
             0,
             [Case {
                 pattern: Cons(
@@ -912,7 +920,7 @@ mod tests {
             .unwrap()
             .tele_view()
             .1;
-        println!("{}", ct);
+        debug!("{}", ct);
         /*
         match 0 { -- x
          | zero => @0
@@ -934,6 +942,7 @@ mod tests {
         let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
+        env.trace_tc = true;
         let mut des = desugar_prog(p.parse_prog(
             r#"
         data Sigma (A : Type) (B : A -> Type) : Type1
@@ -942,6 +951,10 @@ mod tests {
         data Nat : Type
             | zero
             | suc Nat
+
+        data Bool : Type
+            | true
+            | false
 
         data Pair (A : Type) (B : Type) : Type1
             | mkPair A B
@@ -954,33 +967,46 @@ mod tests {
             | (mkPair t1 t2 a b) => b
         }
 
+        fn sproj1 (A : Type) (B : A -> Type) (x : Sigma A B) : A := match x {
+            | (mkSigma t1 t2 a b) => a
+        }
+
+        fn sproj2 (A : Type) (B : A -> Type) (x : Sigma A B) : B (match x { | (mkSigma t1 t2 a b) => a }) := match x {
+             | (mkSigma t1 t2 a b) => b
+        }
+
         fn pair := mkPair Nat Nat (suc zero) zero
         fn tst1 : Nat := proj1 Nat Nat (mkPair Nat Nat (suc zero) zero)
         fn tst2 : Nat := proj2 Nat Nat (mkPair Nat Nat (suc zero) zero)
+        fn tst3 : Nat := sproj1 Nat (lam z : Nat => Nat) (mkSigma Nat (lam z : Nat => Nat) (suc zero) zero)
+        fn tst4 : Nat := sproj2 Nat (lam z : Nat => Nat) (mkSigma Nat (lam z : Nat => Nat) (suc zero) zero)
+        fn tst5 : Nat := sproj2 Nat (lam z : Nat => match z { | zero => Nat | o => Bool }) (mkSigma Nat (lam z : Nat => match z { | zero => Nat | o => Bool }) zero zero)
+        -- fn tst6 : Bool := sproj2 Nat (lam z : Nat => match z { | zero => Nat | o => Bool }) (mkSigma Nat (lam z : Nat => match z { | zero => Nat | o => Bool }) (suc zero) true)
        "#,
         )?)?;
         env.check_prog(des.clone())?;
-        let ct = env
-            .def(*des.decls_map.get("tst1").unwrap())
-            .as_func()
-            .body
-            .clone()
-            .unwrap()
-            .tele_view()
-            .1;
-        println!("{}", ct);
-        /*
-        match 0 { -- x
-         | zero => @0
-         | (suc 0) => match 1 { -- y
-             | zero => (suc @0)
-             | (suc 0) => (suc (max @1 @1)) -- suc (max @1 @1)
-            }
-        }
-        */
-        let val = pct!(p, des, env, "tst1");
-        let val1 = pct!(p, des, env, "(suc zero)");
-        Val::unify(&mut env, &val1, &val)?;
+
+        // let val = pct!(p, des, env, "tst1");
+        // let val1 = pct!(p, des, env, "(suc zero)");
+        // Val::unify(&mut env, &val1, &val)?;
+        //
+        // let val = pct!(p, des, env, "tst2");
+        // let val1 = pct!(p, des, env, "zero");
+        // Val::unify(&mut env, &val1, &val)?;
+        //
+        // let val = pct!(p, des, env, "tst3");
+        // let val1 = pct!(p, des, env, "(suc zero)");
+        // Val::unify(&mut env, &val1, &val)?;
+        //
+        // let val = pct!(p, des, env, "tst4");
+        // let val1 = pct!(p, des, env, "zero");
+        // Val::unify(&mut env, &val1, &val)?;
+
+        // debug!("ll");
+        // let val = pct!(p, des, env, "tst5");
+        // let val1 = pct!(p, des, env, "zero");
+        // Val::unify(&mut env, &val1, &val)?;
+
         Ok(())
     }
 
@@ -1030,7 +1056,7 @@ mod tests {
         for b in &gamma {
             print!("{}, ", b);
         }
-        println!();
+        debug!("");
         let _b = gamma.remove(1);
         let mut gamma1 = gamma.clone();
         let gamma2 = gamma1.split_off(1);
@@ -1063,7 +1089,7 @@ mod tests {
         for b in &gamma2 {
             print!("{}, ", b);
         }
-        println!();
+        debug!("");
         let gamma2 = Ctx(gamma2)
             .subst(
                 // Substitution::one(cons).weaken(rise),
@@ -1074,7 +1100,7 @@ mod tests {
         for b in &gamma1 {
             print!("{}, ", b);
         }
-        println!();
+        debug!("");
     }
 
     #[test]
@@ -1088,18 +1114,27 @@ mod tests {
         );
         // CC B C A
         // CC (Cons Ba Bb Bc) C A
-        let term = cons.apply(vec![Term::from_dbi(2)]);
+        let term = cons.clone().apply(vec![Term::from_dbi(2)]);
         let cons2 = Term::cons(
             ConHead::new(Ident::new("Cons", Loc::default()), 7),
             (0..3).rev().map(|i| Term::from_dbi(i)).collect(),
         );
         let rise = 3;
-        println!("{}", term);
+        debug!("{}", term);
         let term = term.subst(
             // Substitution::one(cons).weaken(rise),
             Substitution::raise(rise).cons(cons2).lift_by(2),
         );
-        println!("{}", term);
+        debug!("{}", term);
+        // n m
+        let x = Term::from_dbi(1);
+        let cons2 = Term::cons(
+            ConHead::new(Ident::new("C2", Loc::default()), 7),
+            [2, 1, 3].into_iter().map(|i| Term::from_dbi(i)).collect(),
+        );
+        let rc = Substitution::one(cons).cons(cons2);
+        debug!("{}", rc);
+        debug!("{}", x.subst(rc));
     }
 
     #[test]
@@ -1133,7 +1168,7 @@ mod tests {
         let con_s = ConHead::new(Ident::new("S", Loc::default()), 1);
         let pat_s = |x: DBI| Cons(false, con_s.clone(), vec![Var(x)]);
         let ct_1 = Case(
-            1,
+            Term::from_dbi(1),
             vec![(
                 // Γ = (n : Nat)
                 pat_z.clone(),
@@ -1142,13 +1177,13 @@ mod tests {
         );
         // Γ = (m : Nat) (n : Nat)
         let ct_2 = Case(
-            1,
+            Term::from_dbi(1),
             vec![
                 (
                     // Γ = (n : Nat)
                     pat_z.clone(),
                     Some(Case(
-                        0,
+                        Term::from_dbi(0),
                         vec![(
                             // Γ = ε
                             pat_z.clone(),
@@ -1160,7 +1195,7 @@ mod tests {
                     // Γ = (n : Nat) (p : Nat)
                     pat_s(0),
                     Some(Case(
-                        1,
+                        Term::from_dbi(1),
                         vec![(
                             // Γ = (p : Nat)
                             pat_z.clone(),
@@ -1172,12 +1207,12 @@ mod tests {
         );
         // Γ = (m : Nat) (n : Nat)
         let ct_3 = Case(
-            1,
+            Term::from_dbi(1),
             vec![(
                 // Γ = (n : Nat) (p : Nat)
                 pat_s(0),
                 Some(Case(
-                    1,
+                    Term::from_dbi(1),
                     vec![(
                         // Γ = (p : Nat) (q : Nat)
                         pat_s(0),
@@ -1199,7 +1234,7 @@ mod tests {
         );
 
         let ct_exp = Case(
-            1,
+            Term::from_dbi(1),
             vec![
                 (
                     // Γ = (n : Nat)
@@ -1210,7 +1245,7 @@ mod tests {
                     // Γ = (n : Nat) (p : Nat)
                     pat_s(0),
                     Some(Case(
-                        1,
+                        Term::from_dbi(1),
                         vec![
                             (
                                 // Γ = (p : Nat)

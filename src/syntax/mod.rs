@@ -187,6 +187,19 @@ impl<T> Bind<Box<T>> {
     }
 }
 
+/// Let binding.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Let<T> {
+    pub bind: Bind<T>,
+    pub val: T,
+}
+
+impl<T> Let<T> {
+    pub fn new(bind: Bind<T>, val: T) -> Self {
+        Self { bind, val }
+    }
+}
+
 /// Constructor information.
 /// [Agda](https://hackage.haskell.org/package/Agda-2.6.0.1/docs/src/Agda.Syntax.Internal.html#ConHead).
 #[derive(Debug, Eq, Clone)]

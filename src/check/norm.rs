@@ -1,9 +1,12 @@
 use crate::check::block::{Blocked, Stuck};
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
-use crate::syntax::core::{build_subst, Closure, Decl, Elim, Func, Simpl, Subst, Term, Val};
+use crate::syntax::core::{
+    build_subst, Case, Closure, Decl, Elim, Func, Simpl, Subst, Substitution, Term, Val,
+};
 use crate::syntax::{ConHead, Ident, GI};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 fn elims_to_terms(elims: Vec<Elim>) -> Result<Vec<Term>> {
     elims
@@ -11,6 +14,15 @@ fn elims_to_terms(elims: Vec<Elim>) -> Result<Vec<Term>> {
         .map(Elim::try_into_app)
         .collect::<Result<_, String>>()
         .map_err(Error::NotTerm)
+}
+
+/// Returns `Some(i, n)` for ith-matched case with n new variables bound, and None
+/// for a stuck match.
+pub fn try_match(x: &Term, cs: &[Case]) -> Option<(usize, Rc<Substitution>)> {
+    cs.into_iter()
+        .enumerate()
+        .filter_map(|(i, c)| c.pattern.match_term(x).map(|j| (i, j)))
+        .next()
 }
 
 impl TypeCheckState {
@@ -53,8 +65,19 @@ impl TypeCheckState {
                     self.simplify(*term)
                 }
             },
-            Term::Match(_, _) => {
-                todo!()
+            Term::Match(x, mut cs) => {
+                match try_match(&x, &cs) {
+                    Some((i, sigma)) => {
+                        debug!("matched {} with new {} vars", i, sigma);
+                        let matched_case = cs.remove(i);
+                        self.simplify(matched_case.body.subst(sigma))
+                    }
+                    None => {
+                        // Ok(Term::Match(x, cs))
+                        // TODO: fix error
+                        Err(Error::Blocked(box Blocked::new(Stuck::MissingClauses, *x)))
+                    }
+                }
             }
         }
     }

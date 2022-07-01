@@ -1,9 +1,9 @@
 use crate::check::meta::MetaContext;
 use crate::syntax::core::{
-    Bind, Ctx, DeBruijn, Decl, Indentation, Subst, Substitution, Term, Val,
+    Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, Subst, Substitution, Term, Val,
 };
 use crate::syntax::{DBI, GI, UID};
-use std::fmt::{Display};
+use std::fmt::Display;
 use std::mem::swap;
 
 /// Typing context.
@@ -24,6 +24,8 @@ pub struct TypeCheckState {
     pub sigma: Sigma,
     /// Local typing context.
     pub gamma: Ctx,
+    /// Let bindings.
+    pub lets: LetList,
     /// Meta variable context, scoped. Always global.
     pub meta_ctx: Vec<MetaContext<Term>>,
 }
@@ -99,6 +101,7 @@ impl TypeCheckState {
     pub fn sanity_check(&self) {
         debug_assert_eq!(self.unify_depth, 0);
         debug_assert!(self.gamma.is_empty());
+        debug_assert!(self.lets.is_empty());
     }
 
     pub fn reserve_local_variables(&mut self, additional: usize) {
@@ -117,15 +120,23 @@ impl TypeCheckState {
         &self.sigma[ix]
     }
 
-    pub fn local_by_id(&self, id: UID) -> (Bind<Term>, Term) {
+    pub fn local_by_id(&self, id: UID) -> Let {
         self.local_by_id_safe(id)
             .unwrap_or_else(|| panic!("unresolved local {}", id))
     }
 
-    pub fn local_by_id_safe(&self, id: UID) -> Option<(Bind<Term>, Term)> {
-        let (i, ty) = self.gamma_by_id_safe(id)?;
-        let ty = ty.clone().subst(Substitution::raise(i + 1));
-        Some((ty, DeBruijn::from_dbi(i)))
+    pub fn local_by_id_safe(&self, id: UID) -> Option<Let> {
+        let lookup_let = || self.let_by_id_safe(id).cloned();
+        let lookup_gamma = || {
+            let (i, ty) = self.gamma_by_id_safe(id)?;
+            let ty = ty.clone().subst(Substitution::raise(i + 1));
+            Some(Let::new(ty, DeBruijn::from_dbi(i)))
+        };
+        lookup_let().or_else(lookup_gamma)
+    }
+
+    fn let_by_id_safe(&self, id: UID) -> Option<&Let> {
+        self.lets.iter().find(|b| b.bind.name == id)
     }
 
     fn gamma_by_id_safe(&self, id: UID) -> Option<(DBI, &Bind)> {

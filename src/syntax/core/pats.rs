@@ -49,7 +49,7 @@ impl std::ops::Add for Simpl {
 impl Pat {
     /// Fig. 6 in Norell's PhD.
     pub(crate) fn match_term(&self, t: &Term) -> Option<Rc<Substitution>> {
-        println!("match_term [{}/{}]", self, t);
+        debug!("match_term [{}/{}]", self, t);
         match (t, self) {
             (v, Pat::Var(_)) => Some(Substitution::one(v.clone())),
             (_, Pat::Forced(..)) => Some(Substitution::id()),

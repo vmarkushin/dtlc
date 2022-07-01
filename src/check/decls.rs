@@ -34,6 +34,7 @@ impl TypeCheckState {
             }
             let decl = take(&mut decls, i);
             self.tc_reset_depth();
+            debug!("Checking decl {}", decl.ident());
             match decl {
                 ADecl::Data(info) => {
                     let cs = (info.conses.iter())

@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn test_split_subst() {
         let x = 1;
-        let t = Term::mat(
+        let t = Term::mat_elim(
             x,
             vec![Case::new(
                 Pat::cons(
@@ -286,8 +286,8 @@ mod tests {
         .into_iter()
         .map(From::from)
         .collect());
-        println!("Γ = {}", Γ);
-        println!("{}", t);
+        debug!("Γ = {}", Γ);
+        debug!("{}", t);
 
         let Γ_new = Ctx(vec![
             (2, Term::data(ValData::new(0, vec![]))),
@@ -299,7 +299,7 @@ mod tests {
         .map(From::from)
         .collect());
 
-        println!("Γ' = {}", Γ_new);
+        debug!("Γ' = {}", Γ_new);
         let σ = build_subst(
             vec![
                 (0, Term::meta(0, vec![])),
@@ -310,12 +310,12 @@ mod tests {
             .collect::<HashMap<_, _>>(),
             3,
         );
-        println!("σ = {}", σ);
+        debug!("σ = {}", σ);
         let (ρ, τ) = σ.split(x);
-        println!("ρ = {}, τ = {}", ρ, τ);
+        debug!("ρ = {}, τ = {}", ρ, τ);
         let α = ρ.drop_by(1).lift_by(2).union(τ);
-        println!("ρ ⊎ τ = α = {}", α);
-        println!("{}", t.subst(α));
+        debug!("ρ ⊎ τ = α = {}", α);
+        debug!("{}", t.subst(α));
         // Γ = (a : A) (b : B) (c : C)
         //      2       1       0
         // σ = { 0 := x, 1 := y, 2 := z }

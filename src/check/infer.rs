@@ -1,8 +1,8 @@
 use crate::check::state::TypeCheckState;
 use crate::check::{Clause, Error, LshProblem, Result};
 use crate::syntax::abs::{AppView, Expr};
+use crate::syntax::core::Closure;
 use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, Val, ValData};
-use crate::syntax::core::{Closure};
 use crate::syntax::{ConHead, Ident, Loc, Universe, GI};
 
 impl TypeCheckState {
@@ -239,8 +239,8 @@ impl TypeCheckState {
                 Ok((lam_checked, ty))
             }
             Var(loc, var) => {
-                let (bind, val) = self.local_by_id(*var);
-                Ok((val.at(loc.loc), bind.ty))
+                let lb = self.local_by_id(*var);
+                Ok((lb.val.at(loc.loc), lb.bind.ty))
             }
             Meta(ident, mi) => {
                 let ty = Term::meta(*mi, vec![]);

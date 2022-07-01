@@ -7,6 +7,7 @@ mod redex;
 mod subst;
 mod term;
 
+use crate::syntax;
 use crate::syntax::{Loc, DBI};
 pub use dbi::DeBruijn;
 pub use decl::{ConsInfo, DataInfo, Decl, FuncInfo, ProjInfo};
@@ -47,6 +48,7 @@ impl TermInfo {
 /// Telescopes.
 pub type Tele = Vec<Bind>;
 pub type TeleS = [Bind];
+pub type Let<T = Term> = syntax::Let<T>;
 
 /// Contexts. Dual to telescopes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -130,6 +132,23 @@ impl Display for Ctx {
             "{}",
             self.0.iter().map(|b| format!("({})", b)).join(", ")
         )
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LetList(pub Vec<Let>);
+
+impl LetList {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn new(field0: Vec<Let>) -> Self {
+        Self(field0)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Let> {
+        self.0.iter()
     }
 }
 

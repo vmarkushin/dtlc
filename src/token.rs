@@ -33,6 +33,8 @@ pub enum Token<'input> {
     #[token("λ")]
     Lam,
     #[token("fn")]
+    Fn,
+    #[token("let")]
     Let,
     #[token("|")]
     Pipe,
@@ -90,7 +92,8 @@ impl<'a> Display for Token<'a> {
             Dot                 => f.write_str("."),
             DArrow              => f.write_str("=>"),
             Lam                 => f.write_str("lam"),
-            Let                 => f.write_str("fn"),
+            Fn                  => f.write_str("fn"),
+            Let                 => f.write_str("let"),
             Pipe                => f.write_str("|"),
             RArrow              => f.write_str("->"),
             LBrace              => f.write_str("{"),

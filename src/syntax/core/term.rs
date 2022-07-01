@@ -79,8 +79,9 @@ pub struct Case {
 }
 impl Subst for Case {
     fn subst(mut self, subst: Rc<Substitution>) -> Case {
-        self.pattern = self.pattern.subst(subst.clone());
-        self.body = self.body.subst(subst);
+        // self.pattern = self.pattern.subst(subst.clone());
+        let new_tele_len = self.pattern.vars().len();
+        self.body = self.body.subst(subst.lift_by(new_tele_len));
         self
     }
 }
@@ -97,8 +98,7 @@ pub enum Term {
     Whnf(Val),
     Redex(Func, Ident, Vec<Elim>),
     /// Data elimination.
-    Match(DBI, Vec<Case>),
-    // Match(Box<CaseTree>),
+    Match(Box<Term>, Vec<Case>),
 }
 
 pub trait TryIntoPat<Ix, T> {
@@ -118,6 +118,12 @@ impl<Ix: From<DBI>, T: Subst<Term>> TryIntoPat<Ix, T> for Term {
             Term::Whnf(Val::Var(ix, _)) => Some(Pat::Var(Ix::from(ix))),
             _ => None,
         }
+    }
+}
+
+impl From<DBI> for Term {
+    fn from(dbi: DBI) -> Self {
+        Term::from_dbi(dbi)
     }
 }
 
@@ -153,8 +159,12 @@ impl Term {
         Term::Whnf(Val::Lam(Lambda(p0, Closure::Plain(box p1))))
     }
 
-    pub fn mat(x: DBI, cs: impl Into<Vec<Case>>) -> Self {
-        Term::Match(x, cs.into())
+    pub fn mat(t: impl Into<Box<Term>>, cs: impl Into<Vec<Case>>) -> Self {
+        Term::Match(t.into(), cs.into())
+    }
+
+    pub fn mat_elim(x: DBI, cs: impl Into<Vec<Case>>) -> Self {
+        Self::mat(box Term::from_dbi(x), cs)
     }
 
     pub fn is_meta(&self) -> bool {

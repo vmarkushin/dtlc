@@ -1,6 +1,6 @@
 use crate::check::CaseTree;
 use crate::syntax::core::term::{Case, Pat};
-use crate::syntax::core::{Closure, DeBruijn, Elim, Func, Lambda, Term, Val};
+use crate::syntax::core::{Closure, Elim, Func, Lambda, Term, Val};
 
 pub trait FoldVal {
     fn try_fold_val<E, R>(
@@ -78,7 +78,7 @@ impl FoldVal for CaseTree {
     ) -> Result<R, E> {
         match self {
             CaseTree::Leaf(t) => t.try_fold_val(init, f),
-            CaseTree::Case(x, cs) => Val::from_dbi(*x).try_fold_val(cs.try_fold_val(init, f)?, f),
+            CaseTree::Case(x, cs) => x.try_fold_val(cs.try_fold_val(init, f)?, f),
         }
     }
 }

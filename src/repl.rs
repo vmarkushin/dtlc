@@ -277,7 +277,7 @@ pub fn run_repl(
             des.cur_meta_id.pop();
         }
         let term = infer_res?;
-        println!(
+        debug!(
             "{}",
             env.simplify(term)
                 .wrap_err("Failed to simplify the expression")?
@@ -293,7 +293,7 @@ pub fn run_repl(
         env.meta_ctx.pop();
         des.cur_meta_id.pop();
         let t = res?;
-        println!("{}", t);
+        debug!("{}", t);
     }
     Ok(())
 }

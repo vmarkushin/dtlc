@@ -193,6 +193,7 @@ impl TypeCheckState {
     }
 
     #[allow(clippy::many_single_char_names)]
+    #[track_caller]
     fn unify_val(&mut self, left: &Val, right: &Val) -> Result<()> {
         use Val::*;
         match (left, right) {
