@@ -26,7 +26,7 @@ mod grammar {
 #[macro_use]
 extern crate log;
 
-mod check;
+pub mod check;
 pub mod macros;
 pub mod parser;
 pub mod repl;

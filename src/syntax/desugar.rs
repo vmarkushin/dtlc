@@ -489,7 +489,7 @@ fn foo (p : Nat) := match p {
                     DeclA::Fn(FuncA::new(
                         Ident::new("foo", Loc::new(41, 44),),
                         Some(ExprA::Lam(
-                            Loc { start: 46, end: 65 },
+                            Loc::default(),
                             Bind {
                                 licit: Explicit,
                                 name: 0,
@@ -506,7 +506,7 @@ fn foo (p : Nat) := match p {
                                 vec1![Var(
                                     Ident {
                                         text: "p".to_owned(),
-                                        loc: Loc { start: 64, end: 65 }
+                                        loc: Loc::default()
                                     },
                                     0
                                 )],
@@ -518,7 +518,7 @@ fn foo (p : Nat) := match p {
                                             ConHead {
                                                 name: Ident {
                                                     text: "Z".to_owned(),
-                                                    loc: Loc { start: 78, end: 79 }
+                                                    loc: Loc::default()
                                                 },
                                                 cons_gi: 1
                                             },
@@ -542,38 +542,29 @@ fn foo (p : Nat) := match p {
                                                                 },
                                                                 0
                                                             )),
-                                                            loc: Loc { start: 93, end: 96 }
+                                                            loc: Loc::default()
                                                         },
                                                         box Def(
                                                             Ident {
-                                                                loc: Loc {
-                                                                    start: 100,
-                                                                    end: 103
-                                                                },
+                                                                loc: Loc::default(),
                                                                 text: "Nat".to_owned()
                                                             },
                                                             0
                                                         )
                                                     )),
-                                                    loc: Loc { start: 89, end: 90 }
+                                                    loc: Loc::default()
                                                 },
                                                 box ExprA::App(
                                                     box ExprA::Var(
                                                         Ident {
-                                                            loc: Loc {
-                                                                start: 108,
-                                                                end: 109
-                                                            },
+                                                            loc: Loc::default(),
                                                             text: "f".to_owned()
                                                         },
                                                         1
                                                     ),
                                                     Vec1::new(ExprA::Var(
                                                         Ident {
-                                                            loc: Loc {
-                                                                start: 110,
-                                                                end: 111
-                                                            },
+                                                            loc: Loc::default(),
                                                             text: "p".to_owned()
                                                         },
                                                         0
@@ -581,34 +572,22 @@ fn foo (p : Nat) := match p {
                                                 )
                                             ),
                                             Vec1::new(ExprA::Lam(
-                                                Loc {
-                                                    start: 119,
-                                                    end: 132
-                                                },
+                                                Loc::default(),
                                                 Bind {
                                                     licit: Explicit,
                                                     name: 1,
                                                     ty: box Some(Def(
                                                         Ident {
-                                                            loc: Loc {
-                                                                start: 123,
-                                                                end: 126
-                                                            },
+                                                            loc: Loc::default(),
                                                             text: "Nat".to_owned()
                                                         },
                                                         0
                                                     )),
-                                                    loc: Loc {
-                                                        start: 119,
-                                                        end: 120
-                                                    }
+                                                    loc: Loc::default()
                                                 },
                                                 box ExprA::Var(
                                                     Ident {
-                                                        loc: Loc {
-                                                            start: 131,
-                                                            end: 132
-                                                        },
+                                                        loc: Loc::default(),
                                                         text: "n".to_owned()
                                                     },
                                                     1
@@ -623,10 +602,7 @@ fn foo (p : Nat) := match p {
                                             ConHead {
                                                 name: Ident {
                                                     text: "S".to_owned(),
-                                                    loc: Loc {
-                                                        start: 145,
-                                                        end: 146
-                                                    }
+                                                    loc: Loc::default()
                                                 },
                                                 cons_gi: 2
                                             },
@@ -635,10 +611,7 @@ fn foo (p : Nat) := match p {
                                         body: Some(Var(
                                             Ident {
                                                 text: "n".to_owned(),
-                                                loc: Loc {
-                                                    start: 153,
-                                                    end: 154
-                                                }
+                                                loc: Loc::default()
                                             },
                                             1
                                         ))

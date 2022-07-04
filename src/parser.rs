@@ -1,68 +1,63 @@
 use crate::grammar::{DeclParser, ExprParser, ProgParser};
 use crate::syntax::surf::{Decl, Expr, Prog};
-use crate::token::Token;
-use codespan::Files;
+use crate::syntax::Loc;
+use crate::token::{lexer, Position, Token};
+use codespan::{Files, RawIndex};
+use codespan_reporting::files::SimpleFile;
 use logos::Logos;
+use std::rc::Rc;
 
-type ParseError<'a> = lalrpop_util::ParseError<usize, Token<'a>, &'static str>;
+type ParseError<'a> = lalrpop_util::ParseError<Position, Token<'a>, &'static str>;
 
-pub struct Parser<'a> {
+pub struct Parser {
     expr: ExprParser,
     decl: DeclParser,
     prog: ProgParser,
-    files: Files<&'a str>,
+    file: SimpleFile<String, String>,
+    // files: Files<Rc<String>>,
 }
 
-impl<'a> Parser<'a> {
-    pub fn parse_expr(&mut self, input: &'a str) -> Result<Expr, ParseError<'a>> {
-        let tokens = self.lexer(input);
+impl Parser {
+    pub fn parse_expr<'inp>(&self, input: &'inp str) -> Result<Expr, ParseError<'inp>> {
+        let tokens = lexer(input);
         self.expr.parse(tokens)
     }
 
-    pub fn parse_decl(&mut self, input: &'a str) -> Result<Decl, ParseError<'a>> {
-        let tokens = self.lexer(input);
+    pub fn parse_decl<'inp>(&self, input: &'inp str) -> Result<Decl, ParseError<'inp>> {
+        let tokens = lexer(input);
         self.decl.parse(tokens)
     }
 
-    pub fn parse_prog(&mut self, input: &'a str) -> Result<Prog, ParseError<'a>> {
-        let tokens = self.lexer(input);
+    pub fn parse_prog<'inp>(&self, input: &'inp str) -> Result<Prog, ParseError<'inp>> {
+        let tokens = lexer(input);
         self.prog.parse(tokens)
     }
 }
 
-impl<'a> Parser<'a> {
+impl Parser {
     pub fn new(expr: ExprParser, decl: DeclParser, prog: ProgParser) -> Self {
-        let files = Files::new();
+        let file = SimpleFile::new("".to_owned(), "".to_owned());
+        // let files = Files::new();
         Self {
             expr,
             decl,
             prog,
-            files,
+            file,
+            // files,
         }
     }
 
-    fn lexer(&mut self, input: &'a str) -> impl Iterator<Item = (usize, Token<'a>, usize)> + 'a {
-        let _fid = self.files.add("tmp", input);
-        let tokens = Token::lexer(input).spanned().map(move |(tok, span)| {
-            // let loc = files
-            //     .location(fid, RawIndex::from(span.start as u32))
-            //     .unwrap();
-            // (
-            //     tok,
-            //     Loc::new(
-            //         loc.line.number().to_usize(),
-            //         span.start,
-            //         span.end,
-            //         loc.column.to_usize(),
-            //     ),
-            // )
-            (span.start, tok, span.end)
-        });
-        tokens
-    }
+    // fn lexer2(&mut self, input: &'a str) -> FileIter<'a> {
+    //     let files = Files::new();
+    //
+    //     let file_iter = FileIter {
+    //         files,
+    //         // input,
+    //     };
+    // }
 }
 
-impl<'a> Default for Parser<'a> {
+impl Default for Parser {
     fn default() -> Self {
         Self::new(ExprParser::new(), DeclParser::new(), ProgParser::new())
     }
@@ -73,7 +68,7 @@ mod tests {
     use crate::parser::{ParseError, Parser};
     use crate::syntax::surf::Expr::{self};
     use crate::syntax::Ident;
-    use crate::token::Token;
+    use crate::token::{Position, Token};
 
     #[test]
     fn parse_pi() {
@@ -116,14 +111,18 @@ mod tests {
         assert_eq!(
             parser.parse_expr("forall (T U : A) X : A , T").unwrap_err(),
             ParseError::UnrecognizedToken {
-                token: (17, Token::Ident("X"), 18),
+                token: ((17, 1, 13).into(), Token::Ident("X"), (18, 1, 14).into()),
                 expected: vec!["\"(\"".into(), "\",\"".into()]
             }
         );
         assert_eq!(
             parser.parse_expr("forall T U : A, T").unwrap_err(),
             ParseError::UnrecognizedToken {
-                token: (7, Token::Ident("T"), 8),
+                token: (
+                    Position::new(7, 1, 7),
+                    Token::Ident("T"),
+                    Position::new(8, 1, 8)
+                ),
                 expected: vec!["\"(\"".into()]
             }
         );

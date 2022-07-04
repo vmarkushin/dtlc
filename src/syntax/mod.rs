@@ -1,3 +1,5 @@
+use crate::token::Position;
+use codespan::{ColumnIndex, LineIndex};
 use derive_more::{Add, AsRef, Deref, From};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::{Add, Range};
@@ -15,15 +17,43 @@ pub enum Plicitness {
     Implicit,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, Eq, Default)]
 pub struct Loc {
     pub start: usize,
     pub end: usize,
+    pub line: LineIndex,
+    pub col: ColumnIndex,
+}
+
+impl PartialEq for Loc {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl From<(Position, Position)> for Loc {
+    fn from((s, e): (Position, Position)) -> Self {
+        Self::new2(s, e)
+    }
 }
 
 impl Loc {
     pub fn new(start: usize, end: usize) -> Self {
-        Loc { start, end }
+        Loc {
+            start,
+            end,
+            line: LineIndex(0),
+            col: ColumnIndex(0),
+        }
+    }
+
+    pub fn new2(start: Position, end: Position) -> Self {
+        Loc {
+            start: start.abs,
+            end: end.abs,
+            line: start.line,
+            col: start.col,
+        }
     }
 }
 
@@ -40,6 +70,8 @@ impl Add for Loc {
         Self::Output {
             start: self.start,
             end: rhs.end,
+            line: self.line,
+            col: rhs.col,
         }
     }
 }
@@ -50,12 +82,18 @@ impl Display for Loc {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Deref, AsRef)]
+#[derive(Debug, Clone, Eq, Deref, AsRef)]
 pub struct Ident {
     #[deref]
     #[as_ref]
     pub text: String,
     pub loc: Loc,
+}
+
+impl PartialEq for Ident {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+    }
 }
 
 impl Ident {

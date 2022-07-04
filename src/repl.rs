@@ -1,9 +1,9 @@
 use std::path::PathBuf;
-use std::{borrow::Cow, fmt};
+use std::{borrow::Cow, fmt, fs};
 
 use crate::check::TypeCheckState;
 use crate::parser::Parser;
-use crate::syntax::desugar::DesugarState;
+use crate::syntax::desugar::{desugar_prog, DesugarState};
 use eyre::{Result, WrapErr};
 use rustyline::{
     completion::Completer,
@@ -88,7 +88,7 @@ struct Helper {
     highlighter: Highlighter,
     hinter: Hinter,
 
-    parser: Parser<'static>,
+    parser: Parser,
     des: DesugarState,
     env: TypeCheckState,
 }
@@ -185,12 +185,7 @@ impl Completer for Helper {
 
 pub fn repl(
     prompt: &str,
-    mut f: impl FnMut(
-        &mut Parser<'static>,
-        &mut DesugarState,
-        &mut TypeCheckState,
-        &'static str,
-    ) -> Result<()>,
+    mut f: impl FnMut(&mut Parser, &mut DesugarState, &mut TypeCheckState, &'static str) -> Result<()>,
 ) {
     let mut rl = Editor::with_config(
         config::Config::builder()
@@ -228,11 +223,36 @@ pub fn repl(
 }
 
 pub fn run_repl(
-    parser: &mut Parser<'static>,
+    parser: &mut Parser,
     des: &mut DesugarState,
     env: &mut TypeCheckState,
     input: &'static str,
 ) -> Result<()> {
+    if let Some(input) = input.strip_prefix(":l ") {
+        let content = fs::read_to_string(input)?;
+        // println!("{}", content);
+        // match parser.parse_prog(&content)? {
+        //     Err(e) => {
+        //         panic!("{}", e);
+        //     }
+        //     Ok(prog) => {
+        //         let des = desugar_prog(prog)?;
+        //         let mut env = TypeCheckState::default();
+        //         env.check_prog(des.clone())?;
+        //     }
+        // }
+        let prog = parser.parse_prog(&content).unwrap();
+        // for decl in prog {
+        //     des.desugar_decl(decl)?;
+        // }
+        *des = desugar_prog(prog).unwrap();
+        // env.check_prog()
+        // let _check_res = env
+        //     .check_decls(des.decls[0..].iter().cloned(), des.cur_meta_id.clone())
+        //     .wrap_err("Failed to type-check expression");
+        env.check_prog(des.clone())?;
+        return Ok(());
+    }
     if input.starts_with("fn ") || input.starts_with("data ") {
         let decl = parser
             .parse_decl(input)
@@ -277,7 +297,7 @@ pub fn run_repl(
             des.cur_meta_id.pop();
         }
         let term = infer_res?;
-        debug!(
+        println!(
             "{}",
             env.simplify(term)
                 .wrap_err("Failed to simplify the expression")?
@@ -293,7 +313,7 @@ pub fn run_repl(
         env.meta_ctx.pop();
         des.cur_meta_id.pop();
         let t = res?;
-        debug!("{}", t);
+        println!("{}", t);
     }
     Ok(())
 }

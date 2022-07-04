@@ -660,7 +660,7 @@ mod tests {
                         ConHead {
                             name: Ident {
                                 text: "zero".to_string(),
-                                loc: Loc { start: 39, end: 43 },
+                                loc: Loc::default(),
                             },
                             cons_gi: 1,
                         },
@@ -674,7 +674,7 @@ mod tests {
                         ConHead {
                             name: Ident {
                                 text: "suc".to_owned(),
-                                loc: Loc { start: 58, end: 61 },
+                                loc: Loc::default(),
                             },
                             cons_gi: 2,
                         },
@@ -689,7 +689,7 @@ mod tests {
                                     ConHead {
                                         name: Ident {
                                             text: "zero".to_owned(),
-                                            loc: Loc { start: 39, end: 43 },
+                                            loc: Loc::default(),
                                         },
                                         cons_gi: 1,
                                     },
@@ -699,7 +699,7 @@ mod tests {
                                     ConHead {
                                         name: Ident {
                                             text: "suc".to_owned(),
-                                            loc: Loc { start: 58, end: 61 },
+                                            loc: Loc::default(),
                                         },
                                         cons_gi: 2,
                                     },
@@ -712,7 +712,7 @@ mod tests {
                                     ConHead {
                                         name: Ident {
                                             text: "suc".to_owned(),
-                                            loc: Loc { start: 58, end: 61 },
+                                            loc: Loc::default(),
                                         },
                                         cons_gi: 2,
                                     },
@@ -722,10 +722,7 @@ mod tests {
                                     ConHead {
                                         name: Ident {
                                             text: "suc".to_owned(),
-                                            loc: Loc {
-                                                start: 239,
-                                                end: 242,
-                                            },
+                                            loc: Loc::default(),
                                         },
                                         cons_gi: 2,
                                     },
@@ -733,10 +730,7 @@ mod tests {
                                         Func::Index(3),
                                         Ident {
                                             text: "max".to_owned(),
-                                            loc: Loc {
-                                                start: 244,
-                                                end: 247,
-                                            },
+                                            loc: Loc::default(),
                                         },
                                         vec![
                                             Elim::App(box Term::from_dbi(1)),
@@ -810,10 +804,7 @@ mod tests {
                     ConHead {
                         name: Ident {
                             text: "mkPair".to_owned(),
-                            loc: Loc {
-                                start: 129,
-                                end: 135,
-                            },
+                            loc: Loc::default(),
                         },
                         cons_gi: 4,
                     },
@@ -845,10 +836,7 @@ mod tests {
                     ConHead {
                         name: Ident {
                             text: "mkPair".to_owned(),
-                            loc: Loc {
-                                start: 129,
-                                end: 135,
-                            },
+                            loc: Loc::default(),
                         },
                         cons_gi: 4,
                     },
@@ -864,6 +852,44 @@ mod tests {
         );
         assert_eq!(ct, cte);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_eval_case_tree_if() -> eyre::Result<()> {
+        let _ = env_logger::try_init();
+        let p = Parser::default();
+        let mut env = TypeCheckState::default();
+        env.indentation_size(2);
+        let mut des = desugar_prog(p.parse_prog(
+            r#"
+        data Nat : Type
+            | zero
+            | suc Nat
+
+        data Bool : Type
+            | true
+            | false
+
+        fn n3 : Nat := (suc (suc (suc zero)))
+        fn n7 : Nat := (suc (suc (suc (suc n3))))
+
+        fn if (t : Nat) (x : Bool) (e : Nat) : Nat := match x {
+            | true => t
+            | false => e
+        }
+
+        fn tst1 : Nat := if true n7 n3
+        fn tst2 : Nat := if false n7 n3
+       "#,
+        )?)?;
+        env.check_prog(des.clone())?;
+        let val = pct!(p, des, env, "tst2");
+        let val1 = pct!(p, des, env, "n3");
+        Val::unify(&mut env, &val1, &val)?;
+        let val = pct!(p, des, env, "tst1");
+        let val1 = pct!(p, des, env, "n7");
+        Val::unify(&mut env, &val1, &val)?;
         Ok(())
     }
 

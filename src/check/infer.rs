@@ -505,8 +505,8 @@ mod tests {
         data List (T : Type) : Type1
             | nil
             | cons T (List T)
-
-        fn main := cons _ (S (S O)) (cons _ (S O) (cons _ O (nil _)))
+--
+        -- fn main := cons _ (S (S O)) (cons _ (S O) (cons _ O (nil _)))
        "#,
         )?)?;
 
