@@ -1,6 +1,7 @@
+use crate::check::TypeCheckState;
 use crate::syntax::core::dbi::DeBruijn;
 use crate::syntax::core::redex::Subst;
-use crate::syntax::core::Term;
+use crate::syntax::core::{SubstWith, Term};
 use crate::syntax::{dbi_nat, dbi_pred, DBI};
 use itertools::Either;
 use std::collections::HashMap;
@@ -12,8 +13,7 @@ pub type Substitution = PrimSubst<Term>;
 
 /// Substitution type.
 /// [Agda](https://hackage.haskell.org/package/Agda-2.6.0.1/docs/src/Agda.Syntax.Internal.html#Substitution%27).
-#[derive(Clone, Debug)]
-#[cfg_attr(test, derive(PartialEq, Eq))]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PrimSubst<T> {
     /// The identity substitution.
     /// $$
@@ -40,7 +40,7 @@ pub enum PrimSubst<T> {
     /// \cfrac{\Gamma \vdash \rho : \Delta}
     /// {\Gamma, \Psi \vdash \text{Weak}_\Psi \rho : \Delta}
     /// $$
-    Weak(DBI, Rc<Self>),
+    Weak(DBI, Rc<Self>), // [x := x + n]
     /// Lifting substitution. Use this to go under a binder.
     /// $\text{Lift}\_1 \rho := \text{Cons}(\texttt{Term::form\\\_dbi(0)},
     /// \text{Weak}\_1 \rho)$. $$
@@ -62,6 +62,21 @@ impl<T: Display> Display for PrimSubst<T> {
         }
     }
 }
+
+// impl<T: Display + PartialEq + Clone + DeBruijn + Subst<T, T>> Display for PrimSubst<T> {
+//     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+//         match self {
+//             PrimSubst::IdS => write!(f, "id"),
+//             PrimSubst::Weak(m, r) if **r == PrimSubst::IdS => write!(f, "wk{}", m),
+//             PrimSubst::Empty => write!(f, "empty"),
+//             rho => {
+//                 let (rho1, rho2) = Rc::new(rho.clone()).split(1);
+//                 let u = rho2.deref().lookup_impl(0);
+//                 write!(f, "{}, {}", u, rho1)
+//             }
+//         }
+//     }
+// }
 
 impl<T> Default for PrimSubst<T> {
     fn default() -> Self {
@@ -90,6 +105,8 @@ impl<Term: DeBruijn + Subst<Term, Term> + Clone> PrimSubst<Term> {
         match (&*self, &*sgm) {
             (_, IdS) => self,
             (IdS, _) => sgm,
+            (_, Empty) => Empty.into(),
+
             (_, Weak(n, sgm)) => self.drop_by(*n).compose(sgm.clone()),
             (_, Cons(u, sgm)) => Rc::new(Cons(
                 u.clone().subst(self.clone()),
@@ -105,47 +122,100 @@ impl<Term: DeBruijn + Subst<Term, Term> + Clone> PrimSubst<Term> {
                 self.lookup(0),
                 self.compose(sgm.clone().lift_by(*n - 1).weaken(1)),
             )),
-            (_, Empty) => Empty.into(),
         }
+    }
+
+    /// [Agda](https://hackage.haskell.org/package/Agda-2.6.0.1/docs/src/Agda.TypeChecking.Substitute.Class.html#inplaceS).
+    pub fn inplace(k: DBI, u: Term) -> Rc<Self> {
+        Self::singleton(k, u).compose(PrimSubst::<Term>::raise(1).lift_by(k + 1))
     }
 
     /// If lookup failed, return the DBI.
     /// [Agda](https://hackage.haskell.org/package/Agda-2.6.0.1/docs/src/Agda.TypeChecking.Substitute.Class.html#lookupS).
-    pub fn lookup_impl(&self, dbi: DBI) -> Either<&Term, Term> {
+    pub fn lookup_impl(&self, i: DBI) -> Either<&Term, Term> {
         use Either::*;
         use PrimSubst::*;
         match self {
-            IdS => Right(DeBruijn::from_dbi(dbi)),
-            Cons(o, rest) => match dbi_nat(dbi) {
+            IdS => Right(DeBruijn::from_dbi(i)),
+            Weak(n, rest) => match &**rest {
+                IdS => Right(Term::from_dbi(i + *n)),
+                rho => Right(rho.lookup(i).subst(Self::raise(*n))),
+            },
+            Cons(o, rest) => match dbi_nat(i) {
                 None => Left(o),
-                Some(dbi) => rest.lookup_impl(dbi),
+                Some(i) => rest.lookup_impl(i),
             },
-            Succ(rest) => rest.lookup_impl(dbi_pred(dbi)),
-            Weak(i, rest) => match &**rest {
-                IdS => Right(Term::from_dbi(dbi + *i)),
-                rho => Right(rho.lookup(*i).subst(Self::raise(*i))),
+            // TODO: remove the case?
+            Succ(_rest) if i == 0 => Right(DeBruijn::from_dbi(i)),
+            Succ(rest) => rest.lookup_impl(dbi_pred(i)),
+            Lift(n, _) if i < *n => Right(DeBruijn::from_dbi(i)),
+            Lift(n, rest) => Right(Self::raise_term(*n, rest.lookup(i - *n))),
+            Empty => panic!(),
+        }
+    }
+}
+
+impl<'a> PrimSubst<Term> {
+    pub fn raise_term_with(k: DBI, term: Term, tcs: &'a mut TypeCheckState) -> Term {
+        Self::raise_from_with(0, k, term, tcs)
+    }
+
+    pub fn raise_from_with(n: DBI, k: DBI, term: Term, tcs: &'a mut TypeCheckState) -> Term {
+        term.subst_with(Self::raise(k).lift_by(n), tcs)
+    }
+
+    pub fn lookup_with(&self, dbi: DBI, state: &'a mut TypeCheckState) -> Term {
+        self.lookup_with_impl(dbi, state)
+            .map_left(Clone::clone)
+            .into_inner()
+    }
+
+    /// If lookup failed, return the DBI.
+    pub fn lookup_with_impl(&self, i: DBI, state: &'a mut TypeCheckState) -> Either<&Term, Term> {
+        use Either::*;
+        use PrimSubst::*;
+        match self {
+            IdS => Right(DeBruijn::from_dbi(i)),
+            Weak(n, rest) => match &**rest {
+                IdS => Right(Term::from_dbi(i + *n)),
+                rho => Right(rho.lookup_with(i, state).subst_with(Self::raise(*n), state)),
             },
-            Lift(n, _) if dbi < *n => Right(DeBruijn::from_dbi(dbi)),
-            Lift(n, rest) => Right(Self::raise_term(*n, rest.lookup(dbi - *n))),
+            Cons(o, rest) => match dbi_nat(i) {
+                None => Left(o),
+                Some(i) => rest.lookup_with_impl(i, state),
+            },
+            // TODO: remove the case?
+            // Succ(rest) if i == 0 => Right(DeBruijn::from_dbi(i)),
+            Succ(rest) => rest.lookup_with_impl(dbi_pred(i), state),
+            Lift(n, _) if i < *n => Right(DeBruijn::from_dbi(i)),
+            Lift(n, rest) => {
+                let term = rest.lookup_with(i - *n, state);
+                let term1 = Self::raise_term_with(*n, term, state);
+                Right(term1)
+            }
             Empty => panic!(),
         }
     }
 }
 
 impl<T> PrimSubst<T> {
+    pub fn strengthen(dbi: DBI) -> Rc<Self> {
+        use PrimSubst::*;
+        (0..dbi).fold(Self::id(), |rho, _i| Succ(rho).into())
+    }
+
     /// [Agda](https://hackage.haskell.org/package/Agda-2.6.0.1/docs/src/Agda.TypeChecking.Substitute.Class.html#raiseS).
     pub fn raise(by: DBI) -> Rc<Self> {
         Self::weaken(Default::default(), by)
     }
 
-    /// Lift a substitution under k binders.
     /// [Agda](https://hackage.haskell.org/package/Agda-2.6.0.1/docs/src/Agda.TypeChecking.Substitute.Class.html#dropS).
     pub fn drop_by(self: Rc<Self>, drop_by: DBI) -> Rc<Self> {
         use PrimSubst::*;
         match (drop_by, &*self) {
             (0, _) => self,
             (n, IdS) => Self::raise(n),
-            (n, Weak(m, rho)) => rho.clone().drop_by(n - 1).weaken(*m),
+            (n, Weak(m, rho)) => rho.clone().drop_by(n).weaken(*m),
             (n, Cons(_, rho)) | (n, Succ(rho)) => rho.clone().drop_by(n - 1),
             (n, Lift(0, _rho)) => unreachable!("n = {:?}", n),
             (n, Lift(m, rho)) => rho.clone().lift_by(*m - 1).drop_by(n - 1).weaken(1),
@@ -171,6 +241,7 @@ impl<T> PrimSubst<T> {
         match (weaken_by, &*self) {
             (0, _) => self,
             (n, Weak(m, rho)) => Rc::new(Weak(n + *m, rho.clone())),
+            (_n, Empty) => panic!(),
             (n, _) => Rc::new(Weak(n, self)),
         }
     }
@@ -219,17 +290,19 @@ impl<T: Clone> PrimSubst<T> {
             }
         }
     }
+}
 
+impl<T: Clone + DeBruijn> PrimSubst<T> {
     pub fn union(self: Rc<Self>, other: Rc<Self>) -> Rc<Self> {
         use PrimSubst::*;
         // TODO: use helper functions for constructing new substs
         match &*other {
             IdS => self,
             Empty => self,
-            Cons(t, o) => Cons(t.clone(), self.union(o.clone())).into(),
+            Cons(t, o) => self.union(o.clone()).cons(t.clone()),
             Succ(x) => Succ(self.union(x.clone())).into(),
-            Weak(v, x) => Weak(*v, self.union(x.clone())).into(),
-            Lift(v, x) => Lift(*v, self.union(x.clone())).into(),
+            Weak(v, x) => self.union(x.clone()).weaken(*v),
+            Lift(v, x) => self.union(x.clone()).lift_by(*v),
         }
     }
 }
@@ -246,9 +319,156 @@ fn matched<T, H: BuildHasher>(mut map: HashMap<DBI, T, H>, max: usize) -> Vec<T>
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::syntax::core::{Case, Ctx, ValData};
     use crate::syntax::pattern::Pat;
     use crate::syntax::{ConHead, Ident, Loc};
+
+    #[test]
+    fn test_strengthening() {
+        let term = Term::fun_app(0, "foo", [2, 1, 0, 5].map(Term::from_dbi));
+        let x = 3;
+        let s = Substitution::one(Term::from_dbi(4));
+        let corr = Rc::new(Substitution::Lift(x, Substitution::strengthen(1)));
+        let subst = corr.compose(s);
+        assert_eq!(
+            term.subst(subst),
+            Term::fun_app(0, "foo", [1, 0, 3, 3].map(Term::from_dbi))
+        );
+
+        let term = Term::fun_app(0, "foo", [2, 1, 0].map(Term::from_dbi));
+        let x = 3;
+        let s = Substitution::one(Term::from_dbi(4)).lift_by(2);
+        let corr = Rc::new(Substitution::Lift(x, Substitution::strengthen(1)));
+        let subst = corr.compose(s);
+        assert_eq!(
+            term.subst(subst),
+            Term::fun_app(0, "foo", [5, 1, 0].map(Term::from_dbi))
+        );
+
+        /*
+        Γ = (w : W) (_ : T) (x : A) (y : B) (z : C)
+        ?0 x@2
+        {?0 := y'@2}
+        match y@1 {
+            Γ = (w : W) (_ : T) (x : A) (y' : B) (y'' : B) (z : C)
+            cons @2 @1 => y'@2 x@3
+        }
+
+
+
+        Γ = (w : W) (_ : T) (x : A) (y : B) (z : C)
+        [x := w]
+        foo y@1 w@4
+        match x@2 {
+            Γ = (w : W) (_ : T) (x' : A) (x'' : A) (y : B) (z : C)
+            | (cons x'@3 x''@2) => foo y@1 w@5
+        }
+        ==>
+        Γ = (w : W) (_ : T) (y : B) (z : C)
+        foo y@1 w@3
+        match w@3 {
+            Γ = (w' : W) (w'' : W) (_ : T) (y : B) (z : C)
+            | (cons w'@4 w''@3) => foo y@1 (cons w'@4 w''@3)
+        }
+
+         */
+        // \x \y \z \w -> x@3 y@2 z@1 w@0
+        //
+        // subst: cons @4, id
+        //  v-------------------------(2)-- bar @4 @2 _  _  @0 <----<
+        //  |      match @3 | cons @4 @3 => bar @5 @2 @4 @3 @0 -(1)-^
+        //  |               | conz       => bar @3 @2 _  _  @0
+        //  |
+        //  |
+        //  >-----------------------------> bar @3 @1 _  _  @4 -(3)-v
+        //         match @2 | cons @3 @2 => bar @4 @1 @3 @2 @? <----<
+        //                  | conz       => bar @_ @_ _  _  @_
+
+        // subst: lift 2, cons @2, id
+        //  v-------------------------(2)-- bar @4 @2 _  _  @1 <----<
+        //  |      match @3 | cons @4 @3 => bar @5 @2 @4 @3 @1 -(1)-^
+        //  |               | conz       => bar @3 @2 _  _  @1
+        //  |
+        //  |
+        //  >-----------------------------> bar @4 @4 _  _  @1 -(3)-v
+        //         match @2 | cons @3 @2 => bar @5 @5 @3 @2 @1 <----<
+        //                  | conz       => bar @3 @3 _  _  @1
+
+        // subst: cons @3, id
+        //  v-------------------------(2)-- bar @3 @2 _  _  @0 <----<
+        //  |      match @1 | cons @2 @1 => bar @4 @3 @2 @1 @0 -(1)-^
+        //  |               | conz       => bar @2 @1 _  _  @0
+        //  |
+        //  |
+        //  >-----------------------------> bar @2 @1 _  _  @3 -(3)-v
+        //         match @0 | cons @1 @0 => bar @3 @2 @1 @0 @4 <----<
+        //                  | conz       => bar @1 @0 _  _  @2
+
+        // subst: cons @3, id
+        //  v-------------------------(2)-- bar @3 @2 _  _  @0 <----<
+        //  |      match @1 | cons @2 @1 => bar @4 @3 @2 @1 @0 -(1)-^
+        //  |               | conz       => bar @2 @1 _  _  @0
+        //  |
+        //  |
+        //  >-----------------------------> bar @2 @1 _  _  @3 -(3)-v
+        //         match @0 | cons @2 @1 => bar @3 @0 @2 @1 @4 <----<
+        //                  | conz       => bar @1 @0 _  _  @2
+        //
+        // (1) Lift the term into a new context where x is not yet eliminated and new variables
+        //     are not introduced (?)
+        // (2) Apply substitution
+        // (3) Put into the context where y were eliminated and new variables introduced
+
+        let term = Term::fun_app(0, "foo", [5, 2, 4, 3, 1].map(Term::from_dbi));
+        let subst = Substitution::one(Term::from_dbi(2)).lift_by(2);
+        let x = 3;
+        let y = subst.lookup(x).dbi_view().unwrap();
+        let _y_min = y;
+        let _y_max = y + 1;
+
+        println!("{}", term.clone().subst(subst.clone()));
+        let (subst1, subst2) = subst.clone().split(x);
+        let nsubst = subst1.drop_by(1).union(subst2);
+        println!("split substitution {} => {}", subst, nsubst);
+
+        // let corr = Substitution::strengthen(1).lift_by(y_max - y_min + 1);
+        // let subst = Substitution::raise(1).cons(Term::from_dbi(3));
+        // dsp!(&subst);
+        // let (subst1, subst2) = subst.split(y_min);
+        // dsp!(&subst1, &subst2);
+        // let subst = corr.compose(subst1).union(subst2);
+        // dsp!(&subst);
+        // assert_eq!(
+        //     dsp!(term.subst(subst)),
+        //     Term::fun_app(0, "foo", [0, 2, 1, 4].map(Term::from_dbi))
+        // );
+    }
+
+    #[test]
+    fn test_subst() {
+        // Γ = T U V
+        //     ^
+        // foo x y z
+        //     0 1 2
+        // y, Γ = T U
+        // 0 -> 1
+
+        // Γ = (w@3 : G) (z@2 : T) (y@1 : U) (x@0 : V)
+        // λw. (λz. (λy. λx. foo x y z) w)
+        //                       0 1 2
+        // Γ = (w@2 : G) (z@1 : T) (x@0 : V)
+        // λw. (λz. λx. foo x w z)
+        //                  0 2 1
+        // (λx. λy. _) y
+        // [1 := 0]
+        let term = Term::fun_app(0, "foo", [0, 1, 2].map(Term::from_dbi));
+        println!("{}", term);
+        let a = Term::from_dbi(1);
+        let subst = Substitution::one(a).lift_by(1);
+        println!("{}", subst);
+        println!("{}", term.subst(subst));
+    }
 
     #[test]
     fn test_union() {
@@ -261,10 +481,21 @@ mod tests {
         );
     }
 
+    // #[test]
+    // fn test_subst_inplace() {
+    //     let s = Substitution::inplace(2, Term::from_dbi(10));
+    //     let term = Term::from_dbi(0).apply(vec![1, 2, 3].into_iter().map(Term::from_dbi).collect());
+    //     println!("{}", term);
+    //     let term_exp =
+    //         Term::from_dbi(0).apply(vec![1, 10, 2].into_iter().map(Term::from_dbi).collect());
+    //     assert_eq!(dsp!(term.subst(s)), term_exp);
+    // }
+
     #[test]
     fn test_split_subst() {
+        let _ = env_logger::try_init();
         let x = 1;
-        let t = Term::mat_elim(
+        let t = Term::match_elim(
             x,
             vec![Case::new(
                 Pat::cons(

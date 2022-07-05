@@ -82,12 +82,21 @@ impl Display for Loc {
     }
 }
 
-#[derive(Debug, Clone, Eq, Deref, AsRef)]
+#[derive(Debug, Clone, Eq, Deref, AsRef, From)]
 pub struct Ident {
     #[deref]
     #[as_ref]
     pub text: String,
     pub loc: Loc,
+}
+
+impl From<&'static str> for Ident {
+    fn from(v: &'static str) -> Self {
+        Ident {
+            text: v.to_string(),
+            loc: Loc::default(),
+        }
+    }
 }
 
 impl PartialEq for Ident {
@@ -142,6 +151,7 @@ pub fn dbi_nat(dbi: DBI) -> Option<DBI> {
     }
 }
 
+#[track_caller]
 pub fn dbi_pred(dbi: DBI) -> DBI {
     dbi_nat(dbi).unwrap()
 }
@@ -259,8 +269,11 @@ impl ConHead {
         Self::new(name, Default::default())
     }
 
-    pub fn new(name: Ident, ix: GI) -> Self {
-        Self { name, cons_gi: ix }
+    pub fn new(name: impl Into<Ident>, ix: GI) -> Self {
+        Self {
+            name: name.into(),
+            cons_gi: ix,
+        }
     }
 }
 

@@ -7,6 +7,7 @@ mod redex;
 mod subst;
 mod term;
 
+use crate::check::TypeCheckState;
 use crate::syntax;
 use crate::syntax::{Loc, DBI};
 pub use dbi::DeBruijn;
@@ -15,7 +16,7 @@ pub use fold::FoldVal;
 use itertools::Itertools;
 pub use pats::Simpl;
 pub use pretty::{pretty_application, pretty_list, Indentation};
-pub use redex::Subst;
+pub use redex::{Subst, SubstWith};
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 pub use subst::{build_subst, PrimSubst, Substitution};
@@ -45,10 +46,88 @@ impl TermInfo {
     }
 }
 
-/// Telescopes.
-pub type Tele = Vec<Bind>;
-pub type TeleS = [Bind];
 pub type Let<T = Term> = syntax::Let<T>;
+
+/// Telescopes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Tele(pub Vec<Bind>);
+
+impl Tele {
+    pub(crate) fn skipping(&self, n: usize) -> Self {
+        Self(self.0.iter().skip(n).cloned().collect())
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn into_ctx(self) -> Ctx {
+        Ctx(self.0)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Bind> {
+        self.0.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Bind> {
+        self.0.iter_mut()
+    }
+
+    pub fn push(&mut self, b: Bind) {
+        self.0.insert(0, b);
+    }
+
+    pub fn pop(&mut self) -> Option<Bind> {
+        if self.is_empty() {
+            return None;
+        }
+        Some(self.0.remove(0))
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Display for Tele {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.0.iter().map(|b| format!("({})", b)).join(", ")
+        )
+    }
+}
+
+impl SubstWith<'_> for Tele {
+    fn subst_with(self, mut subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Self {
+        Tele(
+            self.0
+                .into_iter()
+                .enumerate()
+                .map(|(i, b)| {
+                    if i != 0 {
+                        subst = subst.clone().lift_by(1);
+                    }
+                    b.subst_with(subst.clone(), tcs)
+                })
+                .collect(),
+        )
+    }
+}
+
+impl IntoIterator for Tele {
+    type Item = Bind;
+    type IntoIter = <Vec<Bind> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
 
 /// Contexts. Dual to telescopes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -59,19 +138,26 @@ impl Ctx {
         Self(self.0.iter().skip(n).cloned().collect())
     }
 
-    fn dbu_to_idx(&self, v: DBI) -> usize {
+    #[track_caller]
+    fn dbi_to_idx(&self, v: DBI) -> usize {
+        debug_assert!(self.0.len() > v, "invalid DBI: {}", v);
         self.0.len() - v - 1
     }
 
+    #[track_caller]
     pub fn lookup(&self, v: DBI) -> &Bind {
         self.0
-            .get(self.dbu_to_idx(v))
+            .get(self.dbi_to_idx(v))
             .unwrap_or_else(|| panic!("Invalid DBI: {}", v))
+    }
+
+    pub fn remove(&mut self, v: DBI) -> Bind {
+        self.0.remove(self.dbi_to_idx(v))
     }
 
     /// Splits the context into two contexts with a binder in between.
     pub fn split(&mut self, v: DBI) -> (Bind, Ctx) {
-        let idx = self.dbu_to_idx(v);
+        let idx = self.dbi_to_idx(v);
         let bind = self.0.remove(idx);
         let Γ2 = self.0.split_off(idx);
         (bind, Ctx(Γ2))
@@ -82,7 +168,7 @@ impl Ctx {
     }
 
     pub fn into_tele(self) -> Tele {
-        self.0
+        Tele(self.0)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Bind> {
@@ -100,6 +186,7 @@ impl Ctx {
     pub fn pop(&mut self) -> Option<Bind> {
         self.0.pop()
     }
+
     pub(crate) fn clear(&mut self) {
         self.0.clear();
     }
@@ -113,11 +200,12 @@ impl Ctx {
     }
 }
 
-impl Iterator for Ctx {
+impl IntoIterator for Ctx {
     type Item = Bind;
+    type IntoIter = <Vec<Bind> as IntoIterator>::IntoIter;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.pop()
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
 }
 
@@ -128,6 +216,25 @@ impl Display for Ctx {
             "{}",
             self.0.iter().map(|b| format!("({})", b)).join(", ")
         )
+    }
+}
+
+impl SubstWith<'_> for Ctx {
+    fn subst_with(self, mut subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Self {
+        Ctx(self
+            .0
+            .into_iter()
+            .enumerate()
+            .map(|(i, b)| {
+                if i != 0 {
+                    subst = subst.clone().lift_by(1);
+                }
+                b.subst_with(subst.clone(), tcs)
+            })
+            .collect())
+        // match self {
+        //     Closure::Plain(body) => Self::plain(body.subst(subst.lift_by(1))),
+        // }
     }
 }
 
@@ -148,25 +255,6 @@ impl LetList {
     }
 }
 
-impl Subst for Ctx {
-    fn subst(self, mut subst: Rc<Substitution>) -> Self {
-        Ctx(self
-            .0
-            .into_iter()
-            .enumerate()
-            .map(|(i, b)| {
-                if i != 0 {
-                    subst = subst.clone().lift_by(1);
-                }
-                b.subst(subst.clone())
-            })
-            .collect())
-        // match self {
-        //     Closure::Plain(body) => Self::plain(body.subst(subst.lift_by(1))),
-        // }
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -178,7 +266,7 @@ mod tests {
     #[test]
     fn test_id() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let mut p = Parser::default();
+        let p = Parser::default();
         let mut des = desugar_prog(p.parse_prog(
             r#"
         data Nat : Type

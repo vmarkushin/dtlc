@@ -236,9 +236,12 @@ fn solve_meta(tcs: &mut TypeCheckState, mut mi: MI, elims: Vec<Elim>) -> Result<
     use MetaSol::*;
     let (_ix, sol) = loop {
         match tcs.meta_ctx().solution(mi) {
-            Solved(_, sol) if sol.is_meta() => {
+            Solved(ix, sol) if sol.is_meta() => {
                 let (idx, elims) = sol.as_meta().unwrap();
                 assert!(elims.is_empty());
+                if idx == mi {
+                    break (*ix, sol.clone());
+                }
                 mi = idx;
             }
             Solved(ix, sol) => break (*ix, sol.clone()),

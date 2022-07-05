@@ -2,7 +2,7 @@ use crate::check::block::{Blocked, Stuck};
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
 use crate::syntax::core::{
-    build_subst, Case, Closure, Decl, Elim, Func, Simpl, Subst, Substitution, Term, Val,
+    build_subst, Case, Closure, Decl, Elim, Func, Simpl, SubstWith, Substitution, Term, Val,
 };
 use crate::syntax::{ConHead, Ident, GI};
 use std::collections::HashMap;
@@ -28,7 +28,7 @@ pub fn try_match(x: &Val, cs: &[Case]) -> Option<(usize, Rc<Substitution>)> {
 
 impl TypeCheckState {
     /// Normalize a term.
-    pub fn simplify(&self, term: Term) -> Result<Val> {
+    pub fn simplify(&mut self, term: Term) -> Result<Val> {
         match term {
             Term::Whnf(whnf) => Ok(whnf),
             Term::Redex(f, id, elims) => match f {
@@ -56,7 +56,7 @@ impl TypeCheckState {
                     for elim in elims {
                         term = Closure::Plain(
                             box term
-                                .instantiate_safe(elim.into_app())
+                                .instantiate_safe_with(elim.into_app(), self)
                                 .unwrap()
                                 .tele_view()
                                 .1,
@@ -66,22 +66,29 @@ impl TypeCheckState {
                     self.simplify(*term)
                 }
             },
-            Term::Match(x, mut cs) => match try_match(&self.simplify(*x.clone())?, &cs) {
-                Some((i, sigma)) => {
-                    let matched_case = cs.remove(i);
-                    self.simplify(matched_case.body.subst(sigma))
+            Term::Match(x, mut cs) => {
+                debug!("Simplifying match");
+                match try_match(&self.simplify(*x.clone())?, &cs) {
+                    Some((i, sigma)) => {
+                        debug!("matched {}th case with σ = {}", i, sigma);
+                        let matched_case = cs.remove(i);
+                        trace!("matched_case.body = {}", matched_case.body);
+                        let term1 = matched_case.body.subst_with(sigma, self);
+                        trace!("matched_case.bodyσ = {}", term1);
+                        self.simplify(term1)
+                    }
+                    None => Err(Error::Blocked(box Blocked::new(
+                        Stuck::OnElim(Elim::App(x.clone())),
+                        Term::Match(x, cs),
+                    ))),
                 }
-                None => Err(Error::Blocked(box Blocked::new(
-                    Stuck::OnElim(Elim::App(x.clone())),
-                    Term::Match(x, cs),
-                ))),
-            },
+            }
         }
     }
 
     /// Build up a substitution and unfold the declaration.
     pub fn unfold_func(
-        &self,
+        &mut self,
         _def: GI,
         _func_name: Ident,
         body: Term,
@@ -109,6 +116,6 @@ impl TypeCheckState {
         let subst = build_subst(vs, tele_len);
 
         let s = Simpl::No;
-        Ok((s, body.subst(subst).apply_elim(rest)))
+        Ok((s, body.subst_with(subst, self).apply_elim(rest)))
     }
 }

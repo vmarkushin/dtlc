@@ -153,29 +153,13 @@ pub Expr: Expr = {
 }
 
 TypeParam: Param = {
-  "(" <name: Ident>    ":" <e: Expr> ")" => Param::new(name, e, Explicit),
-//    "(" <idents: Ident+> ":" <e: Expr> ")" => Vec1::try_from_vec(idents.into_iter().map(|ident| Param::new(ident, e.clone(), Explicit)).collect()).unwrap(),
+    "(" <name: Ident> ":" <e: Expr> ")" => Param::new(name, e, Explicit),
     <PrimExpr> => Param::from_type(<>, Explicit),
-//    <idents: Ident+> ":" <e: PrimExpr> => Vec1::try_from_vec(idents.into_iter().map(|ident| Param::new(ident, e.clone(), Explicit)).collect()).unwrap(),
-//    <Expr> => Vec1::new(Param::from_type(<>, Explicit)),
 }
 
 FnType: Expr = {
     ":" <Expr>
 }
-
-//TypeTeleExplicit : Vec1<Param> = {
-//    <Ident> => Vec1::new(Param::from_type(Expr::Var(<>), Explicit)),
-//    <uni: Sp<Universe>> => {
-//        let (uni, loc) = uni;
-//        Vec1::new(Param::from_type(Expr::Universe(loc, uni), Explicit))
-//    },
-//    "(" <TypeParam> ")",
-//}
-//
-//TypeTele : Vec1<Param> = {
-//    <TypeTeleExplicit>
-//}
 
 Constructor: NamedTele = {
     "|" <name: Ident> <params: TypeParam*> => NamedTele::new(name, params.into()),

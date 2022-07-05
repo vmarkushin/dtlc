@@ -425,7 +425,7 @@ mod tests {
     #[test]
     fn test_desugar() {
         use ExprA::{App, Match, Meta, Pi, Var};
-        let mut parser = Parser::default();
+        let parser = Parser::default();
         let state = desugar_prog(
             parser
                 .parse_prog(

@@ -1,8 +1,8 @@
 use crate::check::state::TypeCheckState;
 use crate::check::{Clause, Error, LshProblem, Result};
 use crate::syntax::abs::{AppView, Expr, Match};
-use crate::syntax::core::Closure;
 use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, Val, ValData};
+use crate::syntax::core::{Closure, Tele};
 use crate::syntax::{ConHead, Ident, Loc, Universe, GI};
 
 impl TypeCheckState {
@@ -104,7 +104,7 @@ impl TypeCheckState {
                     let (param, clos) = res?;
                     let param_ty = self.simplify(*param.ty)?;
                     let arg = self.check(&arg, &param_ty)?;
-                    ty = clos.instantiate(arg.ast.clone());
+                    ty = clos.instantiate_with(arg.ast.clone(), self);
                     elims.push(Elim::app(arg.ast));
                 }
                 Ok((head.map_ast(|t| t.apply_elim(elims)), ty))
@@ -136,7 +136,7 @@ impl TypeCheckState {
             let (param, clos) = res?;
             let param_ty = self.simplify(*param.ty)?;
             let arg = self.check(&arg, &param_ty)?;
-            ty = clos.instantiate(arg.ast.clone());
+            ty = clos.instantiate_with(arg.ast.clone(), self);
             args.push(arg.ast);
         }
 
@@ -232,7 +232,7 @@ impl TypeCheckState {
                 self.gamma.push(bind_checked.clone());
                 let (body_term, body_ty) = self.infer(body)?;
                 self.gamma.pop();
-                let ty = Term::pi_from_tele(vec![bind_checked.clone()], body_ty);
+                let ty = Term::pi_from_tele(Tele(vec![bind_checked.clone()]), body_ty);
                 let lam_checked =
                     Term::lam(bind_checked.map_term(Box::new), body_term.ast).at(*loc);
                 Ok((lam_checked, ty))
@@ -281,7 +281,7 @@ impl TypeCheckState {
 
     fn check_impl(&mut self, abs: &Expr, against: &Val) -> Result<TermInfo> {
         if let Some(gi) = abs.get_gi() {
-            if let Some(decl) = self.sigma.get(gi) {
+            if let Some(decl) = self.sigma.get(gi).cloned() {
                 let ty = decl.def_type();
                 let ident = decl.ident();
                 let whnf = self.simplify(ty)?;
@@ -319,10 +319,9 @@ impl TypeCheckState {
             }
             (Expr::Lam(_info, bind, ret), Val::Pi(bind_pi, ret_pi)) => {
                 let (bind_ty, _bind_ty_ty) = self.infer((*bind.ty).as_ref().unwrap())?;
-                self.subtype(
-                    &self.simplify(bind_ty.ast.clone())?,
-                    &self.simplify(*bind_pi.ty.clone())?,
-                )?;
+                let val1 = self.simplify(bind_ty.ast.clone())?;
+                let val2 = self.simplify(*bind_pi.ty.clone())?;
+                self.subtype(&val1, &val2)?;
                 let Closure::Plain(ret_pi) = ret_pi;
                 let bind_new = Bind::boxing(bind.licit, bind.name, bind_ty.ast, bind_ty.loc);
                 self.gamma.push(bind_new.clone().unboxed());
@@ -347,7 +346,8 @@ impl TypeCheckState {
             (Expr::Match(m), against) => self.check_match(m, against),
             (expr, anything) => {
                 error!("Checking blocked failed");
-                self.check_fallback(expr.clone(), &self.simplify(anything)?)
+                let val = self.simplify(anything)?;
+                self.check_fallback(expr.clone(), &val)
             }
         }
     }
@@ -398,7 +398,7 @@ mod tests {
     #[test]
     fn test_check_basic() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let mut p = Parser::default();
+        let p = Parser::default();
         let mut des = desugar_prog(p.parse_prog(
             r#"
             data T : Type
@@ -448,53 +448,67 @@ mod tests {
     #[test]
     fn test_infer() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let mut p = Parser::default();
+        let p = Parser::default();
         let mut env = TypeCheckState::default();
-        let mut des = desugar_prog(p.parse_prog(
+        let des = desugar_prog(p.parse_prog(
             r#"
             data Bool : Type
                | true
                | false
 
-            fn bool_id (b : Bool) := b
-            fn id (A : Type) (a : A) := a
-            fn bool := true
-            fn idb := id _ bool
-            fn deep (f : forall (A : Type), A -> A -> A) (x : Bool) := (lam (y : _) => f _ y x) x
-            fn deep' (f : forall (A : Type), A -> A -> A) (x : Bool) := (lam (y : _) => f _ x y) x
+            fn fmap (A : Type) (B : Type) (f : A -> B) (x : A) : B := f x
+            -- fn bool_id (b : Bool) := b
+            -- fn id (A : Type) (a : A) := a
+            -- fn bool := true
+            -- fn idb := id _ bool
+            -- fn deep (f : forall (A : Type), A -> A -> A) (x : Bool) := (lam (y : _) => f _ y x) x
+            -- fn deep' (f : forall (A : Type), A -> A -> A) (x : Bool) := (lam (y : _) => f _ x y) x
        "#,
         )?)?;
 
+        env.trace_tc = true;
         env.check_prog(des.clone())?;
 
-        let ty = pct!(p, des, env, "Bool");
-        env.check(&pe!(p, des, "bool"), &ty)?;
-
-        let ty = pct!(p, des, env, "Type");
-        env.check(&pe!(p, des, "Bool"), &ty)?;
-
-        let ty = pct!(p, des, env, "forall (A : Type) (a : A), A");
-        env.check(&pe!(p, des, "id"), &ty)?;
-
-        let ty = pct!(p, des, env, "Bool");
-        env.check(&pe!(p, des, "idb"), &ty)?;
-
-        let ty = pct!(
-            p,
-            des,
-            env,
-            "forall (f : forall (A : Type), A -> A -> A) (x : Bool), Bool"
+        println!(
+            "{}",
+            match &env.sigma[3] {
+                Decl::Func(f) => {
+                    &f.signature
+                }
+                _ => panic!(),
+            }
         );
-        env.check(&pe!(p, des, "deep"), &ty)?;
-        env.check(&pe!(p, des, "deep'"), &ty)?;
+        /*
+               let ty = pct!(p, des, env, "Bool");
+               env.check(&pe!(p, des, "bool"), &ty)?;
 
+               let ty = pct!(p, des, env, "Type");
+               env.check(&pe!(p, des, "Bool"), &ty)?;
+
+               let ty = pct!(p, des, env, "forall (A : Type) (a : A), A");
+               env.check(&pe!(p, des, "id"), &ty)?;
+
+               let ty = pct!(p, des, env, "Bool");
+               env.check(&pe!(p, des, "idb"), &ty)?;
+
+               let ty = pct!(
+                   p,
+                   des,
+                   env,
+                   "forall (f : forall (A : Type), A -> A -> A) (x : Bool), Bool"
+               );
+               env.check(&pe!(p, des, "deep"), &ty)?;
+               env.check(&pe!(p, des, "deep'"), &ty)?;
+
+
+        */
         Ok(())
     }
 
     #[test]
     fn test_data() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let mut p = Parser::default();
+        let p = Parser::default();
         let mut env = TypeCheckState::default();
         let mut des = desugar_prog(p.parse_prog(
             r#"
@@ -505,7 +519,7 @@ mod tests {
         data List (T : Type) : Type1
             | nil
             | cons T (List T)
---
+
         -- fn main := cons _ (S (S O)) (cons _ (S O) (cons _ O (nil _)))
        "#,
         )?)?;
@@ -557,7 +571,7 @@ mod tests {
     #[test]
     fn test_complex_data() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let mut p = Parser::default();
+        let p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         let mut des = desugar_prog(p.parse_prog(

@@ -1,12 +1,7 @@
 use crate::grammar::{DeclParser, ExprParser, ProgParser};
 use crate::syntax::surf::{Decl, Expr, Prog};
-use crate::syntax::Loc;
 use crate::token::{lexer, Position, Token};
-use codespan::{Files, RawIndex};
 use codespan_reporting::files::SimpleFile;
-use logos::Logos;
-use std::rc::Rc;
-
 type ParseError<'a> = lalrpop_util::ParseError<Position, Token<'a>, &'static str>;
 
 pub struct Parser {
@@ -72,7 +67,7 @@ mod tests {
 
     #[test]
     fn parse_pi() {
-        let mut parser = Parser::default();
+        let parser = Parser::default();
 
         assert_eq!(
             parser.parse_expr("forall (T : A), T").unwrap(),
@@ -111,7 +106,7 @@ mod tests {
         assert_eq!(
             parser.parse_expr("forall (T U : A) X : A , T").unwrap_err(),
             ParseError::UnrecognizedToken {
-                token: ((17, 1, 13).into(), Token::Ident("X"), (18, 1, 14).into()),
+                token: ((17, 1, 18).into(), Token::Ident("X"), (18, 1, 19).into()),
                 expected: vec!["\"(\"".into(), "\",\"".into()]
             }
         );
@@ -119,9 +114,9 @@ mod tests {
             parser.parse_expr("forall T U : A, T").unwrap_err(),
             ParseError::UnrecognizedToken {
                 token: (
-                    Position::new(7, 1, 7),
+                    Position::new(7, 1, 8),
                     Token::Ident("T"),
-                    Position::new(8, 1, 8)
+                    Position::new(8, 1, 9)
                 ),
                 expected: vec!["\"(\"".into()]
             }
@@ -130,7 +125,7 @@ mod tests {
 
     #[test]
     fn parse_lam() {
-        let mut parser = Parser::default();
+        let parser = Parser::default();
 
         assert_eq!(
             parser.parse_expr("lam x : T => x").unwrap(),

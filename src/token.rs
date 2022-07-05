@@ -1,13 +1,9 @@
-use crate::dsp;
 pub use codespan::{
     ByteIndex, ByteIndex as BytePos, ByteOffset, ColumnIndex as Column, ColumnOffset,
     LineIndex as Line, LineOffset, RawIndex,
 };
-use logos::{Lexer, Logos, Span};
+use logos::{Lexer, Logos};
 use std::fmt::{Display, Formatter};
-use std::ops;
-use std::ops::{Index, Range, RangeInclusive};
-
 struct Foo;
 
 #[derive(Clone, Debug, Logos, PartialEq, Eq)]

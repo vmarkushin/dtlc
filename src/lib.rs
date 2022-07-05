@@ -3,6 +3,8 @@
 #![feature(cell_update)]
 #![feature(generic_associated_types)]
 #![feature(try_blocks)]
+#![feature(never_type)]
+#![feature(closure_lifetime_binder)]
 
 #[allow(
     clippy::needless_lifetimes,
@@ -25,6 +27,7 @@ mod grammar {
 
 #[macro_use]
 extern crate log;
+extern crate core;
 
 pub mod check;
 pub mod macros;
@@ -32,3 +35,13 @@ pub mod parser;
 pub mod repl;
 pub mod syntax;
 pub mod token;
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+extern crate quickcheck;
+
+fn main() {
+    println!("Hello, world!");
+}

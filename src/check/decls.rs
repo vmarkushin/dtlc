@@ -93,7 +93,7 @@ impl TypeCheckState {
         self.check_tele(cons.tele, ty)?;
         let params = self.gamma.0.split_off(param_len);
         let mut tele = data.params.clone();
-        tele.append(&mut params.clone());
+        tele.0.append(&mut params.clone());
         let args = (0..data.params.len())
             .rev()
             .map(|x| Term::from_dbi(x + params.len()))
@@ -103,7 +103,7 @@ impl TypeCheckState {
         let info = ConsInfo {
             loc: cons.loc,
             name: cons.name,
-            params,
+            params: Tele(params),
             data_gi: cons.data_ix,
             signature,
         };
@@ -183,7 +183,7 @@ impl TypeCheckState {
         }
         self.gamma.0.truncate(self.gamma.len() - len);
 
-        Ok((tele, val))
+        Ok((Tele(tele), val))
     }
 
     fn check_lam(&mut self, body: Expr, against: Term) -> Result<Term> {

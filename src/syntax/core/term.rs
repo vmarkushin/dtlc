@@ -1,11 +1,13 @@
+use crate::check::TypeCheckState;
 use crate::syntax::core::redex::Subst;
 use crate::syntax::core::subst::Substitution;
-use crate::syntax::core::{DeBruijn, Tele};
+use crate::syntax::core::{DeBruijn, FoldVal, SubstWith, Tele};
 use crate::syntax::pattern;
 use crate::syntax::{ConHead, Ident, Loc, Plicitness, Universe, DBI, GI, MI, UID};
 use derive_more::From;
-use itertools::Either;
 use itertools::Either::*;
+use itertools::{Either, Itertools};
+use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
 pub type Pat<Ix = DBI, T = Term> = pattern::Pat<Ix, T>;
@@ -81,11 +83,55 @@ pub struct Case {
     pub pattern: Pat,
     pub body: Term,
 }
-impl Subst for Case {
-    fn subst(mut self, subst: Rc<Substitution>) -> Case {
-        self.pattern = self.pattern.subst(subst.clone());
-        let new_tele_len = self.pattern.vars().len();
-        self.body = self.body.subst(subst.lift_by(new_tele_len));
+
+impl Display for Case {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "  | {} => {}", self.pattern, self.body)
+    }
+}
+
+impl SubstWith<'_> for Case {
+    fn subst_with(mut self, subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Self {
+        let old_pat_vars = self.pattern.vars();
+        self.pattern = self.pattern.subst_with(subst.clone(), tcs);
+        let pat_vars = self.pattern.vars();
+        // self.body = self.body.subst(subst.clone());
+
+        debug!("Substituting in case {} with {}", self, subst);
+        let new_subst = if let Some(s) = pat_vars.iter().sum1::<DBI>() {
+            let min = *pat_vars.last().unwrap();
+            let max = *pat_vars.first().unwrap();
+            if min != max {
+                let n = max - min;
+                debug_assert_eq!(s, n * (n + 1) / 2);
+            }
+            let _split_var = *old_pat_vars.last().unwrap();
+            // let (subst1, subst2) = subst.clone().split(split_var);
+            // let subst = subst1.drop_by(1).union(subst2);
+
+            let split_var = min;
+            let (subst1, subst2) = subst.clone().split(split_var);
+            debug!(
+                "split substitution (by {}): {} ⊎ {} = {}",
+                split_var, subst1, subst2, subst
+            );
+
+            let len = pat_vars.len();
+            // let subst2_lifted = subst2.clone().lift_by(len);
+            let subst1_lifted = subst1.clone().lift_by(len - 1);
+            // let new_subst = subst1.clone().union(subst2_lifted.clone());
+            let new_subst = subst1_lifted.clone().union(subst2.clone());
+            // debug!(
+            //     "unify substitution: {} = {} ⊎ {} = lift({}, {}) ⊎ {}",
+            //     new_subst, subst1_lifted, subst2, subst1, len, subst2,
+            // );
+            debug!("unify substitution: {}", new_subst);
+            new_subst
+        } else {
+            subst
+            // subst.drop_by(1)
+        };
+        self.body = self.body.subst_with(new_subst.clone(), tcs);
         self
     }
 }
@@ -125,6 +171,23 @@ impl<Ix: From<DBI>, T: Subst<Term>> TryIntoPat<Ix, T> for Term {
     }
 }
 
+impl Pat {
+    pub fn into_term(self) -> Term {
+        match self {
+            Pat::Var(v) => Term::from_dbi(v),
+            Pat::Wildcard => panic!(),
+            Pat::Absurd => {
+                panic!()
+            }
+            Pat::Cons(_, head, args) => {
+                let args = args.into_iter().map(Pat::into_term).collect::<Vec<_>>();
+                Term::cons(head, args)
+            }
+            Pat::Forced(t) => t,
+        }
+    }
+}
+
 impl From<DBI> for Term {
     fn from(dbi: DBI) -> Self {
         Term::from_dbi(dbi)
@@ -132,6 +195,16 @@ impl From<DBI> for Term {
 }
 
 impl Term {
+    pub(crate) fn fresh_mi(&self) -> MI {
+        self.try_fold_val::<!, _>(0, |max_mi, val| {
+            Ok(match val {
+                Val::Meta(mi, _) => max_mi.max(*mi + 1),
+                _ => max_mi,
+            })
+        })
+        .unwrap()
+    }
+
     pub(crate) fn is_cons(&self) -> bool {
         matches!(self, Term::Whnf(Val::Cons(..)))
     }
@@ -156,12 +229,12 @@ impl Term {
         Term::Whnf(Val::Lam(Lambda(p0, Closure::Plain(box p1))))
     }
 
-    pub fn mat(t: impl Into<Box<Term>>, cs: impl Into<Vec<Case>>) -> Self {
+    pub fn match_case(t: impl Into<Box<Term>>, cs: impl Into<Vec<Case>>) -> Self {
         Term::Match(t.into(), cs.into())
     }
 
-    pub fn mat_elim(x: DBI, cs: impl Into<Vec<Case>>) -> Self {
-        Self::mat(box Term::from_dbi(x), cs)
+    pub fn match_elim(x: DBI, cs: impl Into<Vec<Case>>) -> Self {
+        Self::match_case(box Term::from_dbi(x), cs)
     }
 
     pub fn is_meta(&self) -> bool {
@@ -174,13 +247,22 @@ impl Term {
             _ => None,
         }
     }
+
+    pub fn fun_app(gi: GI, name: impl Into<Ident>, args: impl IntoIterator<Item = Term>) -> Term {
+        Term::Redex(
+            Func::Index(gi),
+            name.into(),
+            args.into_iter().map(Elim::from).collect(),
+        )
+    }
 }
 
 pub type Bind<T = Term> = super::super::Bind<T>;
 
 /// Type for eliminations.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, From)]
 pub enum Elim {
+    #[from(forward)]
     App(Box<Term>),
     Proj(String),
 }
@@ -192,14 +274,24 @@ pub enum Closure {
 }
 
 impl Closure {
-    pub fn instantiate(self, arg: Term) -> Term {
-        self.instantiate_safe(arg)
+    // pub fn instantiate(self, arg: Term) -> Term {
+    //     self.instantiate_safe(arg)
+    //         .unwrap_or_else(|e| panic!("Cannot split on `{}`.", e))
+    // }
+
+    // pub fn instantiate_safe(self, arg: Term) -> Result<Term, Term> {
+    //     let Closure::Plain(body) = self;
+    //     Ok(body.subst(Substitution::one(arg)))
+    // }
+
+    pub fn instantiate_with(self, arg: Term, tcs: &mut TypeCheckState) -> Term {
+        self.instantiate_safe_with(arg, tcs)
             .unwrap_or_else(|e| panic!("Cannot split on `{}`.", e))
     }
 
-    pub fn instantiate_safe(self, arg: Term) -> Result<Term, Term> {
+    pub fn instantiate_safe_with(self, arg: Term, tcs: &mut TypeCheckState) -> Result<Term, Term> {
         let Closure::Plain(body) = self;
-        Ok(body.subst(Substitution::one(arg)))
+        Ok(body.subst_with(Substitution::one(arg), tcs))
     }
 }
 
@@ -275,16 +367,16 @@ impl Term {
         match self {
             Term::Whnf(Val::Pi(bind, Closure::Plain(r))) if n != 0 => {
                 let (mut view, r) = r.tele_view_n(n - 1);
-                view.insert(0, bind.unboxed());
+                view.push(bind.unboxed());
                 (view, r)
             }
             Term::Whnf(Val::Lam(Lambda(bind, Closure::Plain(r)))) if n != 0 => {
                 let (mut view, r) = r.tele_view_n(n - 1);
-                view.insert(0, bind.unboxed());
+                view.push(bind.unboxed());
                 (view, r)
             }
             // The capacity is an arbitrarily estimated value.
-            e => (Vec::with_capacity(2), e),
+            e => (Tele(Vec::with_capacity(2)), e),
         }
     }
 

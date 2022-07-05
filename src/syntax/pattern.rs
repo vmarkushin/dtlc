@@ -18,6 +18,15 @@ pub enum Pat<Ix, Term> {
     Forced(Term),
 }
 
+impl<Ix: Copy, Term> Pat<Ix, Term> {
+    pub(crate) fn as_var(&self) -> Ix {
+        match self {
+            Pat::Var(v) => *v,
+            _ => panic!("Not a variable pattern"),
+        }
+    }
+}
+
 impl<Ix, Term> Pat<Ix, Term> {
     pub(crate) fn is_abusrd(&self) -> bool {
         matches!(self, Pat::Absurd)

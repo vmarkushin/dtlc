@@ -26,6 +26,7 @@ pest = "2.1.3"
 quickcheck = "1.0.3"
 quickcheck_macros = "1.0.0"
 walkdir = "2.3.2"
+rand = "0.8.5"
 
 [build-dependencies]
 lalrpop = "0.19.6"

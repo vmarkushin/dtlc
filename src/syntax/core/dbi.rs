@@ -71,4 +71,16 @@ impl<T: DeBruijn> PrimSubst<T> {
             _ => Rc::new(PrimSubst::Cons(t, self)),
         }
     }
+
+    /// [Agda](https://hackage.haskell.org/package/Agda-2.6.0.1/docs/src/Agda.TypeChecking.Substitute.Class.html#singletonS).
+    pub fn singleton(n: DBI, u: T) -> Rc<Self> {
+        if n == 0 {
+            PrimSubst::Cons(u, PrimSubst::IdS.into()).into()
+        } else {
+            Self::concat(
+                (0..=n - 1).map(T::from_dbi),
+                PrimSubst::<T>::raise(n).cons(u),
+            )
+        }
+    }
 }

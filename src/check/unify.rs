@@ -2,7 +2,8 @@ use crate::check::meta::MetaSol;
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
 use crate::syntax::core::{
-    Case, Closure, Elim, FoldVal, Func, Lambda, Pat, Subst, Substitution, Term, Val, ValData,
+    Case, Closure, Elim, FoldVal, Func, Lambda, Pat, SubstWith, Substitution, Term, Val,
+    ValData,
 };
 use crate::syntax::{GI, MI};
 use std::cmp::Ordering;
@@ -187,7 +188,7 @@ fn check_solution(meta: MI, rhs: &Val) -> Result<()> {
 impl TypeCheckState {
     fn unify_meta_with(&mut self, term: &Val, mi: MI) -> Result<()> {
         let depth = self.unify_depth;
-        match self.meta_ctx().solution(mi) {
+        match self.meta_ctx().solution(mi).clone() {
             MetaSol::Unsolved => {
                 check_solution(mi, term)?;
                 if self.trace_tc {
@@ -204,13 +205,17 @@ impl TypeCheckState {
                     Unify::unify(self, &sol, term)
                 }
                 Ordering::Less => {
-                    let sol = sol.clone().subst(Substitution::raise(depth - *ix));
+                    let sol = sol
+                        .clone()
+                        .subst_with(Substitution::raise(depth - ix), self);
                     let sol = self.simplify(sol)?;
                     Unify::unify(self, &sol, term)
                 }
                 Ordering::Greater => {
-                    let sol_ix = *ix;
-                    let term = term.clone().subst(Substitution::raise(sol_ix - depth));
+                    let sol_ix = ix;
+                    let term = term
+                        .clone()
+                        .subst_with(Substitution::raise(sol_ix - depth), self);
                     let sol = *sol.clone();
                     self.unify_depth = sol_ix;
                     let res = Unify::unify(self, &sol, &term);

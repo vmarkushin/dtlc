@@ -5,6 +5,7 @@ use crate::syntax::{Ident, Loc, Universe, MI};
 
 pub use crate::check::norm::try_match;
 pub use case::{CaseTree, Clause, Constraint, LshProblem};
+pub use meta::{HasMeta, MetaSol};
 pub use state::TypeCheckState;
 pub use unify::Unify;
 

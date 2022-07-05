@@ -1,6 +1,6 @@
 use crate::check::meta::MetaContext;
 use crate::syntax::core::{
-    Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, Subst, Substitution, Term, Val,
+    Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, SubstWith, Substitution, Term, Val,
 };
 use crate::syntax::{DBI, GI, UID};
 use std::fmt::Display;
@@ -43,6 +43,7 @@ impl TypeCheckState {
 }
 
 impl TypeCheckState {
+    #[track_caller]
     pub(crate) fn lookup(&self, p0: DBI) -> &Bind {
         self.gamma.lookup(p0)
     }
@@ -120,19 +121,19 @@ impl TypeCheckState {
         &self.sigma[ix]
     }
 
-    pub fn local_by_id(&self, id: UID) -> Let {
+    pub fn local_by_id(&mut self, id: UID) -> Let {
         self.local_by_id_safe(id)
             .unwrap_or_else(|| panic!("unresolved local {}", id))
     }
 
-    pub fn local_by_id_safe(&self, id: UID) -> Option<Let> {
-        let lookup_let = || self.let_by_id_safe(id).cloned();
+    pub fn local_by_id_safe(&mut self, id: UID) -> Option<Let> {
+        let v = self.let_by_id_safe(id).cloned();
         let lookup_gamma = || {
             let (i, ty) = self.gamma_by_id_safe(id)?;
-            let ty = ty.clone().subst(Substitution::raise(i + 1));
+            let ty = ty.clone().subst_with(Substitution::raise(i + 1), self);
             Some(Let::new(ty, DeBruijn::from_dbi(i)))
         };
-        lookup_let().or_else(lookup_gamma)
+        v.or_else(lookup_gamma)
     }
 
     fn let_by_id_safe(&self, id: UID) -> Option<&Let> {
