@@ -1,6 +1,6 @@
 use crate::check::meta::MetaContext;
 use crate::syntax::core::{
-    Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, SubstWith, Substitution, Term, Val,
+    Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, SubstWith, Substitution, Term, Val, Var,
 };
 use crate::syntax::{DBI, GI, UID};
 use std::fmt::Display;
@@ -28,6 +28,7 @@ pub struct TypeCheckState {
     pub lets: LetList,
     /// Meta variable context, scoped. Always global.
     pub meta_ctx: Vec<MetaContext<Term>>,
+    pub next_uid: UID,
 }
 
 impl TypeCheckState {
@@ -64,12 +65,14 @@ impl TypeCheckState {
     }
 
     pub fn enter_def(&mut self, def: GI, metas_count: usize) {
+        debug!("{}", 1);
         self.current_checking_def = Some(def);
         self.meta_ctx.push(Default::default());
         self.mut_meta_ctx().expand_with_fresh_meta(metas_count);
     }
 
     pub fn exit_def(&mut self) {
+        debug!("{}", 2);
         self.current_checking_def = None;
     }
 
@@ -115,6 +118,12 @@ impl TypeCheckState {
     /// used for generating fresh metas during elaboration.
     pub fn fresh_meta(&mut self) -> Term {
         self.mut_meta_ctx().fresh_meta(|m| Term::meta(m, vec![]))
+    }
+
+    pub fn fresh_free_var(&mut self) -> Term {
+        let t = Term::Whnf(Val::Var(Var::Free(self.next_uid), vec![]));
+        self.next_uid += 1;
+        t
     }
 
     pub fn def(&self, ix: GI) -> &Decl {

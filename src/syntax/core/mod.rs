@@ -20,7 +20,7 @@ pub use redex::{Subst, SubstWith};
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 pub use subst::{build_subst, PrimSubst, Substitution};
-pub use term::{Bind, Case, Closure, Elim, Func, Lambda, Pat, Term, Val, ValData};
+pub use term::{Bind, Case, Closure, Elim, Func, Lambda, Pat, Term, Val, ValData, Var};
 
 impl Term {
     pub fn at(self, loc: Loc) -> TermInfo {

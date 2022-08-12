@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::syntax::core::{subst::PrimSubst, Elim, Term, Val};
+use crate::syntax::core::{subst::PrimSubst, Elim, Term, Val, Var};
 use crate::syntax::DBI;
 
 pub trait DeBruijn {
@@ -14,13 +14,13 @@ pub trait DeBruijn {
 impl DeBruijn for Val {
     fn dbi_view(&self) -> Option<DBI> {
         match self {
-            Val::Var(i, v) if v.is_empty() => Some(*i),
+            Val::Var(Var::Bound(i), v) if v.is_empty() => Some(*i),
             _ => None,
         }
     }
 
     fn from_dbi(dbi: DBI) -> Self {
-        Val::Var(dbi, Default::default())
+        Val::Var(Var::Bound(dbi), Default::default())
     }
 }
 

@@ -40,7 +40,7 @@ pub enum PrimSubst<T> {
     /// \cfrac{\Gamma \vdash \rho : \Delta}
     /// {\Gamma, \Psi \vdash \text{Weak}_\Psi \rho : \Delta}
     /// $$
-    Weak(DBI, Rc<Self>), // [x := x + n]
+    Weak(DBI, Rc<Self>),
     /// Lifting substitution. Use this to go under a binder.
     /// $\text{Lift}\_1 \rho := \text{Cons}(\texttt{Term::form\\\_dbi(0)},
     /// \text{Weak}\_1 \rho)$. $$
@@ -145,8 +145,6 @@ impl<Term: DeBruijn + Subst<Term, Term> + Clone> PrimSubst<Term> {
                 None => Left(o),
                 Some(i) => rest.lookup_impl(i),
             },
-            // TODO: remove the case?
-            Succ(_rest) if i == 0 => Right(DeBruijn::from_dbi(i)),
             Succ(rest) => rest.lookup_impl(dbi_pred(i)),
             Lift(n, _) if i < *n => Right(DeBruijn::from_dbi(i)),
             Lift(n, rest) => Right(Self::raise_term(*n, rest.lookup(i - *n))),
@@ -220,6 +218,19 @@ impl<T> PrimSubst<T> {
             (n, Lift(0, _rho)) => unreachable!("n = {:?}", n),
             (n, Lift(m, rho)) => rho.clone().lift_by(*m - 1).drop_by(n - 1).weaken(1),
             (_, Empty) => panic!(),
+        }
+    }
+
+    pub fn drop_1_cons(self: Rc<Self>) -> Rc<Self> {
+        use PrimSubst::*;
+        match &*self {
+            IdS => IdS.into(),
+            Weak(0, rho) => rho.clone(),
+            Weak(m, rho) => rho.clone().weaken(*m - 1),
+            Cons(_, rho) | Succ(rho) => rho.clone(),
+            Lift(0, rho) => rho.clone(),
+            Lift(m, rho) => rho.clone().lift_by(*m - 1),
+            Empty => panic!(),
         }
     }
 

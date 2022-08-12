@@ -7,7 +7,9 @@ use crate::syntax::{ConHead, Ident, Loc, Plicitness, Universe, DBI, GI, MI, UID}
 use derive_more::From;
 use itertools::Either::*;
 use itertools::{Either, Itertools};
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::mem;
 use std::rc::Rc;
 
 pub type Pat<Ix = DBI, T = Term> = pattern::Pat<Ix, T>;
@@ -34,6 +36,12 @@ pub struct ValData {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Lambda(pub Bind<Box<Term>>, pub Closure);
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Var {
+    Bound(DBI),
+    Free(UID),
+}
+
 /// Weak-head-normal-form terms, canonical values.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Val {
@@ -55,7 +63,7 @@ pub enum Val {
     /// Variable elimination, in spine-normal form.
     /// (so we have easy access to application arguments).<br/>
     /// This is convenient for meta resolution and termination check.
-    Var(DBI, Vec<Elim>),
+    Var(Var, Vec<Elim>),
 }
 
 impl Val {
@@ -90,14 +98,23 @@ impl Display for Case {
     }
 }
 
-impl SubstWith<'_> for Case {
-    fn subst_with(mut self, subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Self {
-        let old_pat_vars = self.pattern.vars();
-        self.pattern = self.pattern.subst_with(subst.clone(), tcs);
+// impl SubstWith<'_> for Case {
+impl Case {
+    pub fn subst_with(
+        mut self,
+        subst: Rc<Substitution>,
+        tcs: &mut TypeCheckState,
+        update_pats: bool,
+    ) -> Self {
+        debug!("Substituting in case {} with {}", self, subst);
+
+        // let old_pat_vars = self.pattern.vars();
+        if update_pats {
+            self.pattern = self.pattern.subst_with(subst.clone(), tcs);
+        }
         let pat_vars = self.pattern.vars();
         // self.body = self.body.subst(subst.clone());
 
-        debug!("Substituting in case {} with {}", self, subst);
         let new_subst = if let Some(s) = pat_vars.iter().sum1::<DBI>() {
             let min = *pat_vars.last().unwrap();
             let max = *pat_vars.first().unwrap();
@@ -105,7 +122,7 @@ impl SubstWith<'_> for Case {
                 let n = max - min;
                 debug_assert_eq!(s, n * (n + 1) / 2);
             }
-            let _split_var = *old_pat_vars.last().unwrap();
+            // let _split_var = *old_pat_vars.last().unwrap();
             // let (subst1, subst2) = subst.clone().split(split_var);
             // let subst = subst1.drop_by(1).union(subst2);
 
@@ -165,7 +182,7 @@ impl<Ix: From<DBI>, T: Subst<Term>> TryIntoPat<Ix, T> for Term {
                     .map(Term::try_into_pat)
                     .collect::<Option<Vec<_>>>()?,
             )),
-            Term::Whnf(Val::Var(ix, _)) => Some(Pat::Var(Ix::from(ix))),
+            Term::Whnf(Val::Var(Var::Bound(ix), _)) => Some(Pat::Var(Ix::from(ix))),
             _ => None,
         }
     }
@@ -194,11 +211,104 @@ impl From<DBI> for Term {
     }
 }
 
+pub trait BoundFreeVars {
+    fn bound_free_vars(&mut self, vars: &HashMap<UID, DBI>, depth: usize);
+}
+
+impl<T: BoundFreeVars> BoundFreeVars for Vec<T> {
+    fn bound_free_vars(&mut self, vars: &HashMap<UID, DBI>, depth: usize) {
+        for t in self {
+            t.bound_free_vars(vars, depth);
+        }
+    }
+}
+
+impl BoundFreeVars for Elim {
+    fn bound_free_vars(&mut self, vars: &HashMap<UID, DBI>, depth: usize) {
+        match self {
+            Elim::App(a) => {
+                a.bound_free_vars(vars, depth);
+            }
+            Elim::Proj(_) => {}
+        }
+    }
+}
+
+impl BoundFreeVars for Closure {
+    fn bound_free_vars(&mut self, vars: &HashMap<UID, DBI>, depth: usize) {
+        let Closure::Plain(p) = self;
+        p.bound_free_vars(vars, depth + 1);
+    }
+}
+
+impl BoundFreeVars for Term {
+    fn bound_free_vars(&mut self, vars: &HashMap<UID, DBI>, depth: usize) {
+        match self {
+            Term::Whnf(Val::Var(var, args)) => {
+                args.bound_free_vars(vars, depth);
+                let uid = if let Var::Free(uid) = var {
+                    *uid
+                } else {
+                    return;
+                };
+                if let Some(ix) = vars.get(&uid) {
+                    let new_dbi = *ix + depth;
+                    debug!("bound {} := {}", uid, new_dbi);
+                    *var = Var::Bound(new_dbi);
+                }
+            }
+            Term::Redex(Func::Lam(lam), _, args) => {
+                lam.0.ty.bound_free_vars(vars, depth);
+                lam.1.bound_free_vars(vars, depth);
+                args.bound_free_vars(vars, depth);
+            }
+            Term::Redex(Func::Index(_), _, args) => {
+                args.bound_free_vars(vars, depth);
+            }
+            Term::Match(t, cases) => {
+                t.bound_free_vars(vars, depth);
+                for case in cases {
+                    let len = case.pattern.vars().len();
+                    if len == 0 {
+                        case.body.bound_free_vars(vars, depth);
+                    } else {
+                        let min = *case.pattern.vars().last().unwrap();
+                        let vars_new = vars
+                            .clone()
+                            .into_iter()
+                            .map(|(k, v)| if k >= min { (k, v + len) } else { (k, v) })
+                            .collect();
+                        case.body.bound_free_vars(&vars_new, depth);
+                    }
+                }
+            }
+            Term::Whnf(Val::Universe(_)) => {}
+            Term::Whnf(Val::Data(data)) => {
+                data.args.bound_free_vars(vars, depth);
+            }
+            Term::Whnf(Val::Pi(x, ret)) => {
+                x.ty.bound_free_vars(vars, depth);
+                ret.bound_free_vars(vars, depth);
+            }
+            Term::Whnf(Val::Lam(lam)) => {
+                lam.0.ty.bound_free_vars(vars, depth);
+                lam.1.bound_free_vars(vars, depth);
+            }
+            Term::Whnf(Val::Cons(_, args)) => {
+                args.bound_free_vars(vars, depth);
+            }
+            Term::Whnf(Val::Meta(_, args)) => {
+                args.bound_free_vars(vars, depth);
+            }
+        }
+    }
+}
+
 impl Term {
     pub(crate) fn fresh_mi(&self) -> MI {
         self.try_fold_val::<!, _>(0, |max_mi, val| {
             Ok(match val {
-                Val::Meta(mi, _) => max_mi.max(*mi + 1),
+                Val::Meta(mi, _) => max_mi.max(*mi + 0),
                 _ => max_mi,
             })
         })

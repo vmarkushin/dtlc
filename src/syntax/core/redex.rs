@@ -1,8 +1,9 @@
 use super::Term;
 use crate::check::{Constraint, TypeCheckState};
+use crate::dsp;
 use crate::syntax::core::subst::{PrimSubst, Substitution};
 use crate::syntax::core::term::Lambda;
-use crate::syntax::core::{Closure, DeBruijn, Elim, Func, Val, ValData};
+use crate::syntax::core::{Closure, DeBruijn, Elim, FoldVal, Func, Val, ValData, Var};
 use crate::syntax::pattern::Pat;
 use crate::syntax::{Bind, Ident, DBI, GI};
 use itertools::Itertools;
@@ -72,6 +73,7 @@ pub trait SubstWith<'a, T: Sized = Self, A = Term, S = &'a mut TypeCheckState>: 
 impl Subst for Term {
     fn subst(self, subst: Rc<Substitution>) -> Term {
         let mut tcs = TypeCheckState::default();
+        tcs.enter_def(0, 0);
         self.subst_with(subst, &mut tcs)
     }
 }
@@ -134,7 +136,7 @@ impl SubstWith<'_> for Term {
                      | (pair 2 1) => (foo @0 @2 @1 @4)   Γ = @5 @4 @3 @2 @1 @0
                     }                     y        z            z  x        y
                      */
-                    Term::Whnf(Val::Var(y, _es)) => {
+                    Term::Whnf(Val::Var(Var::Bound(y), _es)) => {
                         let x = x.dbi_view().expect("unexpected term");
                         let y = *y;
                         debug!("Replacing with var {} instead of {}...", y, x);
@@ -154,7 +156,8 @@ impl SubstWith<'_> for Term {
                             "split substitution (by {}): {} ⊎ {} = {}",
                             x, subst1, subst2, subst,
                         );
-                        let _subst1 = subst1.clone().drop_by(1);
+                        // let _subst1 = subst1.clone().drop_by(1);
+                        let _ = subst2;
                         let cs = cs
                             .into_iter()
                             .map(|mut case| {
@@ -212,7 +215,7 @@ impl SubstWith<'_> for Term {
                                         );
                                     }
 
-                                    let fresh_mi = case.body.fresh_mi();
+                                    let fresh_uid = tcs.next_uid;
                                     let popped_body =
                                         case.body.clone().pop_out(tcs, x, Some(x_max));
                                     debug!("Popped body: {}", &popped_body);
@@ -225,10 +228,10 @@ impl SubstWith<'_> for Term {
                                         tcs,
                                         y,
                                         Some(y_max),
-                                        fresh_mi,
+                                        fresh_uid,
                                         new_pat_term,
                                     );
-                                    debug!("Shifted body: {}", &case.body);
+                                    debug!("Pushed in body: {}", &case.body);
                                 } else {
                                     let popped_body = case.body.clone().pop_out(tcs, x, None);
                                     debug!("Popped body: {}", &popped_body);
@@ -303,24 +306,34 @@ impl SubstWith<'_> for Term {
                     _ => {
                         let cs = match &*x {
                             // if we substituted instead of var...
-                            Term::Whnf(Val::Var(x, es)) if es.is_empty() => {
+                            Term::Whnf(Val::Var(Var::Bound(x), es)) if es.is_empty() => {
                                 let x = *x;
                                 debug!("substituting instead of var {}...", x);
                                 let (subst1, subst2) = subst.clone().split(x);
                                 debug!("split substitution: {} ⊎ {} = {}", subst1, subst2, subst);
-                                let rc = subst1.clone().drop_by(1);
-                                let new_subst = rc.clone().union(subst2.clone());
-                                debug!(
-                                    "unify substitution: {} = {} ⊎ {} = drop({}, 1) ⊎ {}",
-                                    new_subst, rc, subst2, subst1, subst2
-                                );
+                                // let rc = subst1.clone().drop_by(1);
+                                // let new_subst = rc.clone().union(subst2.clone());
+                                // debug!(
+                                //     "unify substitution: {} = {} ⊎ {} = drop({}, 1) ⊎ {}",
+                                //     new_subst, rc, subst2, subst1, subst2
+                                // );
 
+                                /*
+
+                                cons a
+                                match t {
+                                 | zero => (suc @0)
+                                 | (suc 2) => 4 3 2 1 0
+                                }
+
+                                match t {
+                                 | zero => (suc @0)
+                                 | (suc 1) => 3 2 1 0 a
+                                }
+                                 */
                                 let cs = cs
                                     .into_iter()
                                     .map(|mut case| {
-                                        // let subst = new_subst.clone();
-                                        // let old_pat_vars = case.pattern.vars();
-                                        // case.pattern = case.pattern.subst(subst.clone());
                                         let pat_vars = case.pattern.vars();
                                         if !pat_vars.is_empty() {
                                             // self.body = self.body.subst(subst.clone());
@@ -328,7 +341,7 @@ impl SubstWith<'_> for Term {
                                             debug_assert_eq!(x_min, x);
                                             let x_max = *pat_vars.first().unwrap();
 
-                                            let fresh_mi = case.body.fresh_mi();
+                                            let fresh_uid = tcs.next_uid;
                                             let popped_body =
                                                 case.body.clone().pop_out(tcs, x, Some(x_max));
                                             debug!("Popped body: {}", &popped_body);
@@ -355,9 +368,9 @@ impl SubstWith<'_> for Term {
                                                 tcs,
                                                 x,
                                                 Some(x_max),
-                                                fresh_mi,
+                                                fresh_uid,
                                             );
-                                            debug!("Shifted body: {}", &case.body);
+                                            debug!("Pushed in body: {}", &case.body);
                                         } else {
                                             let popped_body =
                                                 case.body.clone().pop_out(tcs, x, None);
@@ -369,91 +382,57 @@ impl SubstWith<'_> for Term {
                                             case.body = popped_body_new
                                                 .push_in_without_pat_subst(tcs, x, None, 0);
 
-                                            debug!("Pushed in body: {}", &case.body);
+                                            debug!("Pushed (w/s) in body: {}", &case.body);
                                         };
                                         case
-
-                                        /*
-                                        debug!("Substituting in case {} with {}", case, subst);
-                                        let new_subst = if let Some(s) =
-                                            pat_vars.iter().sum1::<DBI>()
-                                        {
-                                            debug!("new pat = {}", case.pattern);
-                                            let min = *pat_vars.last().unwrap();
-                                            let max = *pat_vars.first().unwrap();
-                                            if min != max {
-                                                let n = max - min;
-                                                // debug_assert_eq!(s, n * (n + 1) / 2);
-                                                debug_assert_eq!(
-                                                    s,
-                                                    (max * (max + 1) / 2) - (min * (min + 1) / 2)
-                                                        + min
-                                                );
-                                            }
-
-                                            // let split_var = *old_pat_vars.last().unwrap();
-                                            // let (subst1, subst2) = subst.clone().split(split_var);
-                                            // let subst = subst1.drop_by(1).union(subst2);
-
-                                            let split_var = min;
-                                            let (subst1, subst2) = subst.clone().split(split_var);
-                                            debug!(
-                                                "split substitution (by {}): {} ⊎ {} = {}",
-                                                split_var, subst1, subst2, subst
-                                            );
-
-                                            let len = pat_vars.len();
-                                            // let subst2_lifted = subst2.clone().lift_by(len);
-                                            let subst1_lifted = subst1.clone().lift_by(len);
-                                            // let new_subst = subst1.clone().union(subst2_lifted.clone());
-                                            let new_subst =
-                                                subst1_lifted.clone().union(subst2.clone());
-                                            // debug!(
-                                            //     "unify substitution: {} = {} ⊎ {} = lift({}, {}) ⊎ {}",
-                                            //     new_subst, subst1_lifted, subst2, subst1, len, subst2,
-                                            // );
-                                            debug!("unify substitution: {}", new_subst);
-                                            new_subst
-                                        } else {
-                                            // Substitution::concat(
-                                            //     (0..x - 1).map(Term::from_dbi),
-                                            //     // Substitution::raise(1),
-                                            //     Substitution::id().drop_by(1), // .,
-                                            // )
-                                            if *x > 0 {
-                                                Substitution::concat(
-                                                    (0..x - 1).map(Term::from_dbi),
-                                                    Substitution::strengthen(1),
-                                                )
-                                                .compose(subst.clone())
-                                            } else {
-                                                subst.clone()
-                                            }
-                                            // Substitution::strengthen(1).compose(subst.clone())
-                                            // Substitution::singleton()
-                                            // subst
-                                            // subst.drop_by(1)
-                                        };
-                                        case.body = case.body.subst(new_subst.clone());
-                                        case
-
-                                         */
-                                        // c.subst(new_subst.clone())
                                     })
                                     .collect();
                                 cs
                             }
                             _ => {
-                                /*
                                 let new_subst = subst.clone();
                                 debug!("new''' {} = drop({}, 1) ", new_subst, subst);
                                 let cs = cs
                                     .into_iter()
-                                    .map(|mut case| case.subst(new_subst.clone()))
+                                    .map(|mut case| {
+                                        let pat_vars = case.pattern.vars();
+                                        if !pat_vars.is_empty() {
+                                            // self.body = self.body.subst(subst.clone());
+                                            let x_min = *pat_vars.last().unwrap();
+                                            // debug_assert_eq!(x_min, x);
+                                            let x_max = *pat_vars.first().unwrap();
+
+                                            let fresh_uid = tcs.next_uid;
+                                            let popped_body =
+                                                case.body.clone().pop_out_2(tcs, x_min, x_max);
+                                            debug!("Popped body: {}", &popped_body);
+                                            let popped_body_new =
+                                                popped_body.subst_with(subst.clone(), tcs);
+                                            debug!("Popped body': {}", &popped_body_new);
+
+                                            case.body = popped_body_new
+                                                .push_in_without_pat_subst_2(
+                                                    tcs, x_min, x_max, fresh_uid,
+                                                );
+                                            debug!("Pushed in body: {}", &case.body);
+                                        } else {
+                                            case.body = case.body.subst(new_subst.clone());
+                                            // let popped_body =
+                                            //     case.body.clone().pop_out(tcs, x, None);
+                                            // debug!("Popped body: {}", &popped_body);
+                                            // let popped_body_new =
+                                            //     popped_body.subst_with(subst.clone(), tcs);
+                                            // debug!("Popped body': {}", &popped_body_new);
+                                            //
+                                            // case.body = popped_body_new
+                                            //     .push_in_without_pat_subst(tcs, x, None, 0);
+                                            //
+                                            // debug!("Pushed (w/s) in body: {}", &case.body);
+                                        };
+                                        case
+                                    })
                                     .collect();
                                 cs
-                                 */
-                                todo!()
                             }
                         };
 
@@ -564,9 +543,12 @@ impl SubstWith<'_, Term> for Val {
             Val::Universe(n) => Term::universe(n),
             Val::Data(info) => Term::data(info.subst_with(subst, tcs)),
             Val::Meta(m, a) => Term::meta(m, a.subst_with(subst, tcs)),
-            Val::Var(f, args) => subst
+            Val::Var(Var::Bound(f), args) => subst
                 .lookup_with(f, tcs)
                 .apply_elim(args.subst_with(subst, tcs)),
+            Val::Var(Var::Free(n), args) => {
+                Term::Whnf(Val::Var(Var::Free(n), vec![])).apply_elim(args.subst_with(subst, tcs))
+            }
         }
     }
 }
@@ -708,6 +690,113 @@ impl<'a> SubstWith<'a, Pat<DBI, Term>> for Pat<DBI, Term> {
         }
     }
 }
+/*
+fn subst_in_subst(
+    mut subst: Rc<Substitution>,
+    term: &Term,
+    dbi: DBI,
+    to_term: &Term,
+) -> Rc<Substitution> {
+    let vars = term
+        .try_fold_val::<!, _>(Vec::new(), |mut xs, val| {
+            match val {
+                Val::Var(x, _) => xs.push(*x),
+                _ => {}
+            };
+            Ok(xs)
+        })
+        .unwrap();
+    let mut split_vars = Vec::new();
+    for v in vars {
+        if let Some(nv) = subst.lookup(v).dbi_view() {
+            if nv == dbi {
+                split_vars.push(v);
+            }
+        }
+    }
+    split_vars.sort();
+    for v in split_vars {
+        dbg!(v);
+        let (s1, s2) = subst.clone().split(v);
+        dsp!(&s2);
+        let s1 = Substitution::one(to_term.clone()).union(dsp!(s1).drop_by(1));
+        subst = s1.union(s2);
+        dsp!(&subst);
+    }
+    // dsp!(&subst);
+    subst
+}
+
+#[test]
+fn test_subst_in_subst() {
+    let subst = Substitution::one(Term::from_dbi(2));
+    let t = Term::fun_app(0, "foo", [0, 1, 3, 4].map(Term::from_dbi));
+
+    let new_subst = subst_in_subst(subst.clone(), &t, 2, &Term::from_dbi(10));
+    assert_eq!(
+        dsp!(t.subst(new_subst)),
+        Term::fun_app(0, "foo", [10, 1, 10, 4].map(Term::from_dbi))
+    );
+}
+
+ */
+/*
+Γ = a b c d e f
+subst: cons @2
+foo _  _  @2 @3
+           d  c
+      f
+match 0 {
+               Γ = a b c d e f0 f1
+    | cons 1 0 => foo @0 @1 @3 @4
+                      f1 f0  d  c
+}
+==>
+Γ = a b c d e
+foo _  _  @1 @2
+           d  c
+       c
+match @2 {
+               Γ = a b c3 c2 d e
+    | cons 3 2 => foo @2 @3 @1 (cons 3 2)
+                             d
+}
+ */
+pub fn subst_in_case(
+    term: Term,
+    pat_term: Term,
+    x_min: usize,
+    x_max: usize,
+    y_min: usize,
+    y_max: usize,
+    diff: isize,
+    len: usize,
+    subst: Rc<Substitution>,
+) -> Term {
+    let subst = if diff >= 0 {
+        // x <= y
+        let diff = diff as usize;
+        let pat_subst = Substitution::parallel(
+            (y_min..=y_max)
+                .map(Term::from_dbi)
+                .collect::<Vec<_>>()
+                .into_iter(),
+        );
+        let (s1, s2) = subst.split(x_min);
+        println!("s1 = {}", &s1);
+        println!("s2 = {}", &s2);
+        let s1 = s1.lift_by(len);
+        let s2 = s2.drop_by(1);
+        println!("s1' = {}", &s1);
+        println!("s2' = {}", &s2);
+        let final_subst = s1.union(pat_subst.union(s2));
+        dsp!("fs = {}", &final_subst);
+        final_subst
+    } else {
+        todo!()
+    };
+    term.subst(subst)
+}
 
 #[cfg(test)]
 mod tests {
@@ -715,6 +804,38 @@ mod tests {
 
     use crate::syntax::ConHead;
     use std::iter;
+
+    #[test]
+    fn test_subst_in_case() {
+        // subst: cons @2
+        // foo @0 @1 @3 @4
+        // foo @2 @3 @1 (cons 3 2)
+        let subst = Substitution::one(Term::from_dbi(2));
+        let t = Term::fun_app(0, "foo", [0, 1, 3, 4].map(Term::from_dbi));
+        let x_min = 0;
+        let x_max = 1;
+        let len = x_max - x_min + 1;
+        let y_min = subst.lookup(x_min).dbi_view().unwrap();
+        let diff = (y_min as isize) - (x_min as isize);
+        let y_max = ((y_min as isize) + diff) as usize;
+        let con_head = ConHead::new("cons", 0);
+        let pat = |v1, v0| Pat::cons(con_head.clone(), vec![Pat::Var(v1), Pat::Var(v0)]);
+        let pat_term = pat(x_min, x_max).into_term();
+        assert_eq!(
+            subst_in_case(t, pat_term, x_min, y_max, y_min, y_max, diff, len, subst),
+            Term::fun_app(
+                0,
+                "foo",
+                [2, 3, 1]
+                    .map(Term::from_dbi)
+                    .into_iter()
+                    .chain(iter::once(Term::cons(
+                        con_head.clone(),
+                        [3, 2].map(Term::from_dbi).to_vec()
+                    ))),
+            )
+        );
+    }
 
     #[test]
     fn test_pop_out_term_from_case() {

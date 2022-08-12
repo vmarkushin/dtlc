@@ -1,7 +1,7 @@
 use crate::check::state::TypeCheckState;
 use crate::check::{Clause, Error, LshProblem, Result};
 use crate::syntax::abs::{AppView, Expr, Match};
-use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, Val, ValData};
+use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, Val, ValData, Var};
 use crate::syntax::core::{Closure, Tele};
 use crate::syntax::{ConHead, Ident, Loc, Universe, GI};
 
@@ -360,7 +360,7 @@ impl TypeCheckState {
         let vars = vars
             .into_iter()
             .map(|ti| match ti.ast {
-                Term::Whnf(Val::Var(idx, _)) => idx,
+                Term::Whnf(Val::Var(Var::Bound(idx), _)) => idx,
                 _ => unimplemented!("Match on non-var"),
             })
             .collect::<Vec<_>>();

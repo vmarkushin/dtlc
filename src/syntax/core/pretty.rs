@@ -1,6 +1,7 @@
 use crate::syntax::core::term::{Bind, Case, Lambda};
-use crate::syntax::core::{Closure, Elim, Func, Term, TermInfo, Val, ValData};
-use crate::syntax::{ConHead, Plicitness};
+use crate::syntax::core::{Closure, Elim, Func, Term, TermInfo, Val, ValData, Var};
+use crate::syntax::{ConHead, Plicitness, UID};
+use itertools::Itertools;
 use std::fmt::{Display, Error, Formatter, Write};
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -62,6 +63,24 @@ impl Display for Lambda {
     }
 }
 
+impl Display for Var {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Var::Bound(i) => {
+                write!(f, "@{}", i)
+            }
+            Var::Free(i) => {
+                if *i < 26 {
+                    let ci = (97 + *i) as u8 as char;
+                    write!(f, "{}", ci)
+                } else {
+                    write!(f, "#{}", i)
+                }
+            }
+        }
+    }
+}
+
 impl Display for Val {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         use Plicitness::*;
@@ -71,7 +90,7 @@ impl Display for Val {
                 f.write_str("?")?;
                 pretty_application(f, mi, a)
             }
-            Var(fun, a) => pretty_application(f, &format!("@{}", fun), a),
+            Var(v, a) => pretty_application(f, &format!("{}", v), a),
             Universe(l) => write!(f, "{}", l),
             Pi(Bind { licit, ty, .. }, clos) => match licit {
                 Explicit => write!(f, "({} -> {})", ty, clos),

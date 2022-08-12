@@ -2,7 +2,7 @@ use crate::check::meta::HasMeta;
 use crate::check::{Error, Result, TypeCheckState};
 use crate::syntax::abs::{Expr, Pat as PatA};
 use crate::syntax::core::{
-    Case, DataInfo, DeBruijn, Decl, Pat, SubstWith, Substitution, Term, Val,
+    Case, DataInfo, DeBruijn, Decl, Pat, SubstWith, Substitution, Term, Val, Var,
 };
 use crate::syntax::{ConHead, DBI, UID};
 use itertools::{EitherOrBoth, Itertools};
@@ -28,7 +28,7 @@ impl Constraint {
     /// Generate abstract substitution \[x := y\].
     pub fn gen_abs_subst(&self, tcs: &TypeCheckState) -> (UID, Expr) {
         match (&self.pat, &self.term) {
-            (PatA::Var(x), Term::Whnf(Val::Var(y, es))) if es.is_empty() => {
+            (PatA::Var(x), Term::Whnf(Val::Var(Var::Bound(y), es))) if es.is_empty() => {
                 let x1 = tcs.lookup(*y);
                 (*x, Expr::Var(x1.clone().ident(), x1.name))
             }
@@ -42,7 +42,7 @@ impl Constraint {
                         Vec1::try_from_vec(
                             es.iter()
                                 .map(|e| match e {
-                                    Term::Whnf(Val::Var(y, es)) if es.is_empty() => {
+                                    Term::Whnf(Val::Var(Var::Bound(y), es)) if es.is_empty() => {
                                         let x1 = tcs.lookup(*y);
                                         Expr::Var(x1.clone().ident(), x1.name)
                                     }
@@ -158,7 +158,7 @@ impl Display for CaseTree {
             CaseTree::Case(t, cases) => {
                 write!(f, "case {} of", t)?;
                 for (pat, tree) in cases {
-                    write!(f, " {}", pat)?;
+                    write!(f, " | {}", pat)?;
                     if let Some(tree) = tree {
                         write!(f, " => ")?;
                         write!(f, "{}", tree)?;
@@ -529,7 +529,7 @@ impl LshProblem {
                 delta_tick_hat_i
                     .into_iter()
                     .map(|x| match x {
-                        Term::Whnf(Val::Var(i, _)) => Pat::Var(i),
+                        Term::Whnf(Val::Var(Var::Bound(i), _)) => Pat::Var(i),
                         _ => unreachable!(),
                     })
                     .collect(),
@@ -1230,7 +1230,7 @@ mod tests {
         /*
         case @1
             | zero => zero
-            | (suc 0) => case @0
+            | (suc 1) => case @0
                             | zero => (suc @0)
                             | (suc 0) => (sub @1 @0)
          */
@@ -1341,6 +1341,25 @@ mod tests {
         Ok(())
     }
 
+    /*
+    Cons((suc zero), Cons((suc (suc zero)), ε))
+
+    match @0 {
+     | zero => @0
+     | (suc 0) => match @1 {
+         | zero => (suc @0)
+         | (suc 1) => (suc (max @1 @0))
+        }
+    }
+
+    match @0 {
+     | zero => @0
+     | (suc 0) => match (suc (suc zero)) {
+         | zero => (suc @0)
+         | (suc 1) => (suc (max @1 @0))
+        }
+    }
+     */
     #[test]
     fn test_eval_case_tree_2() -> eyre::Result<()> {
         let _ = env_logger::try_init();
@@ -1396,6 +1415,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_eval_case_tree_3() -> eyre::Result<()> {
         let _ = env_logger::try_init();
         let p = Parser::default();
@@ -1419,20 +1439,20 @@ mod tests {
             | mkPair A B
 
         fn proj1 (A : Type) (B : Type) (x : Pair A B) : A := match x {
-            | (mkPair t1 t2 a b) => a
+            | (mkPair a b) => a
         }
 
         fn proj2 (A : Type) (B : Type) (x : Pair A B) : B := match x {
-            | (mkPair t1 t2 a b) => b
+            | (mkPair a b) => b
         }
 
         fn sproj1 (A : Type) (B : A -> Type) (x : Sigma A B) : A := match x {
-            | (mkSigma t1 t2 a b) => a
+            | (mkSigma a b) => a
         }
 
         fn sproj2 (A : Type) (B : A -> Type) (x : Sigma A B)
-            : B (match x { | (mkSigma t1 t2 a b) => a }) := match x {
-             | (mkSigma t1 t2 a b) => b
+            : B (match x { | (mkSigma a b) => a }) := match x {
+             | (mkSigma a b) => b
         }
 
         fn dep_fn (x : Nat) : (match x { | zero => Nat | (suc n) => Bool }) := match x {
@@ -1858,7 +1878,7 @@ mod tests {
             ],
         );
         let subst = Substitution::one(Term::from_dbi(3));
-        // let _ = env_logger::try_init();
+        let _ = env_logger::try_init();
         debug!("{}", ct);
         let cta = ct.clone().subst(subst);
         debug!("{}", cta);

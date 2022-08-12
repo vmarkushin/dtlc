@@ -29,6 +29,9 @@ pub fn try_match(x: &Val, cs: &[Case]) -> Option<(usize, Rc<Substitution>)> {
 impl TypeCheckState {
     /// Normalize a term.
     pub fn simplify(&mut self, term: Term) -> Result<Val> {
+        if matches!(term, Term::Match(..)) {
+            debug!("simpl: {}", &term);
+        }
         match term {
             Term::Whnf(whnf) => Ok(whnf),
             Term::Redex(f, id, elims) => match f {
