@@ -340,7 +340,7 @@ impl LshProblem {
             .iter()
             .enumerate()
             .find(|(_, x)| (x.pat.is_cons() || x.pat.is_abusrd()) && x.term.is_eta_var());
-        if let Some((_ct_idx, ct)) = maybe_ct {
+        if let Some((ct_idx, ct)) = maybe_ct {
             match &ct.ty {
                 Term::Whnf(Val::Data(data)) => match ct.term.dbi_view() {
                     Some(x) => {
@@ -350,7 +350,7 @@ impl LshProblem {
                                 if data.conses.is_empty() {
                                     return Self::split_empty(clause_1, ct, x);
                                 }
-                                self.split_con(tcs, ct, x, data_args, data)
+                                self.split_con(tcs, ct, ct_idx, x, data_args, data)
                             }
                             _ => unreachable!("Data type definition expected"),
                         }
@@ -386,6 +386,7 @@ impl LshProblem {
         &self,
         tcs: &mut TypeCheckState,
         ct: &Constraint,
+        ct_idx: usize,
         x: DBI,
         data_args: &Vec<Term>,
         data: DataInfo,
@@ -405,7 +406,6 @@ impl LshProblem {
             trace!("Context before: {}", tcs.gamma);
 
             let delta_len = data_args.len();
-            // let delta_i = cons.signature.clone().tele_view().0;
             let delta_i = cons.params.clone();
             trace!("Δi = {}", delta_i);
             trace!(
@@ -420,18 +420,12 @@ impl LshProblem {
             let mut gamma1 = tcs.gamma.clone();
             let (xx, mut gamma2) = gamma1.split(x);
             debug_assert_eq!(xx.ty, ct.ty);
-            // let mut delta_tick_hat_i =
-            //     (data_args.clone()).subst(Substitution::raise(cons.params.len()));
-            // delta_tick_hat_i.extend((x..cons.params.len() + x).rev().map(Term::from_dbi));
             let mut delta_tick_hat_i = (0..cons.params.len())
-                // .map(|i| i + x)
                 .rev()
                 .map(Term::from_dbi)
                 .collect::<Vec<_>>();
             let cons_gi = cons.data_gi + cons_ix + 1;
             let con_head = ConHead::new(cons.name.clone(), cons_gi);
-            // let alpha = Substitution::raise(cons.params.len())
-            //     .cons(Term::cons(con_head.clone(), delta_tick_hat_i.clone()));
             let alpha = Substitution::raise(delta_tick_hat_i.len())
                 .cons(Term::cons(con_head.clone(), delta_tick_hat_i.clone()));
             trace!("Γ2 = {}", gamma2);
@@ -454,7 +448,8 @@ impl LshProblem {
                     clause.constraints = clause.constraints.clone().subst_with(beta.clone(), tcs);
                     trace!("transforming clause: {}", &clause);
                     let mut constraints_new = Vec::new();
-                    for cst in clause.constraints.clone() {
+                    for (cst_idx, cst) in clause.constraints.clone().into_iter().enumerate() {
+                        trace!("Solving constraint {}", cst);
                         match (cst.term, cst.pat) {
                             (
                                 Term::Whnf(Val::Cons(con_head, delta_tick_hat_i_lifted)),
@@ -468,8 +463,14 @@ impl LshProblem {
                                 if i == 0 {
                                     debug_assert!(!flag, "Unexpected second split constraint");
                                     flag = true;
-                                    delta_tick_hat_i = delta_tick_hat_i_lifted.clone();
-                                    let mut delta_tick_i_renamed = delta_tick_i.clone(); //.skipping(delta_len);
+                                    if ct_idx == cst_idx {
+                                        delta_tick_hat_i = delta_tick_hat_i_lifted.clone();
+                                        trace!(
+                                            "new delta_tick_hat_i = {}",
+                                            delta_tick_hat_i.iter().join(", ")
+                                        );
+                                    }
+                                    let mut delta_tick_i_renamed = delta_tick_i.clone();
                                     delta_tick_i_renamed.iter_mut().zip(es.iter()).for_each(
                                         |(x, y)| {
                                             x.name = match y {
@@ -492,13 +493,27 @@ impl LshProblem {
                                         }),
                                 );
                             }
-                            v @ (Term::Whnf(Val::Cons(..)), PatA::Var(_)) => {
+                            (
+                                Term::Whnf(Val::Cons(con_head, delta_tick_hat_i_lifted)),
+                                PatA::Var(v),
+                            ) => {
                                 if i == 0 {
+                                    if ct_idx == cst_idx {
+                                        delta_tick_hat_i = delta_tick_hat_i_lifted.clone();
+                                        trace!(
+                                            "new delta_tick_hat_i = {}",
+                                            delta_tick_hat_i.iter().join(", ")
+                                        );
+                                    }
                                     let delta_tick_i_renamed =
                                         delta_tick_i.clone().skipping(delta_len);
                                     gamma1.extend(delta_tick_i_renamed);
                                 }
-                                constraints_new.push(Constraint::new(v.1, v.0, cst.ty));
+                                constraints_new.push(Constraint::new(
+                                    PatA::Var(v),
+                                    Term::Whnf(Val::Cons(con_head, delta_tick_hat_i_lifted)),
+                                    cst.ty,
+                                ));
                             }
                             (t, p) => constraints_new.push(Constraint::new(p, t, cst.ty)),
                         };
@@ -523,6 +538,9 @@ impl LshProblem {
                 trace!("Context after {}", tcs.gamma);
                 lhs_new.check(tcs)
             })?;
+            debug!("delta_tick_hat_i={}", &delta_tick_hat_i.iter().join(", "));
+            debug!("self.pats={}", &self.pats.iter().join(", "));
+
             // TODO: use self.pats?
             let clause_pat = Pat::cons(
                 con_head,
@@ -920,6 +938,73 @@ mod tests {
     }
 
     #[test]
+    fn test_build_case_tree_shift_pat_vars() -> eyre::Result<()> {
+        use crate::syntax::pattern::Pat::*;
+
+        let _ = env_logger::try_init();
+        let p = Parser::default();
+        let mut env = TypeCheckState::default();
+        env.indentation_size(2);
+        let des = desugar_prog(p.parse_prog(
+            r#"
+        data Nat : Type
+            | zero
+            | suc Nat
+
+        fn many_args_match (x : Nat) (y : Nat) (z : Nat) (w : Nat) : Nat := match x, y, z, w {
+              | zero, y, z, w => zero
+              | x,    y, z, w => z
+        }
+       "#,
+        )?)?;
+        env.check_prog(des.clone())?;
+
+        let ct = env
+            .def(*des.decls_map.get("many_args_match").unwrap())
+            .as_func()
+            .body
+            .clone()
+            .unwrap()
+            .tele_view()
+            .1;
+
+        let zero_ch = ConHead {
+            name: Ident {
+                text: "zero".to_string(),
+                loc: Loc::default(),
+            },
+            cons_gi: 1,
+        };
+        let cte = Term::match_elim(
+            3,
+            [
+                Case {
+                    pattern: Cons(false, zero_ch.clone(), vec![]),
+                    body: Term::cons(zero_ch.clone(), vec![]),
+                },
+                Case {
+                    pattern: Cons(
+                        false,
+                        ConHead {
+                            name: Ident {
+                                text: "suc".to_owned(),
+                                loc: Loc::default(),
+                            },
+                            cons_gi: 2,
+                        },
+                        vec![Pat::from_dbi(3)],
+                    ),
+                    body: Term::from_dbi(1),
+                },
+            ],
+        );
+        debug!("ct = {}", ct);
+        debug!("cte = {}", cte);
+        assert_eq!(ct, cte);
+        Ok(())
+    }
+
+    #[test]
     fn test_eval_case_tree_if() -> eyre::Result<()> {
         let _ = env_logger::try_init();
         let p = Parser::default();
@@ -1244,7 +1329,7 @@ mod tests {
             .tele_view()
             .1;
         println!("ct = {}", ct);
-        let _cte = Term::match_elim(
+        let cte = Term::match_elim(
             0,
             [
                 Case {
@@ -1298,17 +1383,17 @@ mod tests {
         );
         // assert_eq!(ct, cte);
 
-        // let val = pct!(p, des, env, "tst1");
-        // let val1 = pct!(p, des, env, "n3");
-        // Val::unify(&mut env, &val1, &val)?;
-        // let val = pct!(p, des, env, "tst2");
-        // let val1 = pct!(p, des, env, "zero");
-        // Val::unify(&mut env, &val1, &val)?;
+        let val = pct!(p, des, env, "tst1");
+        let val1 = pct!(p, des, env, "n3");
+        Val::unify(&mut env, &val1, &val)?;
+        let val = pct!(p, des, env, "tst2");
+        let val1 = pct!(p, des, env, "zero");
+        Val::unify(&mut env, &val1, &val)?;
         let val = pct!(p, des, env, "tst3");
         let val1 = pct!(p, des, env, "zero");
         Val::unify(&mut env, &val1, &val)?;
-        // let val = pct!(p, des, env, "tst4");
-        // let val1 = pct!(p, des, env, "n10");
+        let val = pct!(p, des, env, "tst4");
+        let val1 = pct!(p, des, env, "n10");
         Ok(())
     }
 
@@ -1415,7 +1500,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_eval_case_tree_3() -> eyre::Result<()> {
         let _ = env_logger::try_init();
         let p = Parser::default();

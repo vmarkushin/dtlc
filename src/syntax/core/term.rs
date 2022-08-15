@@ -98,61 +98,6 @@ impl Display for Case {
     }
 }
 
-// impl SubstWith<'_> for Case {
-impl Case {
-    pub fn subst_with(
-        mut self,
-        subst: Rc<Substitution>,
-        tcs: &mut TypeCheckState,
-        update_pats: bool,
-    ) -> Self {
-        debug!("Substituting in case {} with {}", self, subst);
-
-        // let old_pat_vars = self.pattern.vars();
-        if update_pats {
-            self.pattern = self.pattern.subst_with(subst.clone(), tcs);
-        }
-        let pat_vars = self.pattern.vars();
-        // self.body = self.body.subst(subst.clone());
-
-        let new_subst = if let Some(s) = pat_vars.iter().sum1::<DBI>() {
-            let min = *pat_vars.last().unwrap();
-            let max = *pat_vars.first().unwrap();
-            if min != max {
-                let n = max - min;
-                debug_assert_eq!(s, n * (n + 1) / 2);
-            }
-            // let _split_var = *old_pat_vars.last().unwrap();
-            // let (subst1, subst2) = subst.clone().split(split_var);
-            // let subst = subst1.drop_by(1).union(subst2);
-
-            let split_var = min;
-            let (subst1, subst2) = subst.clone().split(split_var);
-            debug!(
-                "split substitution (by {}): {} ⊎ {} = {}",
-                split_var, subst1, subst2, subst
-            );
-
-            let len = pat_vars.len();
-            // let subst2_lifted = subst2.clone().lift_by(len);
-            let subst1_lifted = subst1.clone().lift_by(len - 1);
-            // let new_subst = subst1.clone().union(subst2_lifted.clone());
-            let new_subst = subst1_lifted.clone().union(subst2.clone());
-            // debug!(
-            //     "unify substitution: {} = {} ⊎ {} = lift({}, {}) ⊎ {}",
-            //     new_subst, subst1_lifted, subst2, subst1, len, subst2,
-            // );
-            debug!("unify substitution: {}", new_subst);
-            new_subst
-        } else {
-            subst
-            // subst.drop_by(1)
-        };
-        self.body = self.body.subst_with(new_subst.clone(), tcs);
-        self
-    }
-}
-
 impl Case {
     pub fn new(pattern: Pat, body: Term) -> Self {
         Self { pattern, body }
@@ -305,14 +250,8 @@ impl BoundFreeVars for Term {
 }
 
 impl Term {
-    pub(crate) fn fresh_mi(&self) -> MI {
-        self.try_fold_val::<!, _>(0, |max_mi, val| {
-            Ok(match val {
-                Val::Meta(mi, _) => max_mi.max(*mi + 0),
-                _ => max_mi,
-            })
-        })
-        .unwrap()
+    pub fn free_var(uid: UID) -> Self {
+        Term::Whnf(Val::Var(Var::Free(uid), Vec::new()))
     }
 
     pub(crate) fn is_cons(&self) -> bool {

@@ -14,13 +14,6 @@ pub struct Param {
     pub plic: Plicitness,
 }
 
-// #[derive(Debug, PartialEq, Eq, Clone)]
-// pub struct NamedTele {
-//     pub name: Ident,
-//     pub tele: Vec<Param>,
-//     pub ret_ty: Option<Type>,
-// }
-
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Data {
     def: Tele,
@@ -123,30 +116,6 @@ pub type Bind<T = Option<Expr>> = syntax::Bind<T>;
 pub type Tele = Vec<Bind>;
 pub type Type = Expr;
 pub type Pat<T = Expr> = pattern::Pat<UID, T>;
-
-// impl<T> pattern::Pat<UID, T> {
-//     pub fn subst_abs(self, subst: Rc<HashMap<UID, Expr>>) -> Self {
-//         match self {
-//             Pat::Var(x) => {
-//                 match subst.get(&x).cloned() {
-//                     Some(Expr::Var(_, uid)) => Pat::Var(uid),
-//                     Some(Expr::Cons(_, gi)) => Pat::Cons(false, ),
-//                     None => Pat::Var(x),
-//                 }
-//             },
-//             Pat::Wildcard => Pat::Wildcard,
-//             Pat::Absurd => Pat::Absurd,
-//             Pat::Cons(forced, con, args) => Pat::Cons(
-//                 forced,
-//                 con,
-//                 args.into_iter()
-//                     .map(|x| x.subst_abs(subst.clone()))
-//                     .collect(),
-//             ),
-//             Pat::Forced(x) => Pat::Forced(x),
-//         }
-//     }
-// }
 
 impl Case {
     pub fn subst_abs(&mut self, subst: Rc<HashMap<UID, Expr>>) {

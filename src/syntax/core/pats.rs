@@ -1,4 +1,5 @@
 use crate::check::{HasMeta, TypeCheckState};
+use crate::dsp;
 use crate::syntax::core::redex::SubstWith;
 use crate::syntax::core::term::BoundFreeVars;
 use crate::syntax::core::{DeBruijn, Pat, Substitution, Term, Val, Var};
@@ -58,6 +59,8 @@ impl Pat {
             (v, Pat::Var(_)) => Some(Substitution::one(v.clone())),
             (_, Pat::Forced(..)) => Some(Substitution::id()),
             (Term::Whnf(Val::Cons(con_head, ts)), Pat::Cons(forced, pat_head, ps)) => {
+                // skipping (implicit) type params passed to the constructor
+                let ts = &ts[ts.len() - ps.len()..];
                 if !*forced && con_head != pat_head {
                     return None;
                 }
@@ -110,7 +113,8 @@ impl Term {
         } else {
             Substitution::raise(1).lift_by(x_min)
         };
-        self.subst_with(subst, tcs)
+        dbg!(&subst);
+        dsp!(dsp!(self).subst_with(subst, tcs))
     }
 
     pub fn push_in(
