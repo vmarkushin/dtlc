@@ -1,7 +1,6 @@
 use crate::syntax::core::term::{Bind, Case, Lambda};
 use crate::syntax::core::{Closure, Elim, Func, Term, TermInfo, Val, ValData, Var};
-use crate::syntax::{ConHead, Plicitness, UID};
-use itertools::Itertools;
+use crate::syntax::{ConHead, Plicitness};
 use std::fmt::{Display, Error, Formatter, Write};
 
 #[derive(Copy, Clone, Debug, Default)]

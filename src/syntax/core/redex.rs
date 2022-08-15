@@ -1,9 +1,8 @@
 use super::Term;
 use crate::check::{Constraint, TypeCheckState};
-use crate::dsp;
 use crate::syntax::core::subst::{PrimSubst, Substitution};
 use crate::syntax::core::term::Lambda;
-use crate::syntax::core::{Case, Closure, DeBruijn, Elim, FoldVal, Func, Val, ValData, Var};
+use crate::syntax::core::{Case, Closure, DeBruijn, Elim, Func, Val, ValData, Var};
 use crate::syntax::pattern::Pat;
 use crate::syntax::{Bind, Ident, DBI, GI};
 use itertools::Itertools;
@@ -54,14 +53,14 @@ impl Term {
     fn subst_in_match_with_var(
         subst: &Rc<Substitution>,
         tcs: &mut TypeCheckState,
-        x: &Box<Term>,
+        x: &Term,
         y: DBI,
         cs: Vec<Case>,
     ) -> Vec<Case> {
         let x = x.dbi_view().expect("unexpected term");
         debug!("Replacing with var {} instead of {}...", y, x);
         /*
-        When have such case-tree:
+        Given a case tree of the form:
         match x { | cons ... => ... }
         Before entering the match, our context was Γ = t_n, t_n-1, ..., x, ..., t_0.
         After entering the match, the variable `x` gets eliminated, so all the variables
@@ -101,6 +100,7 @@ impl Term {
                     let y_min = *new_pat_vars.last().unwrap();
                     let y_max = *new_pat_vars.first().unwrap();
                     debug_assert_eq!(y_min, y);
+                    // pattern variables should increase linearly
                     if y_min != y_max {
                         debug_assert_eq!(
                             s,
@@ -108,6 +108,16 @@ impl Term {
                         );
                     }
 
+                    /*
+                    Substitution in case is done by 'popping' term on the right hand side, i.e.
+                    putting it in the outer context (without the eliminated `x` and newly bound
+                    variables (which are replaced by fresh free variables). This is done due to
+                    some problems that appear when trying to do it naively with DeBruijn indices.
+
+                    After substitution, the term is 'pushed' back in the case (i.e. all the free
+                    variables are replaced with the corresponding pattern variables and variables
+                    are shifted).
+                     */
                     let fresh_uid = tcs.next_uid;
                     let popped_body = case.body.clone().pop_out(tcs, x, Some(x_max));
                     debug!("Popped body: {}", &popped_body);
@@ -141,12 +151,10 @@ impl Term {
     ) -> Vec<Case> {
         let x = *x;
         debug!("substituting instead of var {}...", x);
-        let cs = cs
-            .into_iter()
+        cs.into_iter()
             .map(|mut case| {
                 let pat_vars = case.pattern.vars();
                 if !pat_vars.is_empty() {
-                    // self.body = self.body.subst(subst.clone());
                     let x_min = *pat_vars.last().unwrap();
                     debug_assert_eq!(x_min, x);
                     let x_max = *pat_vars.first().unwrap();
@@ -172,8 +180,7 @@ impl Term {
                 };
                 case
             })
-            .collect();
-        cs
+            .collect()
     }
 
     fn subst_non_var_in_cases_instead_of_non_var(
@@ -183,8 +190,7 @@ impl Term {
     ) -> Vec<Case> {
         let new_subst = subst.clone();
         debug!("new''' {} = drop({}, 1) ", new_subst, subst);
-        let cs = cs
-            .into_iter()
+        cs.into_iter()
             .map(|mut case| {
                 let pat_vars = case.pattern.vars();
                 if !pat_vars.is_empty() {
@@ -192,21 +198,20 @@ impl Term {
                     let x_max = *pat_vars.first().unwrap();
 
                     let fresh_uid = tcs.next_uid;
-                    let popped_body = case.body.clone().pop_out_2(tcs, x_min, x_max);
+                    let popped_body = case.body.clone().pop_out_non_var(tcs, x_min, x_max);
                     debug!("Popped body: {}", &popped_body);
                     let popped_body_new = popped_body.subst_with(subst.clone(), tcs);
                     debug!("Popped body': {}", &popped_body_new);
 
-                    case.body =
-                        popped_body_new.push_in_without_pat_subst_2(tcs, x_min, x_max, fresh_uid);
+                    case.body = popped_body_new
+                        .push_in_without_pat_subst_non_var(tcs, x_min, x_max, fresh_uid);
                     debug!("Pushed in body: {}", &case.body);
                 } else {
                     case.body = case.body.subst(new_subst.clone());
                 };
                 case
             })
-            .collect();
-        cs
+            .collect()
     }
 }
 
@@ -248,6 +253,8 @@ impl SubstWith<'_> for Term {
                 args.subst_with(subst, tcs),
             ),
             Term::Match(x, cs) => {
+                // For how substitution in `match` generally work see inner comments
+                // of `Self::subst_in_match_with_var` function.
                 let x_inst = x.clone().subst_with(subst.clone(), tcs);
                 debug!(
                     "subst in `match {} ...` with {} => `match {} ...`",
@@ -378,7 +385,7 @@ impl<'a, R, T: SubstWith<'a, R>, const N: usize> SubstWith<'a, [R; N]> for [T; N
         self.map(|e| e.subst_with(subst.clone(), tcs))
     }
 }
- */
+*/
 
 impl<'a, A, B, X: Subst<A>, Y: SubstWith<'a, B>> SubstWith<'a, (A, B)> for (X, Y) {
     fn subst_with(self, subst: Rc<Substitution>, tcs: &'a mut TypeCheckState) -> (A, B) {
@@ -400,9 +407,7 @@ impl SubstWith<'_> for ValData {
 }
 
 impl<'a> SubstWith<'a, Pat<DBI, Term>> for Pat<DBI, Term> {
-    // impl<'a, R, T: SubstWith<'a, R>> SubstWith<'a, Pat<DBI, R>> for Pat<DBI, T> {
     fn subst_with(self, subst: Rc<PrimSubst<Term>>, tcs: &'a mut TypeCheckState) -> Pat<DBI, Term> {
-        // fn subst_with(self, subst: Rc<PrimSubst<Term>>, tcs: &'a mut TypeCheckState) -> Pat<DBI, R> {
         match self {
             Pat::Absurd => Pat::Absurd,
             Pat::Var(v) => {
@@ -413,7 +418,6 @@ impl<'a> SubstWith<'a, Pat<DBI, Term>> for Pat<DBI, Term> {
                     Pat::Var(v)
                 }
             }
-            // Pat::Var(v) => Pat::Var(v),
             Pat::Cons(f, c, pats) => {
                 let mut pats_new = Vec::with_capacity(pats.len());
                 let mut i = None::<usize>;
@@ -429,13 +433,11 @@ impl<'a> SubstWith<'a, Pat<DBI, Term>> for Pat<DBI, Term> {
                                     }
                                     _ => Pat::Var(v),
                                 }
+                            } else if let Some(j) = i {
+                                i = Some(j + 1);
+                                Pat::Var(j + 1)
                             } else {
-                                if let Some(j) = i {
-                                    i = Some(j + 1);
-                                    Pat::Var(j + 1)
-                                } else {
-                                    Pat::Var(v)
-                                }
+                                Pat::Var(v)
                             }
                         }
                         Pat::Absurd => panic!(),

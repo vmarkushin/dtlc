@@ -412,10 +412,8 @@ impl LshProblem {
                 "data args = {}",
                 data_args.iter().map(|x| x.to_string()).join(", ")
             );
-            let delta_tick_i = delta_i.subst_with(
-                Substitution::parallel(data_args.into_iter().rev().cloned()),
-                tcs,
-            );
+            let delta_tick_i =
+                delta_i.subst_with(Substitution::parallel(data_args.iter().rev().cloned()), tcs);
             trace!("Δ'i = {}", delta_tick_i);
             let mut gamma1 = tcs.gamma.clone();
             let (xx, mut gamma2) = gamma1.split(x);
@@ -538,10 +536,7 @@ impl LshProblem {
                 trace!("Context after {}", tcs.gamma);
                 lhs_new.check(tcs)
             })?;
-            debug!("delta_tick_hat_i={}", &delta_tick_hat_i.iter().join(", "));
-            debug!("self.pats={}", &self.pats.iter().join(", "));
 
-            // TODO: use self.pats?
             let clause_pat = Pat::cons(
                 con_head,
                 delta_tick_hat_i
@@ -557,12 +552,6 @@ impl LshProblem {
         Ok(CaseTree::case(x, ct_clauses))
     }
 
-    /*
-       fn tst (A : Type) (B : Type) (p : Pair A B) (f : A -> B) : B := match p {
-           | (mkPair a b) => f a
-                          Γ = A B a b f
-       }
-    */
     fn done(tcs: &mut TypeCheckState, clause_1: &Clause, target: Term) -> Result<CaseTree> {
         debug!("Γdone = {}", tcs.gamma);
         let refined_user_pats = Rc::new(
@@ -854,7 +843,6 @@ mod tests {
         }
        "#,
         )?)?;
-        dsp!(&des.decls[5]);
         env.check_prog(des.clone())?;
 
         let ct = env
@@ -1329,7 +1317,7 @@ mod tests {
             .tele_view()
             .1;
         println!("ct = {}", ct);
-        let cte = Term::match_elim(
+        let _cte = Term::match_elim(
             0,
             [
                 Case {
@@ -1392,8 +1380,8 @@ mod tests {
         let val = pct!(p, des, env, "tst3");
         let val1 = pct!(p, des, env, "zero");
         Val::unify(&mut env, &val1, &val)?;
-        let val = pct!(p, des, env, "tst4");
-        let val1 = pct!(p, des, env, "n10");
+        let _val = pct!(p, des, env, "tst4");
+        let _val1 = pct!(p, des, env, "n10");
         Ok(())
     }
 

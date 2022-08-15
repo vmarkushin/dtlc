@@ -311,6 +311,7 @@ impl DesugarState {
     pub fn desugar_con(&mut self, data_ix: GI, con: NamedTele) -> Result<()> {
         let (tele, ident) = self.desugar_telescope(con)?;
 
+        // TODO:
         // let args = Vec1::try_from_vec(
         //     tele.iter()
         //         .map(|bind| ExprA::Var(bind.ident(), bind.name))

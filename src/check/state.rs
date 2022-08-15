@@ -65,14 +65,12 @@ impl TypeCheckState {
     }
 
     pub fn enter_def(&mut self, def: GI, metas_count: usize) {
-        debug!("{}", 1);
         self.current_checking_def = Some(def);
         self.meta_ctx.push(Default::default());
         self.mut_meta_ctx().expand_with_fresh_meta(metas_count);
     }
 
     pub fn exit_def(&mut self) {
-        debug!("{}", 2);
         self.current_checking_def = None;
     }
 

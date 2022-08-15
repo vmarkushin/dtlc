@@ -1,16 +1,14 @@
 use crate::check::TypeCheckState;
 use crate::syntax::core::redex::Subst;
 use crate::syntax::core::subst::Substitution;
-use crate::syntax::core::{DeBruijn, FoldVal, SubstWith, Tele};
+use crate::syntax::core::{DeBruijn, SubstWith, Tele};
 use crate::syntax::pattern;
 use crate::syntax::{ConHead, Ident, Loc, Plicitness, Universe, DBI, GI, MI, UID};
 use derive_more::From;
+use itertools::Either;
 use itertools::Either::*;
-use itertools::{Either, Itertools};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::mem;
-use std::rc::Rc;
 
 pub type Pat<Ix = DBI, T = Term> = pattern::Pat<Ix, T>;
 
@@ -323,15 +321,15 @@ pub enum Closure {
 }
 
 impl Closure {
-    // pub fn instantiate(self, arg: Term) -> Term {
-    //     self.instantiate_safe(arg)
-    //         .unwrap_or_else(|e| panic!("Cannot split on `{}`.", e))
-    // }
+    pub fn instantiate(self, arg: Term) -> Term {
+        self.instantiate_safe(arg)
+            .unwrap_or_else(|e| panic!("Cannot split on `{}`.", e))
+    }
 
-    // pub fn instantiate_safe(self, arg: Term) -> Result<Term, Term> {
-    //     let Closure::Plain(body) = self;
-    //     Ok(body.subst(Substitution::one(arg)))
-    // }
+    pub fn instantiate_safe(self, arg: Term) -> Result<Term, Term> {
+        let Closure::Plain(body) = self;
+        Ok(body.subst(Substitution::one(arg)))
+    }
 
     pub fn instantiate_with(self, arg: Term, tcs: &mut TypeCheckState) -> Term {
         self.instantiate_safe_with(arg, tcs)

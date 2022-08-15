@@ -1,9 +1,8 @@
-use crate::check::{HasMeta, TypeCheckState};
-use crate::dsp;
+use crate::check::TypeCheckState;
 use crate::syntax::core::redex::SubstWith;
 use crate::syntax::core::term::BoundFreeVars;
 use crate::syntax::core::{DeBruijn, Pat, Substitution, Term, Val, Var};
-use crate::syntax::{DBI, MI, UID};
+use crate::syntax::{DBI, UID};
 use itertools::Itertools;
 use std::rc::Rc;
 
@@ -90,15 +89,11 @@ impl Pat {
 }
 
 impl Term {
-    pub fn pop_out_2(self, tcs: &mut TypeCheckState, x: DBI, x_max: DBI) -> Term {
+    pub fn pop_out_non_var(self, tcs: &mut TypeCheckState, x: DBI, x_max: DBI) -> Term {
         let x_min = x;
-        let subst = {
-            let _len = x_max - x_min + 1;
-            Substitution::raise(0).union(
-                Substitution::parallel((x_min..=x_max).map(|_| tcs.fresh_free_var()))
-                    .lift_by(x_min),
-            )
-        };
+        let subst = Substitution::raise(0).union(
+            Substitution::parallel((x_min..=x_max).map(|_| tcs.fresh_free_var())).lift_by(x_min),
+        );
         self.subst_with(subst, tcs)
     }
 
@@ -113,8 +108,7 @@ impl Term {
         } else {
             Substitution::raise(1).lift_by(x_min)
         };
-        dbg!(&subst);
-        dsp!(dsp!(self).subst_with(subst, tcs))
+        self.subst_with(subst, tcs)
     }
 
     pub fn push_in(
@@ -129,7 +123,7 @@ impl Term {
         let (subst, vars) = if let Some(x_max) = maybe_x_max {
             let len = x_max - x_min + 1;
             let mut y = x;
-            debug!("(push_in) Binding vars from {}", Var::Free(from_uid));
+            debug!("[push_in] Binding vars from {}", Var::Free(from_uid));
 
             let vars = (from_uid..from_uid + len)
                 .rev()
@@ -152,7 +146,7 @@ impl Term {
     }
 
     pub fn push_in_without_pat_subst(
-        mut self,
+        self,
         tcs: &mut TypeCheckState,
         x: DBI,
         maybe_x_max: Option<DBI>,
@@ -163,8 +157,8 @@ impl Term {
             let len = x_max - x_min + 1;
             let mut y = x;
 
-            debug!(
-                "(push_in_without_pat_subst) Binding vars from {}",
+            trace!(
+                "[push_in_without_pat_subst] Binding vars from {}",
                 Var::Free(from_uid)
             );
             let vars = (from_uid..from_uid + len)
@@ -179,16 +173,15 @@ impl Term {
             (Substitution::raise(len).lift_by(x), vars)
         } else {
             (Substitution::id(), Default::default())
-            // Substitution::strengthen(1).lift_by(x + 1)
         };
-        debug!("[push_in_without_pat_subst] formed subst {}", subst);
+        trace!("[push_in_without_pat_subst] formed subst {}", subst);
         let mut t = self.subst_with(subst, tcs);
         t.bound_free_vars(&vars, 0);
         t
     }
 
-    pub fn push_in_without_pat_subst_2(
-        mut self,
+    pub fn push_in_without_pat_subst_non_var(
+        self,
         tcs: &mut TypeCheckState,
         x: DBI,
         x_max: DBI,
@@ -199,8 +192,8 @@ impl Term {
             let len = x_max - x_min + 1;
             let mut y = x;
 
-            debug!(
-                "(push_in_without_pat_subst_2) Binding vars from {}",
+            trace!(
+                "[push_in_without_pat_subst_non_var] Binding vars from {}",
                 Var::Free(from_uid)
             );
             let vars = (from_uid..from_uid + len)
@@ -214,7 +207,7 @@ impl Term {
 
             (Substitution::raise(len).lift_by(x), vars)
         };
-        debug!("[push_in_without_pat_subst_2] formed subst {}", subst);
+        trace!("[push_in_without_pat_subst_non_var] formed subst {}", subst);
         let mut t = self.subst_with(subst, tcs);
         t.bound_free_vars(&vars, 0);
         t
@@ -224,8 +217,7 @@ impl Term {
 #[cfg(test)]
 mod tests {
     use crate::check::TypeCheckState;
-    use crate::dsp;
-    use crate::syntax::core::{DeBruijn, Pat, Subst, Substitution, Term, Val, Var};
+    use crate::syntax::core::{DeBruijn, Pat, Subst, Term, Val, Var};
     use crate::syntax::ConHead;
 
     #[test]
@@ -234,7 +226,7 @@ mod tests {
         let term = Term::cons(con_head.clone(), [2, 0].map(Term::from_dbi).to_vec());
         let mut tcs = TypeCheckState::default();
         let fresh_uid = tcs.next_uid;
-        let term_new = term.clone().pop_out_2(&mut tcs, 0, 0);
+        let term_new = term.clone().pop_out_non_var(&mut tcs, 0, 0);
         assert_eq!(
             term_new,
             Term::cons(
@@ -246,7 +238,7 @@ mod tests {
             )
         );
         assert_eq!(
-            term_new.push_in_without_pat_subst_2(&mut tcs, 0, 0, fresh_uid),
+            term_new.push_in_without_pat_subst_non_var(&mut tcs, 0, 0, fresh_uid),
             term,
         );
     }
@@ -261,13 +253,12 @@ mod tests {
                 [12, 11, 10].map(Term::from_dbi).to_vec(),
             ))
             .unwrap();
-        dsp!(&subst);
         let term = Term::cons(
             con_head.clone(),
             [0, 1, 2, 3, 4, 5, 6].map(Term::from_dbi).to_vec(),
         );
         assert_eq!(
-            dsp!(term.subst(subst)),
+            term.subst(subst),
             Term::cons(
                 con_head.clone(),
                 [0, 1, 10, 11, 12, 5 - 3, 6 - 3]
@@ -283,13 +274,12 @@ mod tests {
                 [10].map(Term::from_dbi).to_vec(),
             ))
             .unwrap();
-        dsp!(&subst);
         let term = Term::cons(
             con_head.clone(),
             [0, 1, 2, 3, 4].map(Term::from_dbi).to_vec(),
         );
         assert_eq!(
-            dsp!(term.subst(subst)),
+            term.subst(subst),
             Term::cons(
                 con_head,
                 [0, 1, 10, 3 - 1, 4 - 1].map(Term::from_dbi).to_vec()

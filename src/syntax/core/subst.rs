@@ -182,8 +182,6 @@ impl<'a> PrimSubst<Term> {
                 None => Left(o),
                 Some(i) => rest.lookup_with_impl(i, state),
             },
-            // TODO: remove the case?
-            // Succ(rest) if i == 0 => Right(DeBruijn::from_dbi(i)),
             Succ(rest) => rest.lookup_with_impl(dbi_pred(i), state),
             Lift(n, _) if i < *n => Right(DeBruijn::from_dbi(i)),
             Lift(n, rest) => {
@@ -218,19 +216,6 @@ impl<T> PrimSubst<T> {
             (n, Lift(0, _rho)) => unreachable!("n = {:?}", n),
             (n, Lift(m, rho)) => rho.clone().lift_by(*m - 1).drop_by(n - 1).weaken(1),
             (_, Empty) => panic!(),
-        }
-    }
-
-    pub fn drop_1_cons(self: Rc<Self>) -> Rc<Self> {
-        use PrimSubst::*;
-        match &*self {
-            IdS => IdS.into(),
-            Weak(0, rho) => rho.clone(),
-            Weak(m, rho) => rho.clone().weaken(*m - 1),
-            Cons(_, rho) | Succ(rho) => rho.clone(),
-            Lift(0, rho) => rho.clone(),
-            Lift(m, rho) => rho.clone().lift_by(*m - 1),
-            Empty => panic!(),
         }
     }
 
@@ -491,16 +476,6 @@ mod tests {
             Substitution::one(Term::from_dbi(0)).cons(Term::from_dbi(1))
         );
     }
-
-    // #[test]
-    // fn test_subst_inplace() {
-    //     let s = Substitution::inplace(2, Term::from_dbi(10));
-    //     let term = Term::from_dbi(0).apply(vec![1, 2, 3].into_iter().map(Term::from_dbi).collect());
-    //     println!("{}", term);
-    //     let term_exp =
-    //         Term::from_dbi(0).apply(vec![1, 10, 2].into_iter().map(Term::from_dbi).collect());
-    //     assert_eq!(dsp!(term.subst(s)), term_exp);
-    // }
 
     #[test]
     fn test_split_subst() {

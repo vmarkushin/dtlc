@@ -16,9 +16,7 @@ pub enum Token<'input> {
     #[token("exists")]
     #[token("Σ")]
     Sigma,
-    // START_CHAR          = [~!@#\$%\^\&\*\-\+=<>\?/|\[\]:a-zA-Z_\u2200-\u22FF]
     #[regex("[~!@#$%^&*-+=<>?/|:a-zA-Z_{u2200-u22FF}~!@#$%^&*-+=<>?/|:a-zA-Z_{u2200-u22FF}0-9']*")]
-    // #[regex("[a-zA-Z_][a-zA-Z0-9_']*")]
     Ident(&'input str),
     #[token("data")]
     Data,
@@ -166,7 +164,7 @@ impl<'source> Iterator for SpannedIter<'source> {
     }
 }
 
-pub fn lexer<'a>(input: &'a str) -> SpannedIter<'a> {
+pub fn lexer(input: &str) -> SpannedIter {
     SpannedIter {
         lexer: Token::lexer(input),
         line: Line(1),

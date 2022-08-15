@@ -2,8 +2,7 @@ use crate::check::meta::MetaSol;
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
 use crate::syntax::core::{
-    Case, Closure, Elim, FoldVal, Func, Lambda, Pat, SubstWith, Substitution, Term, Val,
-    ValData,
+    Case, Closure, Elim, FoldVal, Func, Lambda, Pat, SubstWith, Substitution, Term, Val, ValData,
 };
 use crate::syntax::{GI, MI};
 use std::cmp::Ordering;
@@ -112,7 +111,6 @@ impl Unify for Term {
                 let a_simp = tcs.simplify(a.clone())?;
                 let b_simp = tcs.simplify(b.clone())?;
                 Val::unify(tcs, &a_simp, &b_simp)
-                // Err(Error::DifferentTerm(box a.clone(), box b.clone()))
             }
         }
     }
@@ -151,7 +149,7 @@ impl TypeCheckState {
         use Closure::*;
         self.unify_depth += 1;
         let res = match (left, right) {
-            (Plain(a), Plain(b)) => term_cmp(self, &**a, &**b),
+            (Plain(a), Plain(b)) => term_cmp(self, a, b),
         };
         self.unify_depth -= 1;
         res?;
@@ -200,14 +198,11 @@ impl TypeCheckState {
             }
             MetaSol::Solved(ix, sol) => match ix.cmp(&depth) {
                 Ordering::Equal => {
-                    let sol = *sol.clone();
-                    let sol = self.simplify(sol)?;
+                    let sol = self.simplify(*sol)?;
                     Unify::unify(self, &sol, term)
                 }
                 Ordering::Less => {
-                    let sol = sol
-                        .clone()
-                        .subst_with(Substitution::raise(depth - ix), self);
+                    let sol = sol.subst_with(Substitution::raise(depth - ix), self);
                     let sol = self.simplify(sol)?;
                     Unify::unify(self, &sol, term)
                 }
@@ -216,9 +211,8 @@ impl TypeCheckState {
                     let term = term
                         .clone()
                         .subst_with(Substitution::raise(sol_ix - depth), self);
-                    let sol = *sol.clone();
                     self.unify_depth = sol_ix;
-                    let res = Unify::unify(self, &sol, &term);
+                    let res = Unify::unify(self, &*sol, &term);
                     self.unify_depth = depth;
                     res?;
                     Ok(())
@@ -258,7 +252,7 @@ impl TypeCheckState {
             }
             (Meta(i, a), b) | (b, Meta(i, a)) if a.is_empty() => self.unify_meta_with(b, *i),
             (Meta(_, a), _) | (_, Meta(_, a)) if !a.is_empty() => {
-                // TODO: figure out how to handle this case
+                // FIXME: figure out how to handle this case
                 Ok(())
             }
             (Var(i, a), Var(j, b)) if i == j => Unify::unify(self, a.as_slice(), b.as_slice()),

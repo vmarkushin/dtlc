@@ -12,7 +12,7 @@ mod tests {
     use dtlc::check::TypeCheckState;
     use dtlc::parser::Parser;
     use dtlc::syntax::desugar::desugar_prog;
-    
+
     use std::fs;
 
     #[test]
@@ -27,7 +27,6 @@ mod tests {
             if let Some(ext) = x.extension() {
                 if ext == "dtl" {
                     let content = fs::read_to_string(x)?;
-                    // let tokens = lexer(&content);
                     match p.parse_prog(&content) {
                         Err(e) => {
                             panic!("{}", e);

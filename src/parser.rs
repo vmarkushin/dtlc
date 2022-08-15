@@ -9,7 +9,6 @@ pub struct Parser {
     decl: DeclParser,
     prog: ProgParser,
     file: SimpleFile<String, String>,
-    // files: Files<Rc<String>>,
 }
 
 impl Parser {
@@ -32,24 +31,13 @@ impl Parser {
 impl Parser {
     pub fn new(expr: ExprParser, decl: DeclParser, prog: ProgParser) -> Self {
         let file = SimpleFile::new("".to_owned(), "".to_owned());
-        // let files = Files::new();
         Self {
             expr,
             decl,
             prog,
             file,
-            // files,
         }
     }
-
-    // fn lexer2(&mut self, input: &'a str) -> FileIter<'a> {
-    //     let files = Files::new();
-    //
-    //     let file_iter = FileIter {
-    //         files,
-    //         // input,
-    //     };
-    // }
 }
 
 impl Default for Parser {

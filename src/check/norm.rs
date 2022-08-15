@@ -30,7 +30,7 @@ impl TypeCheckState {
     /// Normalize a term.
     pub fn simplify(&mut self, term: Term) -> Result<Val> {
         if matches!(term, Term::Match(..)) {
-            debug!("simpl: {}", &term);
+            trace!("simplifying match: {}", &term);
         }
         match term {
             Term::Whnf(whnf) => Ok(whnf),

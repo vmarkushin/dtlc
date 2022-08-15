@@ -230,26 +230,8 @@ pub fn run_repl(
 ) -> Result<()> {
     if let Some(input) = input.strip_prefix(":l ") {
         let content = fs::read_to_string(input)?;
-        // println!("{}", content);
-        // match parser.parse_prog(&content)? {
-        //     Err(e) => {
-        //         panic!("{}", e);
-        //     }
-        //     Ok(prog) => {
-        //         let des = desugar_prog(prog)?;
-        //         let mut env = TypeCheckState::default();
-        //         env.check_prog(des.clone())?;
-        //     }
-        // }
         let prog = parser.parse_prog(&content).unwrap();
-        // for decl in prog {
-        //     des.desugar_decl(decl)?;
-        // }
         *des = desugar_prog(prog).unwrap();
-        // env.check_prog()
-        // let _check_res = env
-        //     .check_decls(des.decls[0..].iter().cloned(), des.cur_meta_id.clone())
-        //     .wrap_err("Failed to type-check expression");
         env.check_prog(des.clone())?;
         return Ok(());
     }

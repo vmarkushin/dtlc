@@ -204,8 +204,8 @@ impl HasMeta for Term {
             }
             Term::Match(term, cases) => {
                 let cases = cases.inline_meta(tcs)?;
-                Ok(Term::Match(term, cases))
-            } // Term::Match(ct) => Ok(Term::Match(ct.inline_meta(tcs)?)),
+                Ok(Term::Match(term.inline_meta(tcs)?, cases))
+            }
         }
     }
 }
@@ -245,7 +245,7 @@ fn solve_meta(tcs: &mut TypeCheckState, mut mi: MI, elims: Vec<Elim>) -> Result<
                 mi = idx;
             }
             Solved(ix, sol) => break (*ix, sol.clone()),
-            Unsolved => return Ok(Term::meta(mi, elims)), // return Err(Error::MetaUnsolved(mi)),
+            Unsolved => return Err(Error::MetaUnsolved(mi)),
         };
     };
     let elims = elims.inline_meta(tcs)?;

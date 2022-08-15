@@ -312,7 +312,7 @@ impl TypeCheckState {
                 let bind_ty = self.check(&bind.ty.clone().unwrap(), against)?;
                 let new = Bind::new(bind.licit, bind.name, bind_ty.ast, bind.loc);
                 self.gamma.push(new);
-                let ret_ty = self.check(&**ret, against)?;
+                let ret_ty = self.check(ret, against)?;
                 let bind_ty = self.gamma.pop().expect("Bad index");
                 let term = Term::pi2(bind_ty.boxed(), Closure::plain(ret_ty.ast));
                 Ok(term.at(*info))
@@ -326,10 +326,10 @@ impl TypeCheckState {
                 let bind_new = Bind::boxing(bind.licit, bind.name, bind_ty.ast, bind_ty.loc);
                 self.gamma.push(bind_new.clone().unboxed());
                 let body = match self.simplify(*ret_pi.clone()) {
-                    Ok(val) => self.check(&*ret, &val)?,
+                    Ok(val) => self.check(ret, &val)?,
                     Err(Error::Blocked(blocked)) if blocked.is_elim() => {
                         debug!("Term has blocked, trying checking with check_blocked");
-                        self.check_blocked_impl(&*ret, blocked.anyway)?
+                        self.check_blocked_impl(ret, blocked.anyway)?
                     }
                     Err(e) => return Err(e),
                 };
@@ -393,7 +393,7 @@ mod tests {
     use crate::syntax::core::ValData;
     use crate::syntax::desugar::desugar_prog;
     use crate::syntax::Loc;
-    use crate::{assert_err, dsp, pct, pe, typeck};
+    use crate::{assert_err, pct, pe, typeck};
 
     #[test]
     fn test_check_basic() -> eyre::Result<()> {
@@ -450,19 +450,19 @@ mod tests {
         let _ = env_logger::try_init();
         let p = Parser::default();
         let mut env = TypeCheckState::default();
-        let des = desugar_prog(p.parse_prog(
+        let mut des = desugar_prog(p.parse_prog(
             r#"
             data Bool : Type
                | true
                | false
 
             fn fmap (A : Type) (B : Type) (f : A -> B) (x : A) : B := f x
-            -- fn bool_id (b : Bool) := b
-            -- fn id (A : Type) (a : A) := a
-            -- fn bool := true
-            -- fn idb := id _ bool
-            -- fn deep (f : forall (A : Type), A -> A -> A) (x : Bool) := (lam (y : _) => f _ y x) x
-            -- fn deep' (f : forall (A : Type), A -> A -> A) (x : Bool) := (lam (y : _) => f _ x y) x
+            fn bool_id (b : Bool) := b
+            fn id (A : Type) (a : A) := a
+            fn bool := true
+            fn idb := id _ bool
+            fn deep (f : forall (A : Type), A -> A -> A) (x : Bool) := (lam (y : _) => f _ y x) x
+            fn deep' (f : forall (A : Type), A -> A -> A) (x : Bool) := (lam (y : _) => f _ x y) x
        "#,
         )?)?;
 
@@ -478,30 +478,28 @@ mod tests {
                 _ => panic!(),
             }
         );
-        /*
-               let ty = pct!(p, des, env, "Bool");
-               env.check(&pe!(p, des, "bool"), &ty)?;
 
-               let ty = pct!(p, des, env, "Type");
-               env.check(&pe!(p, des, "Bool"), &ty)?;
+        let ty = pct!(p, des, env, "Bool");
+        env.check(&pe!(p, des, "bool"), &ty)?;
 
-               let ty = pct!(p, des, env, "forall (A : Type) (a : A), A");
-               env.check(&pe!(p, des, "id"), &ty)?;
+        let ty = pct!(p, des, env, "Type");
+        env.check(&pe!(p, des, "Bool"), &ty)?;
 
-               let ty = pct!(p, des, env, "Bool");
-               env.check(&pe!(p, des, "idb"), &ty)?;
+        let ty = pct!(p, des, env, "forall (A : Type) (a : A), A");
+        env.check(&pe!(p, des, "id"), &ty)?;
 
-               let ty = pct!(
-                   p,
-                   des,
-                   env,
-                   "forall (f : forall (A : Type), A -> A -> A) (x : Bool), Bool"
-               );
-               env.check(&pe!(p, des, "deep"), &ty)?;
-               env.check(&pe!(p, des, "deep'"), &ty)?;
+        let ty = pct!(p, des, env, "Bool");
+        env.check(&pe!(p, des, "idb"), &ty)?;
 
+        let ty = pct!(
+            p,
+            des,
+            env,
+            "forall (f : forall (A : Type), A -> A -> A) (x : Bool), Bool"
+        );
+        env.check(&pe!(p, des, "deep"), &ty)?;
+        env.check(&pe!(p, des, "deep'"), &ty)?;
 
-        */
         Ok(())
     }
 
@@ -520,7 +518,7 @@ mod tests {
             | nil
             | cons T (List T)
 
-        -- fn main := cons _ (S (S O)) (cons _ (S O) (cons _ O (nil _)))
+        fn main := cons _ (S (S O)) (cons _ (S O) (cons _ O (nil _)))
        "#,
         )?)?;
 
@@ -529,7 +527,7 @@ mod tests {
 
         let ty = pct!(p, des, env, "Type -> Type1");
         env.check(&pe!(p, des, "List"), &ty)?;
-        dsp!(env.infer(&pe!(p, des, "List"))?.1);
+        env.infer(&pe!(p, des, "List"))?.1;
 
         let ty = pct!(p, des, env, "forall (T : Type), List T");
         env.check(&pe!(p, des, "nil"), &ty)?;

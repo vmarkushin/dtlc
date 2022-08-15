@@ -232,9 +232,6 @@ impl SubstWith<'_> for Ctx {
                 b.subst_with(subst.clone(), tcs)
             })
             .collect())
-        // match self {
-        //     Closure::Plain(body) => Self::plain(body.subst(subst.lift_by(1))),
-        // }
     }
 }
 
