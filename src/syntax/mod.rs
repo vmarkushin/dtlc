@@ -1,8 +1,10 @@
+use crate::syntax::core::Term;
 use crate::token::Position;
 use codespan::{ColumnIndex, LineIndex};
 use derive_more::{Add, AsRef, Deref, From};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::{Add, Range};
+use std::str::FromStr;
 
 pub mod abs;
 pub mod core;
@@ -169,7 +171,13 @@ pub struct Bind<T> {
     pub licit: Plicitness,
     pub name: UID,
     pub ty: T,
-    pub loc: Loc,
+    pub ident: Ident,
+}
+
+impl<T> Bind<T> {
+    pub(crate) fn loc(&self) -> Loc {
+        self.ident.loc
+    }
 }
 
 impl<T> From<(UID, T)> for Bind<T> {
@@ -178,17 +186,17 @@ impl<T> From<(UID, T)> for Bind<T> {
             licit: Plicitness::Explicit,
             name,
             ty,
-            loc: Loc::default(),
+            ident: Ident::new(format!("{}", name), Loc::default()),
         }
     }
 }
 
-impl<T: Display> Display for Bind<T> {
+impl Display for Bind<Term> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if self.licit == Plicitness::Implicit {
-            write!(f, "{{{}:{}}}", self.name, self.ty)
+            write!(f, "{{{}:{}}}", self.ident, self.ty)
         } else {
-            write!(f, "{}:{}", self.name, self.ty)
+            write!(f, "{}:{}", self.ident, self.ty)
         }
     }
 }
@@ -199,7 +207,16 @@ impl<T> Bind<T> {
             licit,
             name,
             ty,
-            loc,
+            ident: Ident::new(format!("{}", name), Loc::default()),
+        }
+    }
+
+    pub fn identified(licit: Plicitness, name: UID, ty: T, ident: Ident) -> Self {
+        Self {
+            licit,
+            name,
+            ty,
+            ident,
         }
     }
 
@@ -213,23 +230,19 @@ impl<T> Bind<T> {
     }
 
     pub fn boxed(self) -> Bind<Box<T>> {
-        Bind::boxing(self.licit, self.name, self.ty, self.loc)
+        self.map_term(|t| Box::new(t))
     }
 
     pub fn map_term<R>(self, f: impl FnOnce(T) -> R) -> Bind<R> {
-        Bind::new(self.licit, self.name, f(self.ty), self.loc)
+        Bind::identified(self.licit, self.name, f(self.ty), self.ident)
     }
 
     pub fn ident(self) -> Ident {
-        Ident::new(self.name.to_string(), self.loc)
+        self.ident
     }
 }
 
 impl<T> Bind<Box<T>> {
-    pub fn boxing(licit: Plicitness, name: UID, term: T, loc: Loc) -> Self {
-        Self::new(licit, name, Box::new(term), loc)
-    }
-
     pub fn unboxed(self) -> Bind<T> {
         self.map_term(|t| *t)
     }
@@ -396,4 +409,50 @@ macro_rules! uid_basic_operations_impl {
             }
         }
     };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LangItem {
+    Nat,
+    NatZ,
+    NatS,
+    List,
+    Telescope,
+    Id,
+    Ap,
+    CorrUp,
+    CorrDown,
+    Did,
+    NatAdd,
+    Pair,
+}
+
+impl FromStr for LangItem {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "nat" => Ok(Self::Nat),
+            "list" => Ok(Self::List),
+            "telescope" => Ok(Self::Telescope),
+            "id" => Ok(Self::Id),
+            "ap" => Ok(Self::Ap),
+            "corr-up" => Ok(Self::CorrUp),
+            "corr-down" => Ok(Self::CorrDown),
+            "did" => Ok(Self::Did),
+            "nat-add" => Ok(Self::NatAdd),
+            "pair" => Ok(Self::Pair),
+            _ => Err(()),
+        }
+    }
+}
+
+impl LangItem {
+    pub fn skip_check(&self) -> bool {
+        use LangItem::*;
+        match self {
+            Nat | NatZ | NatS | List => false,
+            _ => true,
+        }
+    }
 }

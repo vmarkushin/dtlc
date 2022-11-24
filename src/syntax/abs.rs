@@ -1,9 +1,12 @@
 use crate::syntax;
-use crate::syntax::core::pretty_application;
+use crate::syntax::core::display_application;
+use crate::syntax::surf::Literal;
 use crate::syntax::{pattern, Ident, Loc, Plicitness, Universe, GI, MI, UID};
+use derive_more::Deref;
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::ops::Deref;
 use std::rc::Rc;
 use vec1::Vec1;
 
@@ -160,13 +163,23 @@ impl Expr {
             }
             Expr::Universe(_, _) => {}
             Expr::Fn(_, _) => {}
-            Expr::Def(_, _) => {}
+            Expr::Data(_, _) => {}
             Expr::Cons(_, _) => {}
             Expr::Proj(_, _) => {}
             Expr::Meta(_, _) => {}
             Expr::Match(Match { xs, cases: cs }) => {
                 xs.iter_mut().for_each(|x| x.subst_abs(subst.clone()));
                 cs.iter_mut().for_each(|x| x.subst_abs(subst.clone()));
+            }
+            Expr::Lit(..) => {}
+            Expr::Id(_, id) => {
+                todo!()
+            }
+            Expr::Ap(_, _, _, _) => {
+                todo!()
+            }
+            Expr::Tuple(_, _) => {
+                todo!()
             }
         }
     }
@@ -230,6 +243,30 @@ impl Display for Match {
     }
 }
 
+/// Dependent identity type.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Id {
+    pub tele: Tele,
+    /// Depends on the telescope elements.
+    pub ty: Box<Expr>,
+    /// Identity telescope elements.
+    pub paths: Vec<Expr>,
+    pub a1: Box<Expr>,
+    pub a2: Box<Expr>,
+}
+
+impl Id {
+    pub fn new(tele: Tele, ty: Box<Expr>, paths: Vec<Expr>, a1: Box<Expr>, a2: Box<Expr>) -> Self {
+        Self {
+            tele,
+            ty,
+            paths,
+            a1,
+            a2,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expr {
     Var(Ident, UID),
@@ -238,11 +275,15 @@ pub enum Expr {
     Pi(Loc, Bind<Box<Option<Self>>>, Box<Self>),
     Universe(Loc, Universe),
     Fn(Ident, GI),
-    Def(Ident, GI),
+    Data(Ident, GI),
     Cons(Ident, GI),
     Proj(Ident, GI),
     Meta(Ident, MI),
     Match(Match),
+    Lit(Loc, Literal),
+    Id(Loc, Id),
+    Ap(Loc, Tele, Vec<Expr>, Box<Expr>),
+    Tuple(Loc, Vec<Expr>),
 }
 
 impl Expr {
@@ -304,9 +345,13 @@ impl Expr {
             | Fn(ident, ..)
             | Var(ident, _)
             | Cons(ident, ..)
-            | Def(ident, ..)
+            | Data(ident, ..)
             | Meta(ident, ..) => ident.loc,
+            Lit(loc, ..) => *loc,
+            Id(loc, ..) => *loc,
+            Ap(loc, ..) => *loc,
             Match(m) => m.loc(),
+            Tuple(loc, ..) => *loc,
         }
     }
 
@@ -321,7 +366,7 @@ impl Expr {
     pub fn get_gi(&self) -> Option<GI> {
         use Expr::*;
         match self {
-            Def(_ident, gi) => Some(*gi),
+            Data(_ident, gi) => Some(*gi),
             Fn(_ident, gi) => Some(*gi),
             Cons(_ident, gi) => Some(*gi),
             Proj(_ident, gi) => Some(*gi),
@@ -394,34 +439,88 @@ impl Display for Decl {
     }
 }
 
+impl Display for Bind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.licit == Plicitness::Implicit {
+            write!(f, "{{")?;
+        }
+        write!(f, "{}", self.name)?;
+        if let Some(ty) = &self.ty {
+            write!(f, ":{}", ty)?;
+        }
+        if self.licit == Plicitness::Implicit {
+            write!(f, "}}")?;
+        }
+        Ok(())
+    }
+}
+
+impl Display for Bind<Box<Option<Expr>>> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.licit == Plicitness::Implicit {
+            write!(f, "{{")?;
+        }
+        write!(f, "{}", self.name)?;
+        if let Some(ty) = &*self.ty {
+            write!(f, ":{}", ty)?;
+        }
+        if self.licit == Plicitness::Implicit {
+            write!(f, "}}")?;
+        }
+        Ok(())
+    }
+}
+
+impl Display for Bind<Expr> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.licit == Plicitness::Implicit {
+            write!(f, "{{")?;
+        }
+        write!(f, "{}:{}", self.name, self.ty)?;
+        if self.licit == Plicitness::Implicit {
+            write!(f, "}}")?;
+        }
+        Ok(())
+    }
+}
+
+impl Display for Id {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Id (\\{}. {}) ({}) {} {}",
+            self.tele.iter().join(" "),
+            self.ty,
+            self.paths.iter().join(", "),
+            self.a1,
+            self.a2
+        )
+    }
+}
+
 impl Display for Expr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Expr::*;
         match self {
             Var(ident, uid) => write!(f, "{}({})", uid, ident),
-            Lam(_loc, bind, body) => {
-                write!(f, "λ{}", bind.name)?;
-                if let Some(ty) = &*bind.ty {
-                    write!(f, ":{}", ty)?;
-                }
-                write!(f, ". {}", body)
-            }
-            App(ff, args) => pretty_application(f, ff, args),
-            Pi(_loc, bind, body) => {
-                write!(f, "Π{}", bind.name)?;
-                if let Some(ty) = &*bind.ty {
-                    write!(f, ":{}", ty)?;
-                }
-                write!(f, ", {}", body)
-            }
+            Lam(_loc, bind, body) => write!(f, "λ{bind}. {body}"),
+            App(ff, args) => display_application(f, ff, args),
+            Pi(_loc, bind, body) => write!(f, "Π{bind}, {body}"),
             Universe(_loc, universe) => write!(f, "{}", universe),
             Fn(ident, _) => write!(f, "{}", ident),
-            Def(ident, _) => write!(f, "{}", ident),
+            Data(ident, _) => write!(f, "{}", ident),
             Cons(ident, _) => write!(f, "{}", ident),
             Proj(ident, _) => write!(f, "{}", ident),
             Meta(ident, _) => write!(f, "?{}", ident),
-            Match(m) => {
-                write!(f, "{}", m)
+            Match(m) => write!(f, "{}", m),
+            Lit(_, lit) => write!(f, "{}", lit),
+            Id(_, id) => write!(f, "{id}"),
+            Ap(_, tele, ps, t) => {
+                let tele_s = tele.iter().map(|x| x.to_string()).join(" ");
+                write!(f, "ap (\\{}. {}) {}", tele_s, t, ps.iter().join(", "))
+            }
+            Tuple(_, _) => {
+                unimplemented!("Tuple")
             }
         }
     }

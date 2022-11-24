@@ -1,11 +1,16 @@
+use crate::ensure;
 use crate::syntax::abs::{
     Bind, Case as CaseA, ConsInfo as ConsInfoA, DataInfo as DataInfoA, Decl as DeclA,
-    Expr as ExprA, Func as FuncA, Match, Pat as PatA, Tele as TeleA,
+    Expr as ExprA, Func as FuncA, Id, Match, Pat as PatA, Tele as TeleA,
 };
-use crate::syntax::surf::{Case, Data, Decl, Expr, Func, NamedTele, Param, Pat};
-use crate::syntax::{ConHead, Ident, Plicitness, GI, MI, UID};
+use crate::syntax::core::Boxed;
+use crate::syntax::surf::{Case, Data, Decl, Expr, Func, MetaAttr, NamedTele, Param, Pat};
+use crate::syntax::{ConHead, Ident, LangItem, Plicitness, GI, MI, UID};
+use itertools::Either;
+use itertools::Either::{Left, Right};
 use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::str::FromStr;
 use vec1::Vec1;
 
 #[derive(Debug, Clone, Default)]
@@ -19,6 +24,8 @@ pub struct DesugarState {
     pub(crate) decls_map: BTreeMap<String, GI>,
     local: Vec<BTreeMap<String, UID>>,
     local_count: Vec<usize>,
+    pub lang_items: HashMap<LangItem, GI>,
+    pub lang_items_rev: HashMap<GI, LangItem>,
 }
 
 struct LocalScope {
@@ -108,8 +115,8 @@ impl DesugarState {
             let ty = param.ty.clone().map(|t| self.desugar_expr(t)).transpose()?;
             let mut intros = |name: Ident, licit: Plicitness, ty: Option<ExprA>| {
                 let uid = self.next_uid();
-                self.insert_local(name.text, uid);
-                tele.push(Bind::new(licit, uid, ty, name.loc));
+                self.insert_local(name.text.clone(), uid);
+                tele.push(Bind::identified(licit, uid, ty, name));
             };
             let licit = param.plic;
             let loc = ty
@@ -146,6 +153,10 @@ pub enum DesugarError {
     UnresolvedReference(String),
     #[error("Duplicated decl: `{0}`")]
     DuplicatedDecl(String),
+    #[error("Wrong number of arguments in Id")]
+    IdWrongArity,
+    #[error("Expected tuple in Id")]
+    IdNoTuple,
 }
 
 pub type Result<T, E = DesugarError> = std::result::Result<T, E>;
@@ -214,6 +225,64 @@ impl DesugarState {
         Ok(CaseA::new(Default::default(), pattern, body))
     }
 
+    /// Desugars expression of kind:
+    /// `pair x (pair y ...)`
+    fn desugar_tuple(&self, expr: ExprA) -> Result<Vec<ExprA>> {
+        if let ExprA::Tuple(_, args) = expr {
+            Ok(args)
+        } else {
+            Err(DesugarError::IdNoTuple)
+        }
+    }
+
+    /// Desugars an expression of kind:
+    /// `Id (lam (x1 : A1) ... (xn : An) => (B, a1, a2)) p1 ... pn`
+    fn maybe_desugar_id(
+        &mut self,
+        f: ExprA,
+        args: Vec1<ExprA>,
+    ) -> Result<Either<ExprA, (ExprA, Vec1<ExprA>)>, DesugarError> {
+        match f {
+            ExprA::Data(v, gi) => match self.lang_items_rev.get(&gi) {
+                Some(LangItem::Id) => {
+                    let mut args = args.to_vec();
+                    let (tele, triple) = args.remove(0).into_tele_view();
+                    let paths = args;
+                    ensure!(tele.len() == paths.len(), DesugarError::IdWrongArity);
+                    let [ty, a1, a2]: [ExprA; 3] = self.desugar_tuple(triple)?.try_into().map_err(|_| DesugarError::IdNoTuple)? else {
+                            return Err(DesugarError::IdNoTuple);
+                        };
+                    let id = Id::new(tele, ty.boxed(), paths, a1.boxed(), a2.boxed());
+                    Ok(Left(ExprA::Id(v.loc, id)))
+                }
+                _ => Ok(Right((ExprA::Data(v, gi), args))),
+            },
+            expr => Ok(Right((expr, args))),
+        }
+    }
+
+    /// Desugars an expression of kind:
+    /// `ap (lam (x1 : A1) ... (xn : An) => a) p1 ... pn`
+    fn maybe_desugar_ap(
+        &mut self,
+        f: ExprA,
+        args: Vec1<ExprA>,
+    ) -> Result<Either<ExprA, (ExprA, Vec1<ExprA>)>, DesugarError> {
+        match f {
+            ExprA::Fn(v, gi) => match self.lang_items_rev.get(&gi) {
+                Some(LangItem::Ap) => {
+                    let mut args = args.to_vec();
+                    let (tele, a) = args.remove(0).into_tele_view();
+                    let paths = args;
+                    ensure!(tele.len() == paths.len(), DesugarError::IdWrongArity);
+                    Ok(Left(ExprA::Ap(v.loc, tele, paths, a.boxed())))
+                }
+                _ => Ok(Right((ExprA::Fn(v, gi), args))),
+            },
+            expr => Ok(Right((expr, args))),
+        }
+    }
+
     pub fn desugar_expr(&mut self, expr: Expr) -> Result<ExprA> {
         match expr {
             Expr::Var(v) => {
@@ -222,7 +291,7 @@ impl DesugarState {
                 } else if let Some((decl, ix)) = self.lookup_by_name(&v) {
                     use DeclA::*;
                     match decl {
-                        Data(_) => Ok(ExprA::Def(v, ix)),
+                        Data(data) => Ok(ExprA::Data(v, ix)),
                         Fn(_) => Ok(ExprA::Fn(v, ix)),
                         Cons(_) => Ok(ExprA::Cons(v, ix)),
                     }
@@ -240,15 +309,22 @@ impl DesugarState {
                 self.exit_local_scope();
                 let (tele, ret) = res?;
                 let lam = tele.into_iter().rfold(ret, |ret, bind| {
-                    let loc = bind.loc + ret.loc();
+                    let loc = bind.loc() + ret.loc();
                     ExprA::Lam(loc, bind.boxed(), Box::new(ret))
                 });
                 Ok(lam)
             }
             Expr::App(f, args) => {
-                let f = box self.desugar_expr(*f)?;
+                let f = self.desugar_expr(*f)?;
                 let args = args.try_mapped(|e| self.desugar_expr(e))?;
-                Ok(ExprA::App(f, args))
+                match self.maybe_desugar_id(f, args)? {
+                    Left(id) => Ok(id),
+                    Right((f, args)) => match self.maybe_desugar_ap(f, args)? {
+                        Left(id) => Ok(id),
+                        Right((f, args)) => Ok(ExprA::App(box f, args)),
+                    },
+                }
+                // Ok(ExprA::App(box f, args))
             }
             Expr::Universe(loc, u) => Ok(ExprA::Universe(loc, u)),
             Expr::Pi(params, ret) => {
@@ -288,6 +364,15 @@ impl DesugarState {
                     Vec1::try_from_vec(exprs).unwrap(),
                     cases,
                 )))
+            }
+            // literals are passed directly and replaced with a term in "check" stage
+            Expr::Lit(loc, lit) => Ok(ExprA::Lit(loc, lit)),
+            Expr::Tuple(loc, es) => {
+                let es = es
+                    .into_iter()
+                    .map(|e| self.desugar_expr(e))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(ExprA::Tuple(loc, es))
             }
         }
     }
@@ -332,12 +417,33 @@ impl DesugarState {
         Ok(())
     }
 
+    fn collect_lang_items(&mut self, meta_attrs: Vec<MetaAttr>, gi: GI) {
+        for ma in meta_attrs {
+            if let MetaAttr::Struct(ms) = ma {
+                for (name, value) in ms {
+                    let item = LangItem::from_str(&value)
+                        .expect(&format!("unknown lang item '{}'", value));
+                    if name.text == "lang" {
+                        self.lang_items
+                            .entry(item)
+                            .and_modify(|gi_old| {
+                                panic!("duplicated lang item: {}, previous: {}", gi, gi_old)
+                            })
+                            .or_insert(gi);
+                        self.lang_items_rev.insert(gi, item);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn desugar_decl(&mut self, decl: Decl) -> Result<DeclA> {
         match decl {
             Decl::Data(Data {
                 sig,
                 mut cons,
                 universe,
+                meta_attrs,
             }) => {
                 self.decls.reserve(cons.len() + 1);
                 self.ensure_no_local_scopes();
@@ -360,7 +466,7 @@ impl DesugarState {
                 if res.is_err() {
                     self.exit_local_scope();
                 }
-                res?;
+                let gi = res?;
 
                 cons.reverse();
                 let res = self.desugar_cons(global_id - 1, cons);
@@ -369,7 +475,7 @@ impl DesugarState {
                 }
                 self.exit_local_scope();
                 res?;
-
+                self.collect_lang_items(meta_attrs, gi);
                 Ok(data_decl)
             }
             Decl::Fn(Func {
@@ -377,6 +483,7 @@ impl DesugarState {
                 params,
                 ret_ty,
                 body,
+                meta_attrs,
             }) => {
                 let body_new = params.clone().to_lam(body);
                 let ty_new = if let Some(rt) = ret_ty {
@@ -388,20 +495,21 @@ impl DesugarState {
                 let res: Result<_> = try {
                     let ty = self.desugar_expr(ty_new)?;
                     let partial_decl = DeclA::Fn(FuncA::new(name, None, Some(ty))); // TODO: get rid of Option?
-                    self.insert_decl(partial_decl)?;
+                    let gi = self.insert_decl(partial_decl)?;
                     // The `insert_decl` call committed information about metas to the state,
                     // but since we haven't parsed the body yet, there can be more metas potentially.
                     // So, we're postponing the commit after the definition is fully desugared.
                     self.cur_meta_id.pop();
                     let expr = self.desugar_expr(body_new)?;
-                    expr
+                    (expr, gi)
                 };
-                let expr = res?;
+                let (expr, gi) = res?;
                 let decl = self.decls.last_mut().unwrap().as_func_mut();
                 decl.expr = Some(expr);
                 let func = decl.clone();
                 self.cur_meta_id.push(Default::default());
                 self.clear_local();
+                self.collect_lang_items(meta_attrs, gi);
                 Ok(DeclA::Fn(func))
             }
         }
@@ -416,7 +524,7 @@ impl DesugarState {
 mod tests {
     use super::*;
     use crate::parser::Parser;
-    use crate::syntax::abs::Expr::Def;
+    use crate::syntax::abs::Expr::Data;
     use crate::syntax::desugar::desugar_prog;
     use crate::syntax::Plicitness::Explicit;
     use crate::syntax::{abs, Ident, Loc, Universe};
@@ -479,7 +587,7 @@ fn foo (p : Nat) := match p {
                         vec![Bind::new(
                             Explicit,
                             0,
-                            Some(ExprA::Def(Ident::new("Nat", 33..36), 0)),
+                            Some(ExprA::Data(Ident::new("Nat", 33..36), 0)),
                             Loc::new(33, 36)
                         )],
                         0
@@ -494,14 +602,14 @@ fn foo (p : Nat) := match p {
                             Bind {
                                 licit: Explicit,
                                 name: 0,
-                                ty: box Some(Def(
+                                ty: box Some(Data(
                                     Ident {
                                         loc: Loc::new(50, 53),
                                         text: "Nat".to_owned()
                                     },
                                     0
                                 )),
-                                loc: Loc::new(46, 47)
+                                ident: Ident::new("A", Loc::new(46, 47))
                             },
                             box Match(abs::Match::new(
                                 vec1![Var(
@@ -536,16 +644,16 @@ fn foo (p : Nat) := match p {
                                                         Bind {
                                                             licit: Explicit,
                                                             name: 1,
-                                                            ty: box Some(Def(
+                                                            ty: box Some(Data(
                                                                 Ident {
                                                                     loc: Loc::new(93, 96),
                                                                     text: "Nat".to_owned()
                                                                 },
                                                                 0
                                                             )),
-                                                            loc: Loc::default()
+                                                            ident: Ident::new("A", Loc::default())
                                                         },
-                                                        box Def(
+                                                        box Data(
                                                             Ident {
                                                                 loc: Loc::default(),
                                                                 text: "Nat".to_owned()
@@ -553,7 +661,7 @@ fn foo (p : Nat) := match p {
                                                             0
                                                         )
                                                     )),
-                                                    loc: Loc::default()
+                                                    ident: Ident::new("A", Loc::default())
                                                 },
                                                 box ExprA::App(
                                                     box ExprA::Var(
@@ -577,14 +685,14 @@ fn foo (p : Nat) := match p {
                                                 Bind {
                                                     licit: Explicit,
                                                     name: 1,
-                                                    ty: box Some(Def(
+                                                    ty: box Some(Data(
                                                         Ident {
                                                             loc: Loc::default(),
                                                             text: "Nat".to_owned()
                                                         },
                                                         0
                                                     )),
-                                                    loc: Loc::default()
+                                                    ident: Ident::new("A", Loc::default())
                                                 },
                                                 box ExprA::Var(
                                                     Ident {
@@ -625,7 +733,7 @@ fn foo (p : Nat) := match p {
                             Bind::new(
                                 Explicit,
                                 0,
-                                box Some(Def(Ident::new("Nat", Loc::new(50, 53)), 0)),
+                                box Some(Data(Ident::new("Nat", Loc::new(50, 53)), 0)),
                                 Loc::new(46, 47)
                             ),
                             box Meta(Ident::new("hole0", Loc::new(41, 44)), 0)

@@ -1,9 +1,13 @@
 mod decl;
 mod expr;
+mod lit;
+mod meta_attr;
 
 use crate::syntax::{surf::Type, Ident, Plicitness};
 pub use decl::*;
 pub use expr::*;
+pub use lit::*;
+pub use meta_attr::*;
 use std::fmt::{Display, Formatter};
 
 pub type Prog = Vec<Decl>;

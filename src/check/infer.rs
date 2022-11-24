@@ -1,9 +1,11 @@
 use crate::check::state::TypeCheckState;
-use crate::check::{Clause, Error, LshProblem, Result};
+use crate::check::{Clause, Error, LshProblem, Result, Unify};
 use crate::syntax::abs::{AppView, Expr, Match};
+use crate::syntax::core::{self, Boxed, Closure, Tele};
 use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, Val, ValData, Var};
-use crate::syntax::core::{Closure, Tele};
-use crate::syntax::{ConHead, Ident, Loc, Universe, GI};
+use crate::syntax::surf::{nat_to_term, Literal};
+use crate::syntax::{abs, ConHead, Ident, LangItem, Let, Loc, Universe, GI};
+use crate::{ensure, syntax};
 
 impl TypeCheckState {
     /// Infer the type of the expression. Returns evaluated term and its type.
@@ -53,6 +55,7 @@ impl TypeCheckState {
                 let me = Term::universe(*level).at(*loc);
                 return Ok((me, Term::universe(Universe(level.0 + 1))));
             }
+            // TODO: infer match
             abs => abs.clone(),
         };
         let view = abs.into_app_view();
@@ -77,7 +80,10 @@ impl TypeCheckState {
                 )
             }
             Term::Whnf(Val::Cons(ConHead { name, cons_gi: def }, args)) => {
-                debug_assert!(args.is_empty());
+                // debug_assert!(args.is_empty());
+                if !args.is_empty() {
+                    return Ok((head, ty));
+                }
                 let info = match &self.sigma[*def] {
                     Decl::Cons(cons) => cons,
                     _ => {
@@ -206,6 +212,15 @@ impl TypeCheckState {
         Ok((evaluated, inferred_ty))
     }
 
+    fn check_bind(&mut self, abs_bind: abs::Bind) -> Result<Bind> {
+        Ok(Bind::identified(
+            abs_bind.licit,
+            abs_bind.name,
+            self.infer(abs_bind.ty.as_ref().unwrap())?.0.ast,
+            abs_bind.ident,
+        ))
+    }
+
     fn infer_head_impl(&mut self, abs: &Expr) -> Result<(TermInfo, Term)> {
         use Expr::*;
         match abs {
@@ -219,15 +234,15 @@ impl TypeCheckState {
                     ty.ast,
                 )
             }),
-            Def(id, def) => self
+            Data(id, def) => self
                 .type_of_decl(*def)
                 .map(|ty| (Term::data(ValData::new(*def, vec![])).at(id.loc), ty.ast)),
             Lam(loc, bind, body) => {
-                let bind_checked = Bind::new(
+                let bind_checked = Bind::identified(
                     bind.licit,
                     bind.name,
                     self.infer((*bind.ty).as_ref().unwrap())?.0.ast,
-                    bind.loc,
+                    bind.ident.clone(),
                 );
                 self.gamma.push(bind_checked.clone());
                 let (body_term, body_ty) = self.infer(body)?;
@@ -246,11 +261,102 @@ impl TypeCheckState {
                 let tyty = self.fresh_meta();
                 Ok((ty.at(ident.loc), tyty))
             }
+            Id(loc, id) => {
+                // ap (lam (x : A) (y : B) (z : C) => f) (refl a, refl b, refl c) : Id (A -> B -> C) d1 d2
+                // Id (A -> B -> C) d1 d2 (refl a, refl b, refl c) : Type
+                ensure!(
+                    id.tele.len() == id.paths.len(),
+                    Error::IdTelePathsLenMismatch
+                );
+                let mut ps_checked = Vec::with_capacity(id.paths.len());
+                for (x, p) in id.tele.iter().zip(id.paths.iter()) {
+                    let (p, p_ty) = self.infer(p)?;
+                    let id = p_ty
+                        .as_id()
+                        .ok_or_else(|| Error::NotId(p_ty.clone().boxed(), p.loc()))?;
+                    ensure!(
+                        id.tele.is_empty() && id.paths.is_empty(),
+                        Error::IdTeleOrSubstsNotEmpty
+                    );
+                    let x_checked = self.check_bind(x.clone())?;
+                    let x_ty = &x_checked.ty;
+                    let id_ty = &id.ty;
+                    let val = self.simplify(x_ty.clone())?;
+                    let val1 = self.simplify(*id_ty.clone())?;
+                    self.subtype(&val, &val1)?;
+                    // self.lets.0.push(Let::new(p));
+                    ps_checked.push(p.ast);
+                    self.gamma.push(x_checked);
+                }
+                let (id_checked, id_ty) = self.infer(&id.ty)?;
+                let id_checked_val = self.simplify(id_checked.ast.clone())?;
+                let a1 = self.check(&id.a1, &id_checked_val)?.ast;
+                let a2 = self.check(&id.a2, &id_checked_val)?.ast;
+                let tele = self.gamma.popn(id.tele.len()).into_tele();
+                Ok((
+                    Term::from(core::Id::new(tele, id_checked.ast, ps_checked, a1, a2)).at(*loc),
+                    id_ty,
+                ))
+            }
+            Ap(loc, tele, paths, t) => {
+                let mut ps_checked = Vec::with_capacity(paths.len());
+                for (x, p) in tele.iter().zip(paths.iter()) {
+                    let (p, p_ty) = self.infer(p)?;
+                    let id = p_ty
+                        .as_id()
+                        .ok_or_else(|| Error::NotId(p_ty.clone().boxed(), p.loc()))?;
+                    ensure!(
+                        id.tele.is_empty() && id.paths.is_empty(),
+                        Error::IdTeleOrSubstsNotEmpty
+                    );
+                    let x_checked = self.check_bind(x.clone())?;
+                    let x_ty = &x_checked.ty;
+                    let id_ty = &id.ty;
+                    let val = self.simplify(x_ty.clone())?;
+                    let val1 = self.simplify(*id_ty.clone())?;
+                    self.subtype(&val, &val1)?;
+                    ps_checked.push(p.ast);
+                    self.gamma.push(x_checked);
+                }
+
+                let (t_checked, t_ty) = self.infer(t)?;
+                let tele_checked = self.gamma.popn(tele.len()).into_tele();
+
+                Ok((
+                    Term::ap(
+                        tele_checked.clone(),
+                        ps_checked.clone(),
+                        t_checked.ast.clone(),
+                    )
+                    .at(*loc),
+                    Term::from(core::Id::new(
+                        tele_checked,
+                        t_ty,
+                        ps_checked,
+                        t_checked.ast.clone(),
+                        t_checked.ast,
+                    )),
+                ))
+            }
+            Lit(loc, Literal::Nat(n)) => {
+                let nat_gi = *self.lang_items.get(&LangItem::Nat).unwrap();
+                let ty = Term::data(ValData::new(nat_gi, vec![]));
+                let nat_z_gi = *self.lang_items.get(&LangItem::NatZ).unwrap();
+                let nat_z_decl = &self.sigma[nat_z_gi].as_cons();
+                let nat_s_gi = *self.lang_items.get(&LangItem::NatS).unwrap();
+                let nat_s_decl = &self.sigma[nat_s_gi].as_cons();
+                let nat_e = nat_to_term(
+                    *n,
+                    ConHead::new(nat_z_decl.name.clone(), nat_z_gi),
+                    ConHead::new(nat_s_decl.name.clone(), nat_s_gi),
+                );
+                Ok((nat_e.at(loc.clone()), ty))
+            }
             e => Err(Error::NotHead(e.clone())),
         }
     }
 
-    pub(crate) fn check(&mut self, input_term: &Expr, against: &Val) -> Result<TermInfo> {
+    pub(crate) fn check(&mut self, input_term: &Expr, against: &Term) -> Result<TermInfo> {
         if !self.trace_tc {
             return match self.check_impl(input_term, against) {
                 Err(Error::Blocked(blocked)) if blocked.is_elim() => {
@@ -279,19 +385,19 @@ impl TypeCheckState {
         Ok(a)
     }
 
-    fn check_impl(&mut self, abs: &Expr, against: &Val) -> Result<TermInfo> {
+    fn check_impl(&mut self, abs: &Expr, against: &Term) -> Result<TermInfo> {
         if let Some(gi) = abs.get_gi() {
             if let Some(decl) = self.sigma.get(gi).cloned() {
                 let ty = decl.def_type();
                 let ident = decl.ident();
-                let whnf = self.simplify(ty)?;
+                let simplified = self.simplify(ty)?;
                 let loc = ident.loc;
                 let res = match decl {
                     Decl::Data(_) => Ok(Term::data(ValData::new(gi, vec![])).at(loc)),
                     Decl::Cons(_) => Ok(Term::cons(ConHead::new(ident, gi), vec![]).at(loc)),
                     _ => Ok(Term::def(gi, ident, vec![]).at(loc)),
                 };
-                self.subtype(&whnf, against)?;
+                self.subtype(&simplified, against)?;
                 return res;
             }
         }
@@ -310,7 +416,7 @@ impl TypeCheckState {
             }
             (Expr::Pi(info, bind, ret), Val::Universe(..)) => {
                 let bind_ty = self.check(&bind.ty.clone().unwrap(), against)?;
-                let new = Bind::new(bind.licit, bind.name, bind_ty.ast, bind.loc);
+                let new = Bind::identified(bind.licit, bind.name, bind_ty.ast, bind.ident.clone());
                 self.gamma.push(new);
                 let ret_ty = self.check(ret, against)?;
                 let bind_ty = self.gamma.pop().expect("Bad index");
@@ -323,8 +429,9 @@ impl TypeCheckState {
                 let val2 = self.simplify(*bind_pi.ty.clone())?;
                 self.subtype(&val1, &val2)?;
                 let Closure::Plain(ret_pi) = ret_pi;
-                let bind_new = Bind::boxing(bind.licit, bind.name, bind_ty.ast, bind_ty.loc);
-                self.gamma.push(bind_new.clone().unboxed());
+                let bind_new =
+                    Bind::identified(bind.licit, bind.name, bind_ty.ast, bind.ident.clone());
+                self.gamma.push(bind_new.clone());
                 let body = match self.simplify(*ret_pi.clone()) {
                     Ok(val) => self.check(ret, &val)?,
                     Err(Error::Blocked(blocked)) if blocked.is_elim() => {
@@ -334,7 +441,7 @@ impl TypeCheckState {
                     Err(e) => return Err(e),
                 };
                 self.gamma.pop();
-                Ok(Term::lam(bind_new, body.ast).at(bind_ty.loc))
+                Ok(Term::lam(bind_new.boxed(), body.ast).at(bind_ty.loc))
             }
             (Expr::Match(m), against) => self.check_match(m, Term::Whnf(against.clone())),
             (expr, anything) => self.check_fallback(expr.clone(), anything),

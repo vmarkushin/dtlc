@@ -1,7 +1,9 @@
 use crate::check::block::Blocked;
 use crate::syntax::abs::{Expr, Pat as PatA};
-use crate::syntax::core::{Elim, Pat, Term, Val};
+use crate::syntax::core::{pretty, Elim, Pat, Pretty, Term, Val};
 use crate::syntax::{Ident, Loc, Universe, MI};
+use std::fmt;
+use std::fmt::{Display, Formatter};
 
 pub use crate::check::norm::try_match;
 pub use case::{CaseTree, Clause, Constraint, LshProblem};
@@ -12,6 +14,7 @@ pub use unify::Unify;
 mod block;
 mod case;
 mod decls;
+mod id;
 mod infer;
 mod meta;
 mod norm;
@@ -59,6 +62,14 @@ pub enum Error {
     TooManyPatterns,
     #[error("Not enough patterns used in a clause")]
     TooFewPatterns,
+    #[error("IdTelePathsLenMismatch")]
+    IdTelePathsLenMismatch,
+    #[error("Expected Id, but got `{0}`")]
+    NotId(Box<Term>, Loc),
+    #[error("Expected empty telescope or substitutions")]
+    IdTeleOrSubstsNotEmpty,
+    #[error("Not refl {0}")]
+    NotRefl(Box<Term>, Loc),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -66,5 +77,20 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 impl Error {
     pub fn wrap(self, info: Loc) -> Self {
         Error::Wrapped(Box::new(self), info)
+    }
+}
+
+impl Display for Pretty<'_, Error> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match &self.inner {
+            Error::Wrapped(e, _) => write!(f, "{}", pretty(&**e, &self.s)),
+            Error::DifferentTerm(t1, t2) => write!(
+                f,
+                "Expected `{}`, got `{}`",
+                pretty(&**t1, &self.s),
+                pretty(&**t2, &self.s)
+            ),
+            e => panic!("Not implemented {}", e),
+        }
     }
 }

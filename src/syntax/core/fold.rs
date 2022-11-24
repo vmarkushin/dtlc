@@ -1,6 +1,6 @@
 use crate::check::CaseTree;
 use crate::syntax::core::term::{Case, Pat};
-use crate::syntax::core::{Closure, Elim, Func, Lambda, Term, Val};
+use crate::syntax::core::{Bind, Closure, Elim, Func, Lambda, Tele, Term, Val};
 
 pub trait FoldVal {
     fn try_fold_val<E, R>(
@@ -83,6 +83,16 @@ impl FoldVal for CaseTree {
     }
 }
 
+impl FoldVal for Bind {
+    fn try_fold_val<E, R>(
+        &self,
+        init: R,
+        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
+    ) -> Result<R, E> {
+        self.ty.try_fold_val(init, f)
+    }
+}
+
 impl FoldVal for Term {
     fn try_fold_val<E, R>(
         &self,
@@ -93,7 +103,8 @@ impl FoldVal for Term {
         match self {
             Whnf(val) => val.try_fold_val(init, f),
             Redex(func, _, args) => args.try_fold_val(func.try_fold_val(init, f)?, f),
-            Match(_, cases) => cases.try_fold_val(init, f),
+            Match(t, cases) => t.try_fold_val(cases.try_fold_val(init, f)?, f),
+            Ap(tele, ps, t) => t.try_fold_val(ps.try_fold_val(tele.try_fold_val(init, f)?, f)?, f),
         }
     }
 }
@@ -123,6 +134,16 @@ impl FoldVal for Closure {
     }
 }
 
+impl FoldVal for Tele {
+    fn try_fold_val<E, R>(
+        &self,
+        init: R,
+        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
+    ) -> Result<R, E> {
+        self.0.try_fold_val(init, f)
+    }
+}
+
 impl FoldVal for Val {
     fn try_fold_val<E, R>(
         &self,
@@ -138,6 +159,15 @@ impl FoldVal for Val {
             Pi(p, clos) => clos.try_fold_val(p.ty.try_fold_val(init, f)?, f),
             Lam(Lambda(p, clos)) => clos.try_fold_val(p.ty.try_fold_val(init, f)?, f),
             Var(_, v) | Meta(_, v) => v.try_fold_val(init, f),
+            Id(id) => id.ty.try_fold_val(
+                id.paths.try_fold_val(
+                    id.tele
+                        .try_fold_val(id.a1.try_fold_val(id.a2.try_fold_val(init, f)?, f)?, f)?,
+                    f,
+                )?,
+                f,
+            ),
+            Refl(val) => val.try_fold_val(init, f),
         }
     }
 }

@@ -2,7 +2,8 @@ use crate::check::meta::MetaContext;
 use crate::syntax::core::{
     Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, SubstWith, Substitution, Term, Val, Var,
 };
-use crate::syntax::{DBI, GI, UID};
+use crate::syntax::{LangItem, DBI, GI, UID};
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::mem::swap;
 
@@ -29,6 +30,8 @@ pub struct TypeCheckState {
     /// Meta variable context, scoped. Always global.
     pub meta_ctx: Vec<MetaContext<Term>>,
     pub next_uid: UID,
+    pub lang_items: HashMap<LangItem, GI>,
+    pub lang_items_back: HashMap<GI, LangItem>,
 }
 
 impl TypeCheckState {
@@ -166,5 +169,9 @@ impl TypeCheckState {
     pub fn mut_meta_ctx(&mut self) -> &mut MetaContext<Term> {
         let we_are_here = self.current_checking_def.unwrap();
         &mut self.meta_ctx[we_are_here]
+    }
+
+    pub fn lang_item(&self, item: LangItem) -> Option<GI> {
+        self.lang_items.get(&item).copied()
     }
 }

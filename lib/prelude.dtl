@@ -1,0 +1,87 @@
+data Empty : Type
+
+data Unit : Type | unit
+
+data Bool : Type | false | true
+
+#(lang := "nat")
+data Nat : Type
+    | zero
+    | suc Nat
+
+#(lang := "list")
+data List (A : Type) : Type1
+    | nil
+    | cons A (List A)
+
+data Σ (A : Type) (B : A -> Type) : Type1
+    | ex (x : A) (B x)
+
+data Σ-l1 (A : Type1) (B : A -> Type1) : Type2
+    | ex-l1 (x : A) (B x)
+
+data Σ-l2 (A : Type2) (B : A -> Type2) : Type3
+    | ex-l2 (x : A) (B x)
+
+fn fst (A : Type) (B : A -> Type) (p : Σ A B) : A := match p {
+    | (ex x _) => x
+}
+
+fn snd (A : Type) (B : A -> Type) (p : Σ A B) : B (fst A B p) := match p {
+    | (ex _ y) => y
+}
+
+-- #(lang := "pair")
+data Pair (A : Type) (B : Type) : Type1
+    | pair A B
+
+data Pair-l1 (A : Type1) (B : Type1) : Type2
+    | pair-l1 A B
+
+#(lang := "telescope")
+data Telescope : Type
+
+#(lang := "id")
+data Id {A : Type} (x : A) (y : A) : Type1
+fn = {A : Type} (x : A) (y : A) := Id (A, x, y,)
+
+#(lang := "ap")
+fn ap {A : Telescope -> Type} (f : Π (es : Telescope), A) (ps : List Id) : Id (A, _, _,) := ?compiler-built-in
+
+fn refl (A : Type) (a : A) := ap a
+
+fn is-contr (A : Type) (x : A) : Type1 := Σ _ (lam (y : A) => = _ x y)
+
+fn 1-1-Corr (A : Type) (B : Type) :=
+    Σ-l2 _ (lam (R : (A -> B -> Type)) => Pair-l1
+        (Π (a : A), is-contr _ (Σ _ (lam (b : B) => R a b)))
+        (Π (b : B), is-contr _ (Σ _ (lam (a : A) => R a b))))
+
+#(lang := "corr-up")
+fn ↑ {A : Type} {B : Type} (R : 1-1-Corr A B) : Id (Type, A, B,) := ?todo_up
+
+#(lang := "corr-down")
+fn ↓ {A : Type} {B : Type} (id : Id (Type, A, B,)) : 1-1-Corr A B := ?todo_down
+
+-- #(lang := "nat-add")
+fn + (x : Nat) (y : Nat) : Nat := match y {
+    | zero => x
+    | (suc y') => suc (+ x y')
+}
+
+fn +-comm (x : Nat) (y : Nat) : = Nat (+ x y) (+ y x)
+   := match x {
+        | zero => refl Nat y
+        | (suc x') => refl Nat y
+      }
+
+-- fn fun-ext {A : Type} {B : Type} (f : A -> B) (g : A -> B) (Π (x : A), = _ (f x) (g x)) : = _ f g
+--    := ?todo2
+
+-- fn J
+--     {A : Type}
+--     (a : A)
+--     (b : A)
+--     (C : Π (x y : A), (Id (_, x, y,)) -> Type)
+--     (u : C a a (refl a))
+--     (e : Id (A, a, b,)) := ?todo-J

@@ -7,6 +7,7 @@ use crate::syntax::{ConHead, Ident, Loc, Plicitness, Universe, DBI, GI, MI, UID}
 use derive_more::From;
 use itertools::Either;
 use itertools::Either::*;
+use regex::internal::Input;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
@@ -40,6 +41,36 @@ pub enum Var {
     Free(UID),
 }
 
+/// Dependent identity type.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Id {
+    pub tele: Tele,
+    /// Depends on the telescope elements.
+    pub ty: Box<Term>,
+    /// Identity telescope elements.
+    pub paths: Vec<Term>,
+    pub a1: Box<Term>,
+    pub a2: Box<Term>,
+}
+
+impl Id {
+    pub fn new(
+        tele: impl Into<Tele>,
+        ty: impl Into<Box<Term>>,
+        paths: impl Into<Vec<Term>>,
+        a1: impl Into<Box<Term>>,
+        a2: impl Into<Box<Term>>,
+    ) -> Self {
+        Self {
+            tele: tele.into(),
+            ty: ty.into(),
+            paths: paths.into(),
+            a1: a1.into(),
+            a2: a2.into(),
+        }
+    }
+}
+
 /// Weak-head-normal-form terms, canonical values.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Val {
@@ -62,6 +93,28 @@ pub enum Val {
     /// (so we have easy access to application arguments).<br/>
     /// This is convenient for meta resolution and termination check.
     Var(Var, Vec<Elim>),
+    /// Identity (equality) type.
+    ///
+    /// ## Homogeneous (non-dependent) identity type
+    /// `Id_A(a, a')`. The elements of the type are identifications.
+    ///
+    /// ## Non-dependent Function identification
+    /// `Id_B->C(f, g) ≡ Π(u:B) Π(v:B) Π(q:Id_B(u,v)) Id_C(f(u), g(v))`.
+    ///
+    /// ## Dependent identity type
+    /// The non-dependent version is definitionally just a special case
+    /// of the dependent version, so we'll be using only the latter internally.
+    ///
+    /// `Id (\z.B) p (u,v) :≡ π1((ap (\z.B) p)↓)(u,v)`
+    ///
+    /// Heterogeneous identity types over refl reduce to homogeneous ones:
+    /// `Id (\z.B) (refl a) (u,v) ≡ Id B[a/z] (u, v)`
+    ///
+    /// Similarly, dependent identity types in constant families also reduce to homogeneous ones:
+    /// `Id (\z.B) p (u,v) ≡ Id B (u,v) (if z doesn't appear in B)`
+    Id(Id),
+    /// A special case of `ap` that cannot be reduced further.
+    Refl(Box<Term>),
 }
 
 impl Val {
@@ -109,6 +162,52 @@ pub enum Term {
     Redex(Func, Ident, Vec<Elim>),
     /// Data elimination.
     Match(Box<Term>, Vec<Case>),
+    /// General congruence term.
+    ///
+    /// ```text
+    ///    x : A |- f : B   p : Id_A(a, a')
+    /// -------------------------------------
+    ///  ap (\x. f) p : Id_B(f[a/x], f[a'/x]).
+    /// ```
+    ///
+    /// ## Reflexivity
+    /// A special case is `ap (\x. y) p ≡ refl y (if y is a variable ≠ x)`.
+    ///
+    /// ## Identity
+    /// `ap (\x. x) p ≡ p`.
+    ///
+    /// ## Functorial laws
+    /// Since `ap` always reduces (even on redex terms), we can deduce the following equalities:
+    /// ```text
+    /// 1. ap (\x. f) (refl a) ≡ refl f[a/x];
+    /// 2. ap (\y. g) (ap (\x. f) p) ≡ ap (\x. g[f/y]) p;
+    /// 3. ap (\x. t) p ≡ refl t (x does not appear in t).
+    /// ```
+    ///
+    /// ## Identity of functions:
+    /// `ap (\x. f) p : Π(u:B) Π(v:B) Π(q:Id_B(u,v)) Id_C(f[a/x](u), g[a'/x](v))`
+    /// `ap (\x. b) p : Id_C(b[a/x], b[a'/x])`
+    ///
+    /// With the rules defined above we can compute:
+    /// `ap (\x. f b) p : Id_C(f[a/x](b[a/x], f[a'/x](b[a'/x])))`
+    /// `ap (\x. f b) p ≡ (ap (\x. f) p) b[a/x] b[a'/x] (ap (\x. b) p)`
+    ///
+    /// ## Multi-variable ap
+    /// `ap` is actually multi-variable, so we can 'bind' multiple variables and simultaneously
+    /// substitute with multiple arguments:
+    /// ```text
+    ///               x1:A1, ... , xn:An |- t:C
+    ///        p1 : Id_A1(a1,b1) ··· pn : Id_An(an,bn)
+    /// --------------------------------------------------------
+    /// ap (\x1.···\xn. t) (p1,...,pn) : Id_C(t[as/xs],t[bs/xs])
+    /// ```
+    /// `ap (\x.(λy.t)) p ≡ λu.λv.λq. ap (\x.\y. t) (p,q)`
+    ///
+    /// In addition, we can define `refl` as a 0-ary ap:
+    /// `refl a ≡ ap (ε. a) ε`
+    ///
+    /// One can think of `ap` as a higher-dimensional explicit substitution.
+    Ap(Tele, Vec<Term>, Box<Term>),
 }
 
 pub trait TryIntoPat<Ix, T> {
@@ -243,17 +342,60 @@ impl BoundFreeVars for Term {
             Term::Whnf(Val::Meta(_, args)) => {
                 args.bound_free_vars(vars, depth);
             }
+            Term::Whnf(Val::Id(id)) => {
+                todo!("bound_free_vars for id")
+            }
+            Term::Whnf(Val::Refl(t)) => {
+                t.bound_free_vars(vars, depth);
+            }
+            Term::Ap(tele, ps, t) => {
+                // tele.bound_free_vars(vars, depth);
+                // ps.bound_free_vars(vars, depth);
+                // t.bound_free_vars(vars, depth);
+                todo!("bound_free_vars for ap")
+            }
         }
     }
 }
 
+impl From<Id> for Term {
+    fn from(id: Id) -> Self {
+        Term::Whnf(Val::Id(id))
+    }
+}
+
 impl Term {
+    pub fn ap(
+        tele: impl Into<Tele>,
+        terms: impl Into<Vec<Term>>,
+        term: impl Into<Box<Term>>,
+    ) -> Self {
+        let tele = tele.into();
+        let terms = terms.into();
+        assert_eq!(tele.len(), terms.len());
+        Self::Ap(tele, terms, term.into())
+    }
+
+    pub fn as_id(&self) -> Option<&Id> {
+        match self {
+            Term::Whnf(Val::Id(id)) => Some(id),
+            _ => None,
+        }
+    }
+
     pub fn free_var(uid: UID) -> Self {
         Term::Whnf(Val::Var(Var::Free(uid), Vec::new()))
     }
 
     pub(crate) fn is_cons(&self) -> bool {
         matches!(self, Term::Whnf(Val::Cons(..)))
+    }
+
+    pub(crate) fn as_cons(&self) -> Option<(&ConHead, &Vec<Term>)> {
+        match self {
+            Term::Whnf(Val::Cons(con_head, args)) => Some((con_head, args)),
+            _ => None,
+        }
     }
 
     pub(crate) fn is_eta_var(&self) -> bool {
@@ -267,8 +409,7 @@ impl Term {
                 Val::Pi(_, Closure::Plain(t)) => t.tele_len() + 1,
                 _ => 0,
             },
-            Self::Redex(..) => 0,
-            Self::Match(..) => 0,
+            _ => 0,
         }
     }
 
@@ -302,6 +443,8 @@ impl Term {
             args.into_iter().map(Elim::from).collect(),
         )
     }
+
+    pub fn print(&self, tcs: &TypeCheckState) {}
 }
 
 pub type Bind<T = Term> = super::super::Bind<T>;
@@ -356,17 +499,18 @@ impl Val {
 
 /// Constructors and traversal functions.
 impl Term {
-    pub fn is_type(&self) -> bool {
-        use Val::*;
-        match match self {
-            Term::Whnf(val) => val,
-            Term::Redex(..) => return false,
-            Term::Match(..) => return false,
-        } {
-            Pi(..) | Data(..) | Universe(..) => true,
-            Var(..) | Meta(..) | Cons(..) | Lam(..) => false,
-        }
-    }
+    // pub fn is_type(&self) -> bool {
+    //     use Val::*;
+    //     match match self {
+    //         Term::Whnf(val) => val,
+    //         Term::Redex(..) => return false,
+    //         Term::Match(..) => return false,
+    //
+    //     } {
+    //         Pi(..) | Data(..) | Universe(..) => true,
+    //         Var(..) | Meta(..) | Cons(..) | Lam(..) => false,
+    //     }
+    // }
 
     pub fn is_universe(&self) -> bool {
         matches!(self, Term::Whnf(Val::Universe(..)))
@@ -427,9 +571,9 @@ impl Term {
         }
     }
 
-    pub fn pi(licit: Plicitness, name: UID, param_type: Term, body: Closure, loc: Loc) -> Self {
-        Self::pi2(Bind::boxing(licit, name, param_type, loc), body)
-    }
+    // pub fn pi(licit: Plicitness, name: UID, param_type: Term, body: Closure, loc: Loc) -> Self {
+    //     Self::pi2(Bind::boxing(licit, name, param_type, loc), body)
+    // }
 
     pub fn pi2(param: Bind<Box<Term>>, body: Closure) -> Self {
         Term::Whnf(Val::Pi(param, body))

@@ -1,6 +1,7 @@
 mod dbi;
 mod decl;
 mod fold;
+mod id;
 mod pats;
 mod pretty;
 mod redex;
@@ -15,12 +16,12 @@ pub use decl::{ConsInfo, DataInfo, Decl, FuncInfo, ProjInfo};
 pub use fold::FoldVal;
 use itertools::Itertools;
 pub use pats::Simpl;
-pub use pretty::{pretty_application, pretty_list, Indentation};
+pub use pretty::{display_application, pretty, pretty_list, Indentation, Pretty};
 pub use redex::{Subst, SubstWith};
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 pub use subst::{build_subst, PrimSubst, Substitution};
-pub use term::{Bind, Case, Closure, Elim, Func, Lambda, Pat, Term, Val, ValData, Var};
+pub use term::{Bind, Case, Closure, Elim, Func, Id, Lambda, Pat, Term, Val, ValData, Var};
 
 impl Term {
     pub fn at(self, loc: Loc) -> TermInfo {
@@ -187,6 +188,10 @@ impl Ctx {
         self.0.pop()
     }
 
+    pub(crate) fn popn(&mut self, count: usize) -> Self {
+        Self(self.0.split_off(self.0.len() - count))
+    }
+
     pub(crate) fn clear(&mut self) {
         self.0.clear();
     }
@@ -249,6 +254,16 @@ impl LetList {
 
     pub fn iter(&self) -> impl Iterator<Item = &Let> {
         self.0.iter()
+    }
+}
+
+pub trait Boxed {
+    fn boxed(self) -> Box<Self>;
+}
+
+impl<T> Boxed for T {
+    fn boxed(self) -> Box<Self> {
+        Box::new(self)
     }
 }
 

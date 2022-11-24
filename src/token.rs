@@ -3,7 +3,7 @@ pub use codespan::{
     LineIndex as Line, LineOffset, RawIndex,
 };
 use logos::{Lexer, Logos};
-use std::fmt::{Display, Formatter};
+use std::fmt::{Display, Formatter, Write};
 struct Foo;
 
 #[derive(Clone, Debug, Logos, PartialEq, Eq)]
@@ -13,10 +13,10 @@ pub enum Token<'input> {
     #[token("forall")]
     #[token("Π")]
     Pi,
-    #[token("exists")]
-    #[token("Σ")]
-    Sigma,
-    #[regex("[~!@#$%^&*-+=<>?/|:a-zA-Z_{u2200-u22FF}~!@#$%^&*-+=<>?/|:a-zA-Z_{u2200-u22FF}0-9']*")]
+    // #[token("exists")]
+    // #[token("Σ")]
+    // Sigma,
+    #[regex("[~!@#$%^&*\\-+=<>?/|:a-zA-Z_∀-⋿Ͱ-Ͽ←-⇿'0-9]*")]
     Ident(&'input str),
     #[token("data")]
     Data,
@@ -26,6 +26,8 @@ pub enum Token<'input> {
     Match,
     #[token("@")]
     At,
+    #[token("#")]
+    Hash,
     #[token(":")]
     Colon,
     #[token(",")]
@@ -52,8 +54,12 @@ pub enum Token<'input> {
     Bang,
     #[token("?")]
     Question,
-    #[regex("\\?[a-zA-Z0-9_]+")]
+    #[regex("\\?[a-zA-Z0-9_-]+")]
     MetaIdent(&'input str),
+    #[regex("[0-9]+")]
+    Nat(&'input str),
+    #[regex("\"[a-zA-Z0-9_-]*\"")]
+    Str(&'input str),
     #[token("{")]
     LBrace,
     #[token("}")]
@@ -68,6 +74,8 @@ pub enum Token<'input> {
     RParen,
     #[token(":=")]
     Assignment,
+    // #[token("=")]
+    // MetaAssignment,
     #[error]
     #[regex(r"[ \t\n\f]+", logos::skip)]
     Whitespace,
@@ -179,14 +187,15 @@ impl<'a> Display for Token<'a> {
         use Token::*;
 
         match self {
-            Universe(n)  => write!(f, "Type{}", n),
-            Ident(s)     => f.write_str(s),
+            Universe(n)         => write!(f, "Type{}", n),
+            Ident(s)            => f.write_str(s),
             Pi                  => f.write_str("forall"),
-            Sigma               => f.write_str("exists"),
+            // Sigma               => f.write_str("exists"),
             Data                => f.write_str("data"),
             Codata              => f.write_str("codata"),
             Match               => f.write_str("match"),
             At                  => f.write_str("@"),
+            Hash                => f.write_str("#"),
             Colon               => f.write_str(":"),
             Assignment          => f.write_str(":="),
             Comma               => f.write_str(","),
@@ -205,10 +214,13 @@ impl<'a> Display for Token<'a> {
             RParen              => f.write_str(")"),
             Whitespace          => f.write_str(" "),
             Underscore          => f.write_str("_"),
-            MetaIdent(s) => f.write_str(s),
+            MetaIdent(s)        => f.write_str(s),
             Bang                => f.write_str("!"),
             Question            => f.write_str("?"),
             Comment             => Ok(()),
+            Nat(n)              => write!(f, "{}", n),
+            MetaAssignment      => f.write_str("="),
+            Str(s)              => f.write_str(s),
             // BlockComment        => Ok(()),
         }
     }

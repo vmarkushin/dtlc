@@ -1,5 +1,5 @@
-use crate::syntax::core::{Tele, Term, TermInfo};
-use crate::syntax::{Ident, Loc, Universe, GI};
+use crate::syntax::core::{Tele, Term, TermInfo, Val};
+use crate::syntax::{ConHead, Ident, Loc, Universe, GI};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ProjInfo {
@@ -18,6 +18,17 @@ pub struct FuncInfo {
     pub body: Option<Term>,
 }
 
+impl FuncInfo {
+    pub(crate) fn empty_func(name: Ident) -> FuncInfo {
+        FuncInfo {
+            loc: Loc::default(),
+            name,
+            signature: Term::universe(Universe::default()),
+            body: None,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ConsInfo {
     pub loc: Loc,
@@ -25,6 +36,18 @@ pub struct ConsInfo {
     pub params: Tele,
     pub data_gi: GI,
     pub signature: Term,
+}
+
+impl ConsInfo {
+    pub(crate) fn empty_cons(name: Ident, data_gi: GI) -> ConsInfo {
+        ConsInfo {
+            loc: Loc::default(),
+            name,
+            params: Tele::default(),
+            data_gi,
+            signature: Term::universe(Universe::default()),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -36,6 +59,19 @@ pub struct DataInfo {
     pub conses: Vec<GI>,
     pub universe: Universe,
     pub signature: Term,
+}
+
+impl DataInfo {
+    pub fn empty_data(name: Ident) -> Self {
+        DataInfo {
+            loc: Loc::default(),
+            name,
+            params: Tele::default(),
+            conses: Vec::default(),
+            universe: Universe::default(),
+            signature: Term::universe(Universe::default()),
+        }
+    }
 }
 
 /// Declaration.
@@ -85,6 +121,13 @@ impl Decl {
             Decl::Data(i) => i.loc(),
             Decl::Cons(i) => i.loc(),
             Decl::Func(i) => i.loc(),
+        }
+    }
+
+    pub fn as_data(&self) -> &DataInfo {
+        match self {
+            Decl::Data(d) => d,
+            _ => panic!("not a data"),
         }
     }
 

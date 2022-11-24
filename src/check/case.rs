@@ -574,6 +574,7 @@ impl LshProblem {
         trace!("rhs refined = {}", rhs1);
         trace!("target = {}", target);
         let val = tcs.simplify(target)?;
+        trace!("target_val = {}", val);
         let checked_rhs = tcs.check(&rhs1, &val)?.ast;
         Ok(CaseTree::Leaf(checked_rhs))
     }
@@ -1066,10 +1067,10 @@ mod tests {
         assert_eq!(ct, cte);
         let val = pct!(p, des, env, "tst2");
         let val1 = pct!(p, des, env, "n3");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
         let val = pct!(p, des, env, "tst1");
         let val1 = pct!(p, des, env, "n7");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
         Ok(())
     }
 
@@ -1240,28 +1241,28 @@ mod tests {
         assert_eq!(ct, cte);
         let val = pct!(p, des, env, "tst1");
         let val1 = pct!(p, des, env, "n3");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
         let val = pct!(p, des, env, "tst2");
         let val1 = pct!(p, des, env, "n3");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
         let val = pct!(p, des, env, "tst3");
         let val1 = pct!(p, des, env, "n10");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
         let val = pct!(p, des, env, "tst4");
         let val1 = pct!(p, des, env, "n10");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
         let val = pct!(p, des, env, "tst5");
         let val1 = pct!(p, des, env, "n3");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
         let val = pct!(p, des, env, "tst6");
         let val1 = pct!(p, des, env, "n3");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
         let val = pct!(p, des, env, "tst7");
         let val1 = pct!(p, des, env, "n10");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
         let val = pct!(p, des, env, "tst8");
         let val1 = pct!(p, des, env, "n10");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
         Ok(())
     }
 
@@ -1373,13 +1374,13 @@ mod tests {
 
         let val = pct!(p, des, env, "tst1");
         let val1 = pct!(p, des, env, "n3");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
         let val = pct!(p, des, env, "tst2");
         let val1 = pct!(p, des, env, "zero");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
         let val = pct!(p, des, env, "tst3");
         let val1 = pct!(p, des, env, "zero");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
         let _val = pct!(p, des, env, "tst4");
         let _val1 = pct!(p, des, env, "n10");
         Ok(())
@@ -1410,7 +1411,7 @@ mod tests {
         env.check_prog(des.clone())?;
         let val = pct!(p, des, env, "main");
         let val1 = pct!(p, des, env, "(suc zero)");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
         Ok(())
     }
 
@@ -1483,7 +1484,7 @@ mod tests {
          */
         let val = pct!(p, des, env, "main");
         let val1 = pct!(p, des, env, "(suc (suc zero))");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
         Ok(())
     }
 
@@ -1555,35 +1556,35 @@ mod tests {
 
         let val = pct!(p, des, env, "tst1");
         let val1 = pct!(p, des, env, "(suc zero)");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
 
         let val = pct!(p, des, env, "tst2");
         let val1 = pct!(p, des, env, "zero");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
 
         let val = pct!(p, des, env, "tst3");
         let val1 = pct!(p, des, env, "(suc zero)");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
 
         let val = pct!(p, des, env, "tst4");
         let val1 = pct!(p, des, env, "zero");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
 
         let val = pct!(p, des, env, "tst5");
         let val1 = pct!(p, des, env, "zero");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
 
         let val = pct!(p, des, env, "tst6");
         let val1 = pct!(p, des, env, "true");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
 
         let val = pct!(p, des, env, "tst7");
         let val1 = pct!(p, des, env, "zero");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
 
         let val = pct!(p, des, env, "tst8");
         let val1 = pct!(p, des, env, "false");
-        Val::unify(&mut env, &val1, &val)?;
+        Unify::unify(&mut env, &val1, &val)?;
 
         Ok(())
     }

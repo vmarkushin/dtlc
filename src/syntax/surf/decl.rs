@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Display, Formatter};
 
-use crate::syntax::surf::{Expr, Param, Type};
+use crate::syntax::core::pretty_list;
+use crate::syntax::surf::{Expr, MetaAttr, Param, Type};
 use crate::syntax::{Ident, Universe};
 use derive_more::From;
 use vec1::Vec1;
@@ -147,6 +148,7 @@ pub struct Data {
     pub sig: NamedTele,
     pub cons: Vec<NamedTele>,
     pub universe: Option<Universe>,
+    pub meta_attrs: Vec<MetaAttr>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -155,6 +157,7 @@ pub struct Func {
     pub params: Params,
     pub ret_ty: Option<Expr>,
     pub body: Expr,
+    pub meta_attrs: Vec<MetaAttr>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -177,7 +180,9 @@ impl Display for Decl {
                 params,
                 ret_ty: ty,
                 body,
+                meta_attrs,
             }) => {
+                pretty_list(f, meta_attrs, "\n")?;
                 write!(f, "fn {}", name)?;
                 if !params.is_empty() {
                     write!(f, "{}", params)?;
@@ -191,7 +196,9 @@ impl Display for Decl {
                 sig,
                 universe,
                 cons,
+                meta_attrs,
             }) => {
+                pretty_list(f, meta_attrs, "\n")?;
                 write!(f, "data {}", sig)?;
                 if let Some(t) = universe {
                     write!(f, " : {}", t)?;

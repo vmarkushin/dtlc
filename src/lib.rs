@@ -5,6 +5,9 @@
 #![feature(try_blocks)]
 #![feature(never_type)]
 #![feature(closure_lifetime_binder)]
+#![feature(specialization)]
+#![feature(adt_const_params)]
+#![feature(let_else)]
 
 #[allow(
     clippy::needless_lifetimes,
@@ -30,6 +33,7 @@ extern crate log;
 extern crate core;
 
 pub mod check;
+pub mod error;
 pub mod macros;
 pub mod parser;
 pub mod repl;

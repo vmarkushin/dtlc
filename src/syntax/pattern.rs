@@ -1,4 +1,4 @@
-use crate::syntax::core::pretty_application;
+use crate::syntax::core::display_application;
 use crate::syntax::{ConHead, Ident};
 use std::fmt::{Display, Formatter};
 
@@ -81,7 +81,7 @@ impl<Ix: Display, Term: Display> Display for Pat<Ix, Term> {
                 if *forced {
                     write!(f, ".")?;
                 }
-                pretty_application(f, head, args)
+                display_application(f, head, args)
             }
             Pat::Forced(e) => {
                 write!(f, ".{}", e)

@@ -1,14 +1,16 @@
 use crate::check::meta::MetaSol;
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
+use crate::ensure;
 use crate::syntax::core::{
-    Case, Closure, Elim, FoldVal, Func, Lambda, Pat, SubstWith, Substitution, Term, Val, ValData,
+    pretty, Case, Closure, Elim, FoldVal, Func, Lambda, Pat, SubstWith, Substitution, Term, Val,
+    ValData,
 };
 use crate::syntax::{GI, MI};
 use std::cmp::Ordering;
 
 impl TypeCheckState {
-    pub fn subtype(&mut self, sub: &Val, sup: &Val) -> Result<()> {
+    pub fn subtype(&mut self, sub: &Term, sup: &Term) -> Result<()> {
         if !self.trace_tc {
             return self.subtype_impl(sub, sup);
         }
@@ -28,7 +30,7 @@ impl TypeCheckState {
         Ok(())
     }
 
-    fn subtype_impl(&mut self, sub: &Val, sup: &Val) -> Result<()> {
+    fn subtype_impl(&mut self, sub: &Term, sup: &Term) -> Result<()> {
         use Val::*;
         match (sub, sup) {
             (Universe(sub_l), Universe(sup_l)) if sub_l <= sup_l => Ok(()),
@@ -39,6 +41,37 @@ impl TypeCheckState {
                     (Term::Whnf(left), Term::Whnf(right)) => tcs.subtype(left, right),
                     (a, b) => Unify::unify(tcs, a, b),
                 })
+            }
+            (Id(id_a), Id(id_b)) => {
+                ensure!(
+                    id_a.tele.len() == id_b.tele.len(),
+                    Error::IdTelePathsLenMismatch
+                );
+                ensure!(
+                    id_a.paths.len() == id_b.paths.len(),
+                    Error::IdTelePathsLenMismatch
+                );
+                ensure!(
+                    id_a.tele.len() == id_a.paths.len(),
+                    Error::IdTelePathsLenMismatch
+                );
+
+                for (i, (a, b)) in id_a.tele.iter().zip(id_b.tele.iter()).enumerate() {
+                    let res = Unify::unify(self, &a.ty, &b.ty);
+                    if res.is_err() {
+                        self.unify_depth -= i;
+                        res?;
+                    }
+                    self.unify_depth += 1;
+                }
+                let res = try {
+                    Unify::unify(self, &id_a.ty, &id_b.ty)?;
+                    Unify::unify(self, &id_a.a1, &id_a.a2)?;
+                    Unify::unify(self, &id_b.a1, &id_b.a2)?;
+                    Unify::unify(self, &id_a.a1, &id_b.a1)?;
+                };
+                self.unify_depth -= id_a.tele.len();
+                res
             }
             (e, t) => Unify::unify(self, e, t),
         }
@@ -110,7 +143,7 @@ impl Unify for Term {
             (a, b) => {
                 let a_simp = tcs.simplify(a.clone())?;
                 let b_simp = tcs.simplify(b.clone())?;
-                Val::unify(tcs, &a_simp, &b_simp)
+                Unify::unify(tcs, &a_simp, &b_simp)
             }
         }
     }

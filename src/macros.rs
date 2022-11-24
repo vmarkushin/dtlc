@@ -1,7 +1,7 @@
 /// Parse expression.
 #[macro_export]
 macro_rules! pe {
-    ($p:ident, $d:ident, $s:literal) => {
+    ($p:ident, $d:ident, $s:expr) => {
         $d.desugar_expr($p.parse_expr($s)?)?
     };
 }
@@ -9,7 +9,7 @@ macro_rules! pe {
 /// Parse core term.
 #[macro_export]
 macro_rules! pct {
-    ($p:ident, $d:ident, $e:ident, $s:literal) => {{
+    ($p:ident, $d:ident, $e:ident, $s:expr) => {{
         let term = $e.infer(&$crate::pe!($p, $d, $s))?.0.ast;
         let val = $e.simplify(term)?;
         val
@@ -19,7 +19,7 @@ macro_rules! pct {
 /// Parse expression and infer its type.
 #[macro_export]
 macro_rules! peit {
-    ($p:ident, $d:ident, $e:ident, $s:literal) => {{
+    ($p:ident, $d:ident, $e:ident, $s:expr) => {{
         let term = $e.infer(&$crate::pe!($p, $d, $s))?.1;
         let val = $e.simplify(term)?;
         val
@@ -91,3 +91,11 @@ macro_rules! dsp {
         ($($crate::dsp!($val)),+,)
     };
 }
+
+// #[macro_export]
+// macro_rules! pretty {
+//     ($dst:expr, $state:expr, $($arg:tt)*) => {
+//
+//         $dst.write_fmt($crate::format_args!($($arg)*))
+//     };
+// }

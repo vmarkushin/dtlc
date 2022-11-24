@@ -1,8 +1,8 @@
 use super::Term;
 use crate::check::{Constraint, TypeCheckState};
 use crate::syntax::core::subst::{PrimSubst, Substitution};
-use crate::syntax::core::term::Lambda;
-use crate::syntax::core::{Case, Closure, DeBruijn, Elim, Func, Val, ValData, Var};
+use crate::syntax::core::term::{Id, Lambda};
+use crate::syntax::core::{Boxed, Case, Closure, DeBruijn, Elim, Func, Val, ValData, Var};
 use crate::syntax::pattern::Pat;
 use crate::syntax::{Bind, Ident, DBI, GI};
 use itertools::Itertools;
@@ -277,6 +277,12 @@ impl SubstWith<'_> for Term {
                     }
                 }
             }
+            Term::Ap(tele, ps, t) => {
+                // let ps = ps.subst_with(subst.clone(), tcs);
+                // let t = t.subst_with(subst, tcs);
+                // Term::Ap(tele, ps, box t)
+                todo!("subst in `ap`")
+            }
         }
     }
 }
@@ -298,6 +304,18 @@ impl SubstWith<'_> for Lambda {
                 closure.subst_with(subst, tcs),
             ),
         }
+    }
+}
+
+impl SubstWith<'_, Term> for Id {
+    fn subst_with(self, subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Term {
+        Term::Whnf(Val::Id(Id {
+            tele: self.tele.subst_with(subst.clone(), tcs),
+            ty: self.ty.subst_with(subst.clone(), tcs).boxed(),
+            paths: self.paths.subst_with(subst.clone(), tcs),
+            a1: self.a1.subst_with(subst.clone(), tcs).boxed(),
+            a2: self.a2.subst_with(subst, tcs).boxed(),
+        }))
     }
 }
 
@@ -325,6 +343,8 @@ impl SubstWith<'_, Term> for Val {
             Val::Var(Var::Free(n), args) => {
                 Term::Whnf(Val::Var(Var::Free(n), vec![])).apply_elim(args.subst_with(subst, tcs))
             }
+            Val::Id(id) => id.subst_with(subst, tcs),
+            Val::Refl(t) => Term::Whnf(Val::Refl(t.subst_with(subst, tcs).boxed())),
         }
     }
 }

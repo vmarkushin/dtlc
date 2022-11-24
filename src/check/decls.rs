@@ -9,12 +9,40 @@ use crate::syntax::core::{
     Closure, ConsInfo, Ctx, DataInfo, DeBruijn, Decl, FuncInfo, Tele, Term, Val, ValData,
 };
 use crate::syntax::desugar::DesugarState;
-use crate::syntax::{Universe, GI};
+use crate::syntax::{LangItem, Universe, GI};
 use itertools::Either::*;
 
 impl TypeCheckState {
     pub fn check_prog(&mut self, desugar_state: DesugarState) -> Result<()> {
+        // TODO: fix for double call
+        self.lang_items = desugar_state.lang_items;
+        self.lang_items_back = self
+            .lang_items
+            .clone()
+            .into_iter()
+            .map(|(k, v)| (v, k))
+            .collect();
         self.check_decls(desugar_state.decls.into_iter(), desugar_state.cur_meta_id)?;
+        self.check_lang_items()?;
+        Ok(())
+    }
+
+    pub fn check_lang_items(&mut self) -> Result<()> {
+        let mut new_lang_items = Vec::new();
+        for (li, gi) in self.lang_items.iter() {
+            match li {
+                LangItem::Nat => {
+                    // TODO: full check of Nat
+                    new_lang_items.push((*gi + 1, LangItem::NatZ));
+                    new_lang_items.push((*gi + 2, LangItem::NatS));
+                }
+                _ => {}
+            }
+        }
+        for (gi, li) in new_lang_items {
+            self.lang_items.insert(li, gi);
+            self.lang_items_back.insert(gi, li);
+        }
         Ok(())
     }
 
@@ -28,11 +56,37 @@ impl TypeCheckState {
         let take = |decls: &mut [Option<ADecl>], i: usize| decls[i].take().unwrap();
 
         for i in 0..decls.len() {
-            self.enter_def(i + curr_decl_len, meta_ids[i + curr_decl_len]);
+            let gi = i + curr_decl_len;
+            self.enter_def(gi, meta_ids[gi]);
             if decls[i].is_none() {
                 continue;
             }
             let decl = take(&mut decls, i);
+            if let Some(li) = self.lang_items_back.get(&gi) {
+                if li.skip_check() {
+                    match decl {
+                        ADecl::Data(info) => {
+                            let cs = (info.conses.iter())
+                                .map(|j| match take(&mut decls, *j - curr_decl_len) {
+                                    ADecl::Cons(i) => (i.name),
+                                    _ => unreachable!(),
+                                })
+                                .collect::<Vec<_>>();
+                            self.sigma.push(Decl::Data(DataInfo::empty_data(info.name)));
+                            for ident in cs {
+                                self.sigma.push(Decl::Cons(ConsInfo::empty_cons(ident, gi)));
+                            }
+                        }
+                        ADecl::Fn(info) => {
+                            self.sigma.push(Decl::Func(FuncInfo::empty_func(info.id)));
+                        }
+                        ADecl::Cons(_) => {
+                            unreachable!("Cons should be checked with Data");
+                        }
+                    };
+                    continue;
+                }
+            }
             self.tc_reset_depth();
             debug!("Checking decl {}", decl.ident());
             match decl {
@@ -52,7 +106,7 @@ impl TypeCheckState {
                 ADecl::Fn(f) => {
                     let signature = self.check(
                         f.ty.as_ref().expect("please specify type"),
-                        &Val::Universe(Universe(u32::MAX)), // TODO: this is Setω in Agda. Consider other ways for checking type here.
+                        &Term::universe(Universe(u32::MAX)), // TODO: this is Setω in Agda. Consider other ways for checking type here.
                     )?;
 
                     let signature = signature.ast;

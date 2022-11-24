@@ -1,5 +1,6 @@
 use crate::syntax::core::pretty_list;
 use crate::syntax::pattern;
+use crate::syntax::surf::lit::Literal;
 use crate::syntax::surf::Param;
 use crate::syntax::{Ident, Loc, Plicitness, Universe};
 use itertools::Itertools;
@@ -17,8 +18,10 @@ pub enum Expr {
     Universe(Loc, Universe),
     /// `A -> B -> C` represented as `Pi([A, B], C)`.
     Pi(Vec1<Param>, Box<Self>),
+    Tuple(Loc, Vec<Self>),
     Hole(Loc),
     Match(Vec1<Self>, Vec<Case>),
+    Lit(Loc, Literal),
 }
 
 impl Expr {
@@ -119,7 +122,7 @@ impl Display for Expr {
             Self::Pi(params, ty) => write!(f, "(Π {}, {})", params.into_iter().join(" "), ty),
             Self::Universe(_, k) => write!(f, "{}", k),
             Self::Hole(_) => write!(f, "_"),
-            Expr::Match(expr, cases) => {
+            Self::Match(expr, cases) => {
                 write!(f, "match")?;
                 pretty_list(f, expr, ", ")?;
                 for Case { patterns, body } in cases {
@@ -133,6 +136,12 @@ impl Display for Expr {
                     }
                 }
                 Ok(())
+            }
+            Self::Lit(_, lit) => write!(f, "{}", lit),
+            Self::Tuple(_, es) => {
+                write!(f, "(")?;
+                pretty_list(f, es, ", ")?;
+                write!(f, ")")
             }
         }
     }

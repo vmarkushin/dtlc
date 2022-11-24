@@ -1,9 +1,12 @@
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
+use crate::syntax;
 use crate::syntax::core::{
-    Bind, Case, Closure, Elim, Func, Lambda, Pat, Subst, Substitution, Term, Val, ValData,
+    self, Bind, Case, Closure, Elim, Func, Lambda, Pat, Subst, Substitution, Tele, Term, Val,
+    ValData,
 };
 use crate::syntax::{DBI, MI};
+use codespan_reporting::term;
 use std::{
     fmt::{Debug, Display, Formatter, Write},
     rc::Rc,
@@ -191,6 +194,12 @@ impl HasMeta for Case {
     }
 }
 
+impl HasMeta for Tele {
+    fn inline_meta(self, tcs: &mut TypeCheckState) -> Result<Self> {
+        self.0.inline_meta(tcs).map(Tele)
+    }
+}
+
 impl HasMeta for Term {
     fn inline_meta(self, tcs: &mut TypeCheckState) -> Result<Self> {
         match self {
@@ -206,6 +215,12 @@ impl HasMeta for Term {
                 let cases = cases.inline_meta(tcs)?;
                 Ok(Term::Match(term.inline_meta(tcs)?, cases))
             }
+            Term::Ap(tele, fs, ps) => {
+                let tele = tele.inline_meta(tcs)?;
+                let fs = fs.inline_meta(tcs)?;
+                let ps = ps.inline_meta(tcs)?;
+                Ok(Term::Ap(tele, fs, ps))
+            }
         }
     }
 }
@@ -213,7 +228,7 @@ impl HasMeta for Term {
 impl<T: HasMeta> HasMeta for Bind<T> {
     fn inline_meta(self, tcs: &mut TypeCheckState) -> Result<Self> {
         let ty = self.ty.inline_meta(tcs)?;
-        Ok(Bind::new(self.licit, self.name, ty, self.loc))
+        Ok(Bind::identified(self.licit, self.name, ty, self.ident))
     }
 }
 
@@ -274,6 +289,17 @@ impl HasMeta for Val {
                 tcs.simplify(sol)
             }
             Var(head, args) => args.inline_meta(tcs).map(|a| Var(head, a)),
+            Id(id) => Ok(Id(core::Id::new(
+                id.tele.inline_meta(tcs)?,
+                id.ty.inline_meta(tcs)?,
+                id.paths.inline_meta(tcs)?,
+                id.a1.inline_meta(tcs)?,
+                id.a2.inline_meta(tcs)?,
+            ))),
+            Refl(val) => {
+                let val = val.inline_meta(tcs)?;
+                Ok(Refl(val))
+            }
         }
     }
 }

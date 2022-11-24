@@ -1,11 +1,9 @@
-use crate::syntax::surf::{Expr, Decl, Param, Data, Func, NamedTele, Case, Pat};
+use crate::syntax::surf::{Expr, Decl, Param, Data, Func, NamedTele, Case, Pat, MetaAttr, Nat, Literal};
 use crate::syntax::{Ident, Universe, Loc, Plicitness::*};
 use crate::token::{Token, Position};
 use vec1::Vec1;
 
 grammar<'input>;
-
-Ident: Ident = <l: @L> <s: "ident"> <r: @R> => Ident::new(s, Loc::new2(l, r));
 
 extern {
     type Location = Position;
@@ -14,18 +12,22 @@ extern {
         "ident" => Token::Ident(<&'input str>),
         "universe" => Token::Universe(<&'input str>),
         "metaident" => Token::MetaIdent(<&'input str>),
+        "nat" => Token::Nat(<&'input str>),
+        "string" => Token::Str(<&'input str>),
         "forall" => Token::Pi,
-        "exists" => Token::Sigma,
+//        "exists" => Token::Sigma,
         "data" => Token::Data,
         "codata" => Token::Codata,
         "match" => Token::Match,
 
         "@" => Token::At,
+        "#" => Token::Hash,
         ":" => Token::Colon,
         "," => Token::Comma,
         "." => Token::Dot,
         "=>" => Token::DArrow,
         ":=" => Token::Assignment,
+//        "=" => Token::MetaAssignment,
         "lam" => Token::Lam,
         "fn" => Token::Fn,
         "let" => Token::Let,
@@ -67,6 +69,8 @@ Sp<Rule>: (Rule, Loc) =
 Sp_<Rule>: Loc =
     <sp: Sp<Rule>> => match sp { (_, loc) => loc };
 
+Ident: Ident = <t : Sp<"ident">> => Ident::new(t.0, t.1);
+
 Universe: Universe =
     <uni: "universe"> => {
         let uni_lvl = &uni[4..]; // Skip "Type" prefix
@@ -78,13 +82,29 @@ Universe: Universe =
         Universe(level)
     };
 
+Str : String = {
+    <str: "string"> => str[1..str.len() - 1].to_string(),
+}
+
+Nat : Nat = {
+    <nat: "nat"> => nat.parse::<Nat>().expect("the number is always valid, because we used regex [0-9]*; qed"),
+}
+
+Literal : Literal = {
+    <Str> => Literal::Str(<>),
+    <Nat> => Literal::Nat(<>),
+}
+
 PrimExpr: Expr = {
     <uni: Sp<Universe>> => {
         let (uni, loc) = uni;
         Expr::Universe(loc, uni)
     },
     Sp_<"_"> => Expr::Hole(<>),
+    Sp_<"metaident"> => Expr::Hole(<>),
     <var: Ident> => Expr::Var(var),
+    Sp<Literal> => Expr::Lit(<>.1, <>.0),
+    Tuple,
     "(" <Expr> ")",
 };
 
@@ -104,7 +124,8 @@ ForallParam : Vec1<Param> = {
 
 LamParam : Vec1<Param> = {
     <ident: Ident> => Vec1::new(Param::from_ident(ident, Explicit)),
-    "(" <idents: Ident+> ":" <ty : Expr> ")" => Vec1::try_from_vec(idents.into_iter().map(|ident| Param::new(ident, ty.clone(), Explicit)).collect()).unwrap()
+    "(" <idents: Ident+> ":" <ty : Expr> ")" => Vec1::try_from_vec(idents.into_iter().map(|ident| Param::new(ident, ty.clone(), Explicit)).collect()).unwrap(),
+    "{" <idents: Ident+> ":" <ty : Expr> "}" => Vec1::try_from_vec(idents.into_iter().map(|ident| Param::new(ident, ty.clone(), Implicit)).collect()).unwrap(),
 }
 
 LamParams : Vec1<Param> = {
@@ -137,6 +158,11 @@ Pattern : Pat = {
     "!" => Pat::Absurd,
 }
 
+Tuple : Expr = {
+//    <loc: Sp_<"(">> <e: SepAny<PrimExpr, ",">> ")" => Expr::Tuple(loc, e),
+    <loc: Sp_<"(">> <e: (<PrimExpr> ",")*> ")" => Expr::Tuple(loc, e),
+}
+
 Case : Case = {
     "|" <pats: SepAny<Pattern, ",">> <body: ("=>" <Expr>)?> => Case::new(pats, body),
 }
@@ -152,8 +178,29 @@ pub Expr: Expr = {
     AppExpr,
 }
 
+MetaAttrApp : MetaAttr = {
+    <Ident> => MetaAttr::Ident(<>),
+    <f: Ident> <args: PrimMetaAttr+> => MetaAttr::App(f, Vec1::try_from_vec(args).unwrap()),
+}
+
+MetaField : (Ident, String) = {
+    <name: Ident> ":=" <value: Str> => (name, value),
+}
+
+PrimMetaAttr : MetaAttr = {
+    <ident: Ident> => MetaAttr::Ident(ident),
+    <field: MetaField> => MetaAttr::Struct(Vec1::new(field)),
+    "(" <MetaAttrApp> ")",
+    "{" <fields: SepMany<MetaField, ",">> "}" => MetaAttr::Struct(fields),
+}
+
+MetaAttribute : MetaAttr = {
+    "#" "(" <PrimMetaAttr> ")",
+}
+
 TypeParam: Param = {
     "(" <name: Ident> ":" <e: Expr> ")" => Param::new(name, e, Explicit),
+    "{" <name: Ident> ":" <e: Expr> "}" => Param::new(name, e, Implicit),
     <PrimExpr> => Param::from_type(<>, Explicit),
 }
 
@@ -170,11 +217,11 @@ DataType: Universe = {
 }
 
 pub Decl: Decl = {
-    "fn" <name: Ident> <params: TypeParam*> <ret_ty: FnType?> ":=" <body: Expr> => {
-       Func { name, params: params.into(), ret_ty, body }.into()
+    <meta_attrs: MetaAttribute*> "fn" <name: Ident> <params: TypeParam*> <ret_ty: FnType?> ":=" <body: Expr> => {
+       Func { name, params: params.into(), ret_ty, body, meta_attrs }.into()
     },
-    "data" <name: Ident> <ty_params: TypeParam*> <universe: DataType?> <cons: Constructor*> => {
-      Data { sig: NamedTele::new(name, ty_params.into()), universe, cons }.into()
+    <meta_attrs: MetaAttribute*> "data" <name: Ident> <ty_params: TypeParam*> <universe: DataType?> <cons: Constructor*> => {
+      Data { sig: NamedTele::new(name, ty_params.into()), universe, cons, meta_attrs }.into()
     },
 }
 

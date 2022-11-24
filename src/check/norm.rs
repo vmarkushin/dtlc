@@ -2,9 +2,9 @@ use crate::check::block::{Blocked, Stuck};
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
 use crate::syntax::core::{
-    build_subst, Case, Closure, Decl, Elim, Func, Simpl, SubstWith, Substitution, Term, Val,
+    build_subst, Boxed, Case, Closure, Decl, Elim, Func, Simpl, SubstWith, Substitution, Term, Val,
 };
-use crate::syntax::{ConHead, Ident, GI};
+use crate::syntax::{ConHead, Ident, Loc, GI};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -18,8 +18,8 @@ fn elims_to_terms(elims: Vec<Elim>) -> Result<Vec<Term>> {
 
 /// Returns `Some(i, n)` for ith-matched case with n new variables bound, and None
 /// for a stuck match.
-pub fn try_match(x: &Val, cs: &[Case]) -> Option<(usize, Rc<Substitution>)> {
-    let term = x.clone().into();
+pub fn try_match(x: &Term, cs: &[Case]) -> Option<(usize, Rc<Substitution>)> {
+    let term = x.clone();
     cs.iter()
         .enumerate()
         .filter_map(|(i, c)| c.pattern.match_term(&term).map(|j| (i, j)))
@@ -28,27 +28,56 @@ pub fn try_match(x: &Val, cs: &[Case]) -> Option<(usize, Rc<Substitution>)> {
 
 impl TypeCheckState {
     /// Normalize a term.
-    pub fn simplify(&mut self, term: Term) -> Result<Val> {
+    pub fn simplify(&mut self, term: Term) -> Result<Term> {
         if matches!(term, Term::Match(..)) {
             trace!("simplifying match: {}", &term);
         }
         match term {
-            Term::Whnf(whnf) => Ok(whnf),
+            Term::Whnf(Val::Id(mut id)) => {
+                id.a1 = Term::from(self.simplify(*id.a1)?).boxed();
+                id.a2 = Term::from(self.simplify(*id.a2)?).boxed();
+                Ok(Val::Id(id).into())
+            }
+            t @ Term::Whnf(_) => Ok(t),
             Term::Redex(f, id, elims) => match f {
                 Func::Index(def) => match self.def(def) {
                     // TODO: make a separate function for each data and constructor
-                    Decl::Data(_) => Ok(Val::inductive(def, elims_to_terms(elims)?)),
+                    Decl::Data(_) => Ok(Val::inductive(def, elims_to_terms(elims)?).into()),
                     Decl::Cons(cons) => {
                         let head = ConHead::new(id, cons.data_gi);
-                        Ok(Val::Cons(head, elims_to_terms(elims)?))
+                        Ok(Val::Cons(head, elims_to_terms(elims)?).into())
                     }
                     Decl::Proj { .. } => unimplemented!(),
                     Decl::Func(func) => {
-                        match self.unfold_func(def, id, func.body.as_ref().unwrap().clone(), elims)
-                        {
-                            Ok((_, term)) => self.simplify(term),
+                        match self.unfold_func(
+                            def,
+                            id.clone(),
+                            func.body.as_ref().unwrap().clone(),
+                            elims.clone(),
+                        ) {
+                            Ok((simp, term)) => match simp {
+                                Simpl::Yes => self.simplify(term),
+                                Simpl::No => Ok(Term::Redex(
+                                    f,
+                                    id,
+                                    elims
+                                        .into_iter()
+                                        .map(|e| match e {
+                                            Elim::App(t) => {
+                                                Ok(Elim::App(self.simplify(*t)?.boxed()))
+                                            }
+                                            e => Ok(e),
+                                        })
+                                        .collect::<Result<_>>()?,
+                                )),
+                            },
                             Err(blockage) => match blockage.stuck {
                                 Stuck::NotBlocked => self.simplify(blockage.anyway),
+                                Stuck::OnElim(e) => {
+                                    trace!("stuck on elim: {}", e);
+                                    // TODO: simplify elims?
+                                    Ok(Term::Redex(f, id, elims))
+                                }
                                 _ => Err(Error::Blocked(box blockage)),
                             },
                         }
@@ -84,6 +113,29 @@ impl TypeCheckState {
                         Stuck::OnElim(Elim::App(x.clone())),
                         Term::Match(x, cs),
                     ))),
+                }
+            }
+            Term::Ap(tele, ps, t) => {
+                if tele.is_empty() {
+                    debug_assert!(ps.is_empty());
+                    Ok(Val::Refl(self.simplify(*t)?.boxed()).into())
+                    // Ok(Term::ap([], [], self.simplify(*t)?))
+                } else {
+                    let ps = ps
+                        .into_iter()
+                        .map(|p| self.simplify(p))
+                        .collect::<Result<Vec<_>>>()?;
+                    let ps = ps
+                        .into_iter()
+                        .map(|p| match p {
+                            Term::Whnf(Val::Refl(t)) => Ok(*t),
+                            _ => Err(Error::NotRefl(p.boxed(), Loc::default())),
+                        })
+                        .rev()
+                        .collect::<Result<Vec<_>>>()?;
+                    let refl = t.subst_with(Substitution::parallel(ps.into_iter()), self);
+                    Ok(Val::Refl(self.simplify(refl)?.boxed()).into())
+                    // Ok(Term::ap([], [], self.simplify(refl)?))
                 }
             }
         }

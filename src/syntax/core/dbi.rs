@@ -41,8 +41,7 @@ impl DeBruijn for Term {
     fn dbi_view(&self) -> Option<DBI> {
         match self {
             Term::Whnf(w) => w.dbi_view(),
-            Term::Redex(..) => None,
-            Term::Match(..) => None,
+            _ => None,
         }
     }
 

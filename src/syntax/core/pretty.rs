@@ -1,7 +1,14 @@
-use crate::syntax::core::term::{Bind, Case, Lambda};
-use crate::syntax::core::{Closure, Elim, Func, Term, TermInfo, Val, ValData, Var};
-use crate::syntax::{ConHead, Plicitness};
-use std::fmt::{Display, Error, Formatter, Write};
+use crate::check::TypeCheckState;
+use crate::syntax::abs::Type;
+use crate::syntax::core::term::{Bind, Case, Id, Lambda};
+use crate::syntax::core::{Closure, Elim, Func, Pat, Tele, Term, TermInfo, Val, ValData, Var};
+use crate::syntax::surf::Nat;
+use crate::syntax::{ConHead, LangItem, Plicitness};
+use core::fmt;
+use itertools::Itertools;
+use std::any::Any;
+use std::fmt::{Display, Error, Formatter, Pointer, Write};
+use std::marker::PhantomData;
 
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Indentation {
@@ -22,7 +29,7 @@ impl Display for Indentation {
 impl Display for Elim {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         match self {
-            Elim::App(app) => app.fmt(f),
+            Elim::App(app) => write!(f, "{}", app),
             Elim::Proj(field) => write!(f, ".{}", field),
         }
     }
@@ -32,11 +39,11 @@ impl Display for Term {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         use Term::*;
         match self {
-            Whnf(v) => v.fmt(f),
-            Redex(Func::Index(_), ident, args) => pretty_application(f, &ident.text, args),
+            Whnf(v) => write!(f, "{}", v),
+            Redex(Func::Index(_), ident, args) => display_application(f, &ident.text, args),
             Redex(Func::Lam(lam), _ident, args) => {
                 write!(f, "({})", lam)?;
-                pretty_application(f, &"".to_owned(), args)
+                display_application(f, &"".to_owned(), args)
             }
             Match(term, cases) => {
                 writeln!(f, "match {} {{", term)?;
@@ -45,6 +52,9 @@ impl Display for Term {
                 }
                 write!(f, "}}")?;
                 Ok(())
+            }
+            Ap(tele, ps, t) => {
+                write!(f, "ap (\\{}. {}) {}", tele, t, ps.iter().join(", "))
             }
         }
     }
@@ -87,17 +97,29 @@ impl Display for Val {
         match self {
             Meta(mi, a) => {
                 f.write_str("?")?;
-                pretty_application(f, mi, a)
+                display_application(f, mi, a)
             }
-            Var(v, a) => pretty_application(f, &format!("{}", v), a),
+            Var(v, a) => display_application(f, &format!("{}", v), a),
             Universe(l) => write!(f, "{}", l),
             Pi(Bind { licit, ty, .. }, clos) => match licit {
                 Explicit => write!(f, "({} -> {})", ty, clos),
                 Implicit => write!(f, "({{{}}} -> {})", ty, clos),
             },
             Lam(lam) => lam.fmt(f),
-            Cons(name, a) => pretty_application(f, name, a),
+            Cons(name, a) => display_application(f, name, a),
             Data(info) => info.fmt(f),
+            Id(id) => {
+                write!(
+                    f,
+                    "Id (\\{}. {}) ({}) {} {}",
+                    id.ty,
+                    id.tele,
+                    id.paths.iter().join(", "),
+                    id.a1,
+                    id.a2
+                )
+            }
+            Refl(t) => write!(f, "refl {}", t),
         }
     }
 }
@@ -105,7 +127,7 @@ impl Display for Val {
 impl Display for ValData {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         f.write_str("data")?;
-        pretty_application(f, &self.def, &self.args)
+        display_application(f, &self.def, &self.args)
     }
 }
 
@@ -113,7 +135,7 @@ impl Display for Closure {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         use Closure::*;
         let Plain(body) = self;
-        body.fmt(f)
+        Display::fmt(body, f)
     }
 }
 
@@ -145,7 +167,7 @@ pub fn pretty_list(
     }
 }
 
-pub fn pretty_application(
+pub fn display_application(
     f: &mut Formatter,
     fun: &impl Display,
     a: &[impl Display],
@@ -159,4 +181,381 @@ pub fn pretty_application(
         }
         f.write_str(")")
     }
+}
+
+/*pub fn pretty_application(
+    f: &mut Formatter,
+    s: &TypeCheckState,
+    fun: &impl Display,
+    a: &[impl Display],
+) -> Result<(), Error> {
+    if a.is_empty() {
+        // let pretty = Pretty { s, inner: 1u32 };
+        // Display::fmt(&pretty, f)
+        write!(f, "{}", fun)
+    } else {
+        write!(f, "({}", fun)?;
+        for x in a {
+            write!(f, " {}", pretty(x, s))?;
+        }
+        f.write_str(")")
+    }
+}
+*/
+
+pub struct StatefulFormatter<'a, S> {
+    f: &'a mut Formatter<'a>,
+    s: S,
+}
+
+impl<'a, S> From<(S, &'a mut Formatter<'a>)> for StatefulFormatter<'a, S> {
+    fn from((s, f): (S, &'a mut Formatter<'a>)) -> Self {
+        StatefulFormatter { f, s }
+    }
+}
+
+impl<'a, S> Write for StatefulFormatter<'a, S> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.f.write_str(s)
+    }
+}
+
+pub trait Delimiter {
+    fn get() -> &'static str;
+}
+
+pub struct CommaDelimiter;
+
+impl Delimiter for CommaDelimiter {
+    fn get() -> &'static str {
+        ","
+    }
+}
+
+pub struct NewlineDelimiter;
+
+impl Delimiter for NewlineDelimiter {
+    fn get() -> &'static str {
+        "\n\t"
+    }
+}
+
+pub struct Pretty<'a, T, S = TypeCheckState, D = CommaDelimiter> {
+    pub inner: &'a T,
+    pub s: &'a S,
+    pub d: PhantomData<D>,
+}
+
+pub fn pretty<'a, T, D>(val: &'a T, s: &'a TypeCheckState) -> Pretty<'a, T, TypeCheckState, D> {
+    Pretty {
+        inner: val,
+        s,
+        d: PhantomData,
+    }
+}
+
+impl Display for Pretty<'_, Term> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let s = self.s;
+        match &self.inner {
+            Term::Whnf(val) => {
+                write!(f, "{}", pretty(val, s))
+            }
+            Term::Redex(_f, ident, es) => {
+                write!(f, "({} {})", ident, pretty(es, s))
+            }
+            Term::Match(t, cs) => {
+                write!(f, "match {} {{{}}}", pretty(&**t, s), pretty(cs, s))
+            }
+            Term::Ap(tele, ps, t) => {
+                write!(
+                    f,
+                    "ap {} {} {}",
+                    pretty(tele, s),
+                    pretty(ps, s),
+                    pretty(&**t, s)
+                )
+            }
+        }
+    }
+}
+
+impl Display for Pretty<'_, Func> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let s = self.s;
+        match &self.inner {
+            Func::Index(gi) => {
+                write!(f, "{}", s.def(*gi).def_name())
+            }
+            Func::Lam(lam) => {
+                write!(f, "{}", pretty(lam, s))
+            }
+        }
+    }
+}
+
+impl Display for Pretty<'_, Lambda> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let s = self.s;
+        write!(
+            f,
+            "lam {} => {}",
+            pretty(&self.inner.0.clone().map_term(|x| *x), s),
+            pretty(&self.inner.1, s)
+        )
+    }
+}
+
+impl Display for Pretty<'_, Case> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let s = self.s;
+        write!(
+            f,
+            "| {} => {}",
+            pretty(&self.inner.pattern, s),
+            pretty(&self.inner.body, s)
+        )
+    }
+}
+
+impl Display for Pretty<'_, Pat> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let s = self.s;
+        write!(f, "{}", pretty(&self.inner.clone().into_term(), s),)
+    }
+}
+
+impl Display for Pretty<'_, Elim> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let s = self.s;
+        match &self.inner {
+            Elim::App(_) => {}
+            Elim::Proj(_) => {}
+        };
+        todo!()
+    }
+}
+
+fn maybe_pretty_nat(con: &ConHead, mut args: &[Term], s: &TypeCheckState) -> Option<Nat> {
+    if let Some(nat_z) = s.lang_item(LangItem::NatZ) {
+        let nat_s = s.lang_item(LangItem::NatS).unwrap();
+        if con.cons_gi != nat_z && con.cons_gi != nat_s {
+            return None;
+        }
+        let mut nat = Nat::default();
+        while !args.is_empty() {
+            let (_, sargs) = args.first().unwrap().as_cons().unwrap();
+            args = sargs;
+            nat += 1;
+        }
+        return Some(nat);
+    }
+    None
+}
+
+/*
+default impl<'a, T: Display> Display for Pretty<'a, T, TypeCheckState> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        todo!()
+        // self.inner.fmt(f)
+    }
+}*/
+
+impl Display for Pretty<'_, String> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+/*
+impl<T: Display> Display for Pretty<'_, [T]> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        todo!()
+        // self.inner.fmt(f)
+    }
+}
+*/
+
+impl Display for Pretty<'_, Closure> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let Closure::Plain(body) = self.inner;
+        let body = &**body;
+        pretty(body, self.s).fmt(f)
+    }
+}
+
+/*impl<T: Display> Display for Pretty<'_, Vec<T>> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let s = self.s;
+        if self.inner.is_empty() {
+            return Ok(());
+        }
+        pretty(&self.inner[0], s).fmt(f)?;
+        if self.inner.len() == 1 {
+            return Ok(());
+        }
+        for x in &self.inner[1..] {
+            write!(f, ", {}", pretty(x, s))?;
+        }
+        Ok(())
+    }
+}
+*/
+
+impl Display for Pretty<'_, Bind> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let s = self.s;
+        if self.inner.licit == Plicitness::Implicit {
+            write!(f, "{{{}:{}}}", self.inner.ident, pretty(&self.inner.ty, s))
+        } else {
+            write!(f, "{}:{}", self.inner.ident, pretty(&self.inner.ty, s))
+        }
+    }
+}
+
+impl Display for Pretty<'_, Tele> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let s = self.s;
+        if self.inner.is_empty() {
+            return Ok(());
+        }
+        pretty(&self.inner.0[0], s).fmt(f)?;
+        if self.inner.len() == 1 {
+            return Ok(());
+        }
+        for x in &self.inner.0[1..] {
+            write!(f, ", {}", pretty(x, s))?;
+        }
+        Ok(())
+    }
+}
+
+macro_rules! impl_pretty_vec {
+    ($T:ty, $D:ty) => {
+        impl Display for Pretty<'_, Vec<$T>, TypeCheckState, $D> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+                let s = self.s;
+                if self.inner.is_empty() {
+                    return Ok(());
+                }
+                pretty(&self.inner[0], s).fmt(f)?;
+                if self.inner.len() == 1 {
+                    return Ok(());
+                }
+                for x in &self.inner[1..] {
+                    write!(f, ", {}", pretty(x, s))?;
+                }
+                Ok(())
+            }
+        }
+    };
+    ($T:ty) => {
+        impl_pretty_vec!($T, CommaDelimiter);
+    };
+}
+impl_pretty_vec!(Term);
+impl_pretty_vec!(Elim);
+impl_pretty_vec!(Case, NewlineDelimiter);
+
+impl Display for Pretty<'_, Id> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let s = self.s;
+        // self.inner.ty is skipped formatted
+        write!(
+            f,
+            "{} = {}",
+            pretty(&*self.inner.a1, s),
+            pretty(&*self.inner.a2, s)
+        )?;
+        if !self.inner.tele.is_empty() {
+            write!(
+                f,
+                " [{} : {}]",
+                pretty(&self.inner.paths, s),
+                pretty(&self.inner.tele, s)
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl Display for Pretty<'_, Val> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        use Plicitness::*;
+
+        let s = self.s;
+        match &self.inner {
+            Val::Universe(uni) => uni.fmt(f),
+            Val::Data(data) => {
+                let data_name = &s.def(data.def).def_name().text;
+                let args = data.args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
+                display_application(f, &data_name, &args)
+            }
+            Val::Pi(
+                Bind {
+                    licit, ty, ident, ..
+                },
+                clos,
+            ) => {
+                let ty = pretty(&**ty, s);
+                let clos = pretty(clos, s);
+                match licit {
+                    Explicit => write!(f, "(({} : {}) -> {})", ident, ty, clos),
+                    Implicit => write!(f, "({{{} : {}}} -> {})", ident, ty, clos),
+                }
+            }
+            Val::Lam(Lambda(
+                Bind {
+                    licit, ty, ident, ..
+                },
+                clos,
+            )) => {
+                let ty = pretty(&**ty, s);
+                let clos = pretty(clos, s);
+                match licit {
+                    Explicit => write!(f, "(lam {} : {} => {})", ident, ty, clos),
+                    Implicit => write!(f, "(lam {} : {{{}}} => {})", ident, ty, clos),
+                }
+            }
+            Val::Cons(cons, args) => {
+                if let Some(nat) = maybe_pretty_nat(cons, args, s) {
+                    nat.fmt(f)
+                } else {
+                    let args = args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
+                    display_application(f, &cons.name, &args)
+                }
+            }
+            Val::Meta(mi, args) => {
+                let args = args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
+                display_application(f, &format!("?{}", mi), &args)
+            }
+            Val::Var(v, args) => {
+                let args = args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
+                let var = match v {
+                    Var::Bound(dbi) => {
+                        let x = s.lookup(*dbi);
+                        format!("{}", x.ident.text)
+                    }
+                    Var::Free(uid) => {
+                        if *uid < 26 {
+                            let ci = (97 + *uid) as u8 as char;
+                            format!("{}", ci)
+                        } else {
+                            format!("#{}", uid)
+                        }
+                    }
+                };
+                display_application(f, &var, &args)
+            }
+            Val::Id(id) => pretty(id, s).fmt(f),
+            Val::Refl(t) => write!(f, "(refl {})", pretty(t.as_ref(), s)),
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! pretty_write {
+    ($f:ident, $s:ident, $($x:expr),+) => {
+        write!($f, "{}", $(pretty($x, $s)),+)
+    };
 }

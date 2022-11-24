@@ -2,7 +2,11 @@ use crate::grammar::{DeclParser, ExprParser, ProgParser};
 use crate::syntax::surf::{Decl, Expr, Prog};
 use crate::token::{lexer, Position, Token};
 use codespan_reporting::files::SimpleFile;
-type ParseError<'a> = lalrpop_util::ParseError<Position, Token<'a>, &'static str>;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+
+pub type ParseError<'a> = lalrpop_util::ParseError<Position, Token<'a>, &'static str>;
 
 pub struct Parser {
     expr: ExprParser,
@@ -25,6 +29,19 @@ impl Parser {
     pub fn parse_prog<'inp>(&self, input: &'inp str) -> Result<Prog, ParseError<'inp>> {
         let tokens = lexer(input);
         self.prog.parse(tokens)
+    }
+
+    pub fn parse_prog_with_std<'inp>(
+        &self,
+        input: &'inp str,
+        path: Option<PathBuf>,
+    ) -> Result<Prog, ParseError<'inp>> {
+        let path = path.unwrap_or(PathBuf::from_str("lib").unwrap());
+        let content = fs::read_to_string(path.join("prelude.dtl")).unwrap();
+        let mut std = self.parse_prog(&content).unwrap();
+        let prog = self.parse_prog(input)?;
+        std.extend(prog);
+        Ok(std)
     }
 }
 
