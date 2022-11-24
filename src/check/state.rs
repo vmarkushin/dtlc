@@ -37,7 +37,7 @@ pub struct TypeCheckState {
 impl TypeCheckState {
     pub(crate) fn is_caseless(&self, ty: &Term) -> bool {
         match ty {
-            Term::Whnf(Val::Data(data)) => match self.def(data.def) {
+            Term::Data(data) => match self.def(data.def) {
                 Decl::Data(data) => data.conses.is_empty(),
                 _ => panic!("Not a data type: {}", ty),
             },
@@ -122,7 +122,7 @@ impl TypeCheckState {
     }
 
     pub fn fresh_free_var(&mut self) -> Term {
-        let t = Term::Whnf(Val::Var(Var::Free(self.next_uid), vec![]));
+        let t = Term::Var(Var::Free(self.next_uid), vec![]);
         self.next_uid += 1;
         t
     }

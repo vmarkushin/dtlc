@@ -39,15 +39,11 @@ impl TypeCheckState {
                 let body_ty = self.simplify(body_ty)?;
                 let bind_ch = self.gamma.pop().expect("Γ is empty");
                 let pi_ty = match (bind_ty_ty, body_ty) {
-                    (Val::Universe(a), Val::Universe(b)) => Val::Universe(a.max(b)),
+                    (Term::Universe(a), Term::Universe(b)) => Term::Universe(a.max(b)),
                     (a, b) => return Err(Error::InvalidPi(box a, box b)),
                 };
                 return Ok((
-                    Term::Whnf(Val::Pi(
-                        bind_ch.map_term(|x| box x),
-                        Closure::Plain(box body_ch.ast),
-                    ))
-                    .at(*loc),
+                    Term::Pi(bind_ch.map_term(|x| box x), Closure::Plain(box body_ch.ast)).at(*loc),
                     pi_ty.into(),
                 ));
             }
@@ -62,7 +58,7 @@ impl TypeCheckState {
         let (head, mut ty) = self.infer_head(&view.fun)?;
 
         match &head.ast {
-            Term::Whnf(Val::Data(ValData { def, args })) => {
+            Term::Data(ValData { def, args }) => {
                 debug_assert!(args.is_empty());
                 let info = match &self.sigma[*def] {
                     Decl::Data(data) => data,
@@ -79,7 +75,7 @@ impl TypeCheckState {
                     |_, gi, args| Term::data(ValData::new(gi, args)),
                 )
             }
-            Term::Whnf(Val::Cons(ConHead { name, cons_gi: def }, args)) => {
+            Term::Cons(ConHead { name, cons_gi: def }, args) => {
                 // debug_assert!(args.is_empty());
                 if !args.is_empty() {
                     return Ok((head, ty));
@@ -105,7 +101,7 @@ impl TypeCheckState {
                     let ty_val = self.simplify(ty)?;
                     let res: Result<_> = ty_val
                         .into_pi()
-                        .map_left(|e| Error::NotPi(Term::Whnf(e), arg.loc()))
+                        .map_left(|e| Error::NotPi(e, arg.loc()))
                         .into();
                     let (param, clos) = res?;
                     let param_ty = self.simplify(*param.ty)?;
@@ -137,7 +133,7 @@ impl TypeCheckState {
             let ty_val = self.simplify(ty)?;
             let res: Result<_> = ty_val
                 .into_pi()
-                .map_left(|e| Error::NotPi(Term::Whnf(e), arg.loc()))
+                .map_left(|e| Error::NotPi(e, arg.loc()))
                 .into();
             let (param, clos) = res?;
             let param_ty = self.simplify(*param.ty)?;
@@ -361,7 +357,7 @@ impl TypeCheckState {
             return match self.check_impl(input_term, against) {
                 Err(Error::Blocked(blocked)) if blocked.is_elim() => {
                     debug!("{}, trying another way", blocked);
-                    self.check_blocked_impl(input_term, Term::Whnf(against.clone()))
+                    self.check_blocked_impl(input_term, against.clone())
                 }
                 x => x,
             };
@@ -372,7 +368,7 @@ impl TypeCheckState {
         let a = match self.check_impl(input_term, against) {
             Err(Error::Blocked(blocked)) if blocked.is_elim() => {
                 debug!("{}, trying another way", blocked);
-                self.check_blocked_impl(input_term, Term::Whnf(against.clone()))
+                self.check_blocked_impl(input_term, against.clone())
             }
             x => x,
         };
@@ -403,7 +399,7 @@ impl TypeCheckState {
         }
 
         match (abs, against) {
-            (Expr::Universe(info, lower), Val::Universe(upper)) => {
+            (Expr::Universe(info, lower), Term::Universe(upper)) => {
                 if upper > lower {
                     Ok(Term::universe(*lower).at(*info))
                 } else {
@@ -414,7 +410,7 @@ impl TypeCheckState {
                     ))
                 }
             }
-            (Expr::Pi(info, bind, ret), Val::Universe(..)) => {
+            (Expr::Pi(info, bind, ret), Term::Universe(..)) => {
                 let bind_ty = self.check(&bind.ty.clone().unwrap(), against)?;
                 let new = Bind::identified(bind.licit, bind.name, bind_ty.ast, bind.ident.clone());
                 self.gamma.push(new);
@@ -423,7 +419,7 @@ impl TypeCheckState {
                 let term = Term::pi2(bind_ty.boxed(), Closure::plain(ret_ty.ast));
                 Ok(term.at(*info))
             }
-            (Expr::Lam(_info, bind, ret), Val::Pi(bind_pi, ret_pi)) => {
+            (Expr::Lam(_info, bind, ret), Term::Pi(bind_pi, ret_pi)) => {
                 let (bind_ty, _bind_ty_ty) = self.infer((*bind.ty).as_ref().unwrap())?;
                 let val1 = self.simplify(bind_ty.ast.clone())?;
                 let val2 = self.simplify(*bind_pi.ty.clone())?;
@@ -443,7 +439,7 @@ impl TypeCheckState {
                 self.gamma.pop();
                 Ok(Term::lam(bind_new.boxed(), body.ast).at(bind_ty.loc))
             }
-            (Expr::Match(m), against) => self.check_match(m, Term::Whnf(against.clone())),
+            (Expr::Match(m), against) => self.check_match(m, against.clone()),
             (expr, anything) => self.check_fallback(expr.clone(), anything),
         }
     }
@@ -467,7 +463,7 @@ impl TypeCheckState {
         let vars = vars
             .into_iter()
             .map(|ti| match ti.ast {
-                Term::Whnf(Val::Var(Var::Bound(idx), _)) => idx,
+                Term::Var(Var::Bound(idx), _) => idx,
                 _ => unimplemented!("Match on non-var"),
             })
             .collect::<Vec<_>>();
@@ -483,7 +479,7 @@ impl TypeCheckState {
         Ok(case_tree.into_term().at(Loc::default()))
     }
 
-    pub fn check_fallback(&mut self, expr: Expr, expected_type: &Val) -> Result<TermInfo> {
+    pub fn check_fallback(&mut self, expr: Expr, expected_type: &Term) -> Result<TermInfo> {
         let (evaluated, inferred) = self.infer(&expr)?;
         let whnf = self.simplify(inferred)?;
         self.subtype(&whnf, expected_type)
@@ -544,8 +540,8 @@ mod tests {
         assert_err!(
             env.check(&pe!(p, des, "forall (ff : T -> T) (x : T), x"), &ty),
             Error::InvalidPi(
-                box Val::Universe(Universe(0)),
-                box Val::Data(ValData::new(0, vec![]))
+                box Term::Universe(Universe(0)),
+                box Term::Data(ValData::new(0, vec![]))
             )
         );
 

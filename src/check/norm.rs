@@ -33,19 +33,19 @@ impl TypeCheckState {
             trace!("simplifying match: {}", &term);
         }
         match term {
-            Term::Whnf(Val::Id(mut id)) => {
+            Term::Id(mut id) => {
                 id.a1 = Term::from(self.simplify(*id.a1)?).boxed();
                 id.a2 = Term::from(self.simplify(*id.a2)?).boxed();
-                Ok(Val::Id(id).into())
+                Ok(Term::Id(id).into())
             }
-            t @ Term::Whnf(_) => Ok(t),
+            t if t.is_whnf() => Ok(t),
             Term::Redex(f, id, elims) => match f {
                 Func::Index(def) => match self.def(def) {
                     // TODO: make a separate function for each data and constructor
-                    Decl::Data(_) => Ok(Val::inductive(def, elims_to_terms(elims)?).into()),
+                    Decl::Data(_) => Ok(Term::inductive(def, elims_to_terms(elims)?).into()),
                     Decl::Cons(cons) => {
                         let head = ConHead::new(id, cons.data_gi);
-                        Ok(Val::Cons(head, elims_to_terms(elims)?).into())
+                        Ok(Term::Cons(head, elims_to_terms(elims)?).into())
                     }
                     Decl::Proj { .. } => unimplemented!(),
                     Decl::Func(func) => {
@@ -55,6 +55,7 @@ impl TypeCheckState {
                             func.body.as_ref().unwrap().clone(),
                             elims.clone(),
                         ) {
+                            /*
                             Ok((simp, term)) => match simp {
                                 Simpl::Yes => self.simplify(term),
                                 Simpl::No => Ok(Term::Redex(
@@ -71,13 +72,17 @@ impl TypeCheckState {
                                         .collect::<Result<_>>()?,
                                 )),
                             },
+                             */
+                            Ok((_, term)) =>{
+                                self.simplify(term)
+                            }
                             Err(blockage) => match blockage.stuck {
                                 Stuck::NotBlocked => self.simplify(blockage.anyway),
-                                Stuck::OnElim(e) => {
-                                    trace!("stuck on elim: {}", e);
-                                    // TODO: simplify elims?
-                                    Ok(Term::Redex(f, id, elims))
-                                }
+                                // Stuck::OnElim(e) => {
+                                //     trace!("stuck on elim: {}", e);
+                                //     // TODO: simplify elims?
+                                //     Ok(Term::Redex(f, id, elims))
+                                // }
                                 _ => Err(Error::Blocked(box blockage)),
                             },
                         }
@@ -118,7 +123,7 @@ impl TypeCheckState {
             Term::Ap(tele, ps, t) => {
                 if tele.is_empty() {
                     debug_assert!(ps.is_empty());
-                    Ok(Val::Refl(self.simplify(*t)?.boxed()).into())
+                    Ok(Term::Refl(self.simplify(*t)?.boxed()).into())
                     // Ok(Term::ap([], [], self.simplify(*t)?))
                 } else {
                     let ps = ps
@@ -128,16 +133,19 @@ impl TypeCheckState {
                     let ps = ps
                         .into_iter()
                         .map(|p| match p {
-                            Term::Whnf(Val::Refl(t)) => Ok(*t),
+                            Term::Refl(t) => Ok(*t),
                             _ => Err(Error::NotRefl(p.boxed(), Loc::default())),
                         })
                         .rev()
                         .collect::<Result<Vec<_>>>()?;
                     let refl = t.subst_with(Substitution::parallel(ps.into_iter()), self);
-                    Ok(Val::Refl(self.simplify(refl)?.boxed()).into())
+                    Ok(Term::Refl(self.simplify(refl)?.boxed()).into())
                     // Ok(Term::ap([], [], self.simplify(refl)?))
                 }
             }
+            _ => unreachable!(
+                "all the cases should be handled. Otherwise, check `is_whnf` function implementation"
+            ),
         }
     }
 

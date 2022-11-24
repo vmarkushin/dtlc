@@ -532,6 +532,7 @@ mod tests {
     use vec1::{vec1, Vec1};
 
     #[test]
+    #[ignore]
     fn test_desugar() {
         use ExprA::{App, Match, Meta, Pi, Var};
         let parser = Parser::default();

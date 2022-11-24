@@ -39,7 +39,31 @@ impl Display for Term {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         use Term::*;
         match self {
-            Whnf(v) => write!(f, "{}", v),
+            Meta(mi, a) => {
+                f.write_str("?")?;
+                display_application(f, mi, a)
+            }
+            Var(v, a) => display_application(f, &format!("{}", v), a),
+            Universe(l) => write!(f, "{}", l),
+            Pi(Bind { licit, ty, .. }, clos) => match licit {
+                Explicit => write!(f, "({} -> {})", ty, clos),
+                Implicit => write!(f, "({{{}}} -> {})", ty, clos),
+            },
+            Lam(lam) => lam.fmt(f),
+            Cons(name, a) => display_application(f, name, a),
+            Data(info) => info.fmt(f),
+            Id(id) => {
+                write!(
+                    f,
+                    "Id (\\{}. {}) ({}) {} {}",
+                    id.ty,
+                    id.tele,
+                    id.paths.iter().join(", "),
+                    id.a1,
+                    id.a2
+                )
+            }
+            Refl(t) => write!(f, "refl {}", t),
             Redex(Func::Index(_), ident, args) => display_application(f, &ident.text, args),
             Redex(Func::Lam(lam), _ident, args) => {
                 write!(f, "({})", lam)?;
@@ -86,40 +110,6 @@ impl Display for Var {
                     write!(f, "#{}", i)
                 }
             }
-        }
-    }
-}
-
-impl Display for Val {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
-        use Plicitness::*;
-        use Val::*;
-        match self {
-            Meta(mi, a) => {
-                f.write_str("?")?;
-                display_application(f, mi, a)
-            }
-            Var(v, a) => display_application(f, &format!("{}", v), a),
-            Universe(l) => write!(f, "{}", l),
-            Pi(Bind { licit, ty, .. }, clos) => match licit {
-                Explicit => write!(f, "({} -> {})", ty, clos),
-                Implicit => write!(f, "({{{}}} -> {})", ty, clos),
-            },
-            Lam(lam) => lam.fmt(f),
-            Cons(name, a) => display_application(f, name, a),
-            Data(info) => info.fmt(f),
-            Id(id) => {
-                write!(
-                    f,
-                    "Id (\\{}. {}) ({}) {} {}",
-                    id.ty,
-                    id.tele,
-                    id.paths.iter().join(", "),
-                    id.a1,
-                    id.a2
-                )
-            }
-            Refl(t) => write!(f, "refl {}", t),
         }
     }
 }
@@ -258,9 +248,70 @@ impl Display for Pretty<'_, Term> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let s = self.s;
         match &self.inner {
-            Term::Whnf(val) => {
-                write!(f, "{}", pretty(val, s))
+            Term::Universe(uni) => uni.fmt(f),
+            Term::Data(data) => {
+                let data_name = &s.def(data.def).def_name().text;
+                let args = data.args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
+                display_application(f, &data_name, &args)
             }
+            Term::Pi(
+                Bind {
+                    licit, ty, ident, ..
+                },
+                clos,
+            ) => {
+                let ty = pretty(&**ty, s);
+                let clos = pretty(clos, s);
+                match licit {
+                    Explicit => write!(f, "(({} : {}) -> {})", ident, ty, clos),
+                    Implicit => write!(f, "({{{} : {}}} -> {})", ident, ty, clos),
+                }
+            }
+            Term::Lam(Lambda(
+                Bind {
+                    licit, ty, ident, ..
+                },
+                clos,
+            )) => {
+                let ty = pretty(&**ty, s);
+                let clos = pretty(clos, s);
+                match licit {
+                    Explicit => write!(f, "(lam {} : {} => {})", ident, ty, clos),
+                    Implicit => write!(f, "(lam {} : {{{}}} => {})", ident, ty, clos),
+                }
+            }
+            Term::Cons(cons, args) => {
+                if let Some(nat) = maybe_pretty_nat(cons, args, s) {
+                    nat.fmt(f)
+                } else {
+                    let args = args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
+                    display_application(f, &cons.name, &args)
+                }
+            }
+            Term::Meta(mi, args) => {
+                let args = args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
+                display_application(f, &format!("?{}", mi), &args)
+            }
+            Term::Var(v, args) => {
+                let args = args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
+                let var = match v {
+                    Var::Bound(dbi) => {
+                        let x = s.lookup(*dbi);
+                        format!("{}", x.ident.text)
+                    }
+                    Var::Free(uid) => {
+                        if *uid < 26 {
+                            let ci = (97 + *uid) as u8 as char;
+                            format!("{}", ci)
+                        } else {
+                            format!("#{}", uid)
+                        }
+                    }
+                };
+                display_application(f, &var, &args)
+            }
+            Term::Id(id) => pretty(id, s).fmt(f),
+            Term::Refl(t) => write!(f, "(refl {})", pretty(t.as_ref(), s)),
             Term::Redex(_f, ident, es) => {
                 write!(f, "({} {})", ident, pretty(es, s))
             }
@@ -476,80 +527,6 @@ impl Display for Pretty<'_, Id> {
             )?;
         }
         Ok(())
-    }
-}
-
-impl Display for Pretty<'_, Val> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        use Plicitness::*;
-
-        let s = self.s;
-        match &self.inner {
-            Val::Universe(uni) => uni.fmt(f),
-            Val::Data(data) => {
-                let data_name = &s.def(data.def).def_name().text;
-                let args = data.args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
-                display_application(f, &data_name, &args)
-            }
-            Val::Pi(
-                Bind {
-                    licit, ty, ident, ..
-                },
-                clos,
-            ) => {
-                let ty = pretty(&**ty, s);
-                let clos = pretty(clos, s);
-                match licit {
-                    Explicit => write!(f, "(({} : {}) -> {})", ident, ty, clos),
-                    Implicit => write!(f, "({{{} : {}}} -> {})", ident, ty, clos),
-                }
-            }
-            Val::Lam(Lambda(
-                Bind {
-                    licit, ty, ident, ..
-                },
-                clos,
-            )) => {
-                let ty = pretty(&**ty, s);
-                let clos = pretty(clos, s);
-                match licit {
-                    Explicit => write!(f, "(lam {} : {} => {})", ident, ty, clos),
-                    Implicit => write!(f, "(lam {} : {{{}}} => {})", ident, ty, clos),
-                }
-            }
-            Val::Cons(cons, args) => {
-                if let Some(nat) = maybe_pretty_nat(cons, args, s) {
-                    nat.fmt(f)
-                } else {
-                    let args = args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
-                    display_application(f, &cons.name, &args)
-                }
-            }
-            Val::Meta(mi, args) => {
-                let args = args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
-                display_application(f, &format!("?{}", mi), &args)
-            }
-            Val::Var(v, args) => {
-                let args = args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
-                let var = match v {
-                    Var::Bound(dbi) => {
-                        let x = s.lookup(*dbi);
-                        format!("{}", x.ident.text)
-                    }
-                    Var::Free(uid) => {
-                        if *uid < 26 {
-                            let ci = (97 + *uid) as u8 as char;
-                            format!("{}", ci)
-                        } else {
-                            format!("#{}", uid)
-                        }
-                    }
-                };
-                display_application(f, &var, &args)
-            }
-            Val::Id(id) => pretty(id, s).fmt(f),
-            Val::Refl(t) => write!(f, "(refl {})", pretty(t.as_ref(), s)),
-        }
     }
 }
 

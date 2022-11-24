@@ -31,14 +31,14 @@ impl TypeCheckState {
     }
 
     fn subtype_impl(&mut self, sub: &Term, sup: &Term) -> Result<()> {
-        use Val::*;
+        use Term::*;
         match (sub, sup) {
             (Universe(sub_l), Universe(sup_l)) if sub_l <= sup_l => Ok(()),
             (Pi(a, c0), Pi(b, c1)) if a.licit == b.licit => {
                 Unify::unify(self, &a.ty, &b.ty)?;
                 self.compare_closure(c0, c1, |tcs, a, b| match (a, b) {
                     // Covariance
-                    (Term::Whnf(left), Term::Whnf(right)) => tcs.subtype(left, right),
+                    (left, right) if left.is_whnf() && right.is_whnf() => tcs.subtype(left, right),
                     (a, b) => Unify::unify(tcs, a, b),
                 })
             }
@@ -128,7 +128,7 @@ impl Unify for Term {
     fn unify(tcs: &mut TypeCheckState, left: &Self, right: &Self) -> Result<()> {
         use Term::*;
         match (left, right) {
-            (Whnf(left), Whnf(right)) => Unify::unify(tcs, left, right),
+            (left, right) if left.is_whnf() && right.is_whnf() => tcs.unify_val(left, right),
             (Redex(Func::Index(i), _, a), Redex(Func::Index(j), _, b)) if a.len() == b.len() => {
                 Unify::unify(tcs, i, j)?;
                 Unify::unify(tcs, a.as_slice(), b.as_slice())
@@ -203,21 +203,15 @@ impl Unify for ValData {
     }
 }
 
-impl Unify for Val {
-    fn unify(tcs: &mut TypeCheckState, left: &Self, right: &Self) -> Result<()> {
-        tcs.unify_val(left, right)
-    }
-}
-
-fn check_solution(meta: MI, rhs: &Val) -> Result<()> {
+fn check_solution(meta: MI, rhs: &Term) -> Result<()> {
     rhs.try_fold_val((), |(), v| match v {
-        Val::Meta(mi, ..) if mi == &meta => Err(Error::MetaRecursion(*mi)),
+        Term::Meta(mi, ..) if mi == &meta => Err(Error::MetaRecursion(*mi)),
         _ => Ok(()),
     })
 }
 
 impl TypeCheckState {
-    fn unify_meta_with(&mut self, term: &Val, mi: MI) -> Result<()> {
+    fn unify_meta_with(&mut self, term: &Term, mi: MI) -> Result<()> {
         let depth = self.unify_depth;
         match self.meta_ctx().solution(mi).clone() {
             MetaSol::Unsolved => {
@@ -225,7 +219,7 @@ impl TypeCheckState {
                 if self.trace_tc {
                     debug!("{}?{} := {}", self.tc_depth_ws(), mi, term);
                 }
-                let solution = Term::Whnf(term.clone());
+                let solution = term.clone();
                 self.mut_meta_ctx().solve_meta(mi, depth, solution);
                 Ok(())
             }
@@ -256,8 +250,8 @@ impl TypeCheckState {
 
     #[allow(clippy::many_single_char_names)]
     #[track_caller]
-    fn unify_val(&mut self, left: &Val, right: &Val) -> Result<()> {
-        use Val::*;
+    fn unify_val(&mut self, left: &Term, right: &Term) -> Result<()> {
+        use Term::*;
         match (left, right) {
             (Universe(sub_l), Universe(sup_l)) if sub_l == sup_l => Ok(()),
             (Data(left), Data(right)) => Unify::unify(self, left, right),
@@ -292,10 +286,7 @@ impl TypeCheckState {
             (a, b) => {
                 debug!("Got different terms when unifying {} {}", a, b);
 
-                Err(Error::DifferentTerm(
-                    box Term::Whnf(a.clone()),
-                    box Term::Whnf(b.clone()),
-                ))
+                Err(Error::DifferentTerm(box a.clone(), box b.clone()))
             }
         }
     }

@@ -28,11 +28,11 @@ impl Constraint {
     /// Generate abstract substitution \[x := y\].
     pub fn gen_abs_subst(&self, tcs: &TypeCheckState) -> (UID, Expr) {
         match (&self.pat, &self.term) {
-            (PatA::Var(x), Term::Whnf(Val::Var(Var::Bound(y), es))) if es.is_empty() => {
+            (PatA::Var(x), Term::Var(Var::Bound(y), es)) if es.is_empty() => {
                 let x1 = tcs.lookup(*y);
                 (*x, Expr::Var(x1.clone().ident(), x1.name))
             }
-            (PatA::Var(x), Term::Whnf(Val::Cons(con, es))) => (
+            (PatA::Var(x), Term::Cons(con, es)) => (
                 *x,
                 if es.is_empty() {
                     Expr::Cons(con.name.clone(), con.cons_gi)
@@ -42,11 +42,11 @@ impl Constraint {
                         Vec1::try_from_vec(
                             es.iter()
                                 .map(|e| match e {
-                                    Term::Whnf(Val::Var(Var::Bound(y), es)) if es.is_empty() => {
+                                    Term::Var(Var::Bound(y), es) if es.is_empty() => {
                                         let x1 = tcs.lookup(*y);
                                         Expr::Var(x1.clone().ident(), x1.name)
                                     }
-                                    Term::Whnf(Val::Cons(con, es)) if es.is_empty() => {
+                                    Term::Cons(con, es) if es.is_empty() => {
                                         Expr::Cons(con.name.clone(), con.cons_gi)
                                     }
                                     _ => {
@@ -342,7 +342,7 @@ impl LshProblem {
             .find(|(_, x)| (x.pat.is_cons() || x.pat.is_abusrd()) && x.term.is_eta_var());
         if let Some((ct_idx, ct)) = maybe_ct {
             match &ct.ty {
-                Term::Whnf(Val::Data(data)) => match ct.term.dbi_view() {
+                Term::Data(data) => match ct.term.dbi_view() {
                     Some(x) => {
                         let data_args = &data.args;
                         match tcs.def(data.def).clone() {
@@ -450,7 +450,7 @@ impl LshProblem {
                         trace!("Solving constraint {}", cst);
                         match (cst.term, cst.pat) {
                             (
-                                Term::Whnf(Val::Cons(con_head, delta_tick_hat_i_lifted)),
+                                Term::Cons(con_head, delta_tick_hat_i_lifted),
                                 PatA::Cons(false, pat_head, es),
                             ) => {
                                 if con_head.cons_gi != pat_head.cons_gi {
@@ -491,10 +491,7 @@ impl LshProblem {
                                         }),
                                 );
                             }
-                            (
-                                Term::Whnf(Val::Cons(con_head, delta_tick_hat_i_lifted)),
-                                PatA::Var(v),
-                            ) => {
+                            (Term::Cons(con_head, delta_tick_hat_i_lifted), PatA::Var(v)) => {
                                 if i == 0 {
                                     if ct_idx == cst_idx {
                                         delta_tick_hat_i = delta_tick_hat_i_lifted.clone();
@@ -509,7 +506,7 @@ impl LshProblem {
                                 }
                                 constraints_new.push(Constraint::new(
                                     PatA::Var(v),
-                                    Term::Whnf(Val::Cons(con_head, delta_tick_hat_i_lifted)),
+                                    Term::Cons(con_head, delta_tick_hat_i_lifted),
                                     cst.ty,
                                 ));
                             }
@@ -542,7 +539,7 @@ impl LshProblem {
                 delta_tick_hat_i
                     .into_iter()
                     .map(|x| match x {
-                        Term::Whnf(Val::Var(Var::Bound(i), _)) => Pat::Var(i),
+                        Term::Var(Var::Bound(i), _) => Pat::Var(i),
                         _ => unreachable!(),
                     })
                     .collect(),
@@ -587,7 +584,7 @@ mod tests {
     use crate::parser::Parser;
     use crate::syntax::core::{Elim, Func, Subst, ValData};
     use crate::syntax::desugar::desugar_prog;
-    use crate::syntax::pattern::Pat::{Cons, Var};
+    use crate::syntax::pattern::Pat::{Cons as ConsPat, Var};
     use crate::syntax::Plicitness::Explicit;
     use crate::syntax::{Bind, ConHead, Ident, Loc};
     use crate::{dsp, pct};
@@ -656,7 +653,7 @@ mod tests {
 
     #[test]
     fn test_build_case_tree() -> eyre::Result<()> {
-        use crate::syntax::pattern::Pat::*;
+        use crate::syntax::pattern::Pat::{Cons as ConsPat, Var};
         use Term::*;
 
         let _ = env_logger::try_init();
@@ -706,7 +703,7 @@ mod tests {
             0,
             [
                 Case {
-                    pattern: Cons(
+                    pattern: ConsPat(
                         false,
                         ConHead {
                             name: Ident {
@@ -720,7 +717,7 @@ mod tests {
                     body: Term::from_dbi(0),
                 },
                 Case {
-                    pattern: Cons(
+                    pattern: ConsPat(
                         false,
                         ConHead {
                             name: Ident {
@@ -735,7 +732,7 @@ mod tests {
                         box Term::from_dbi(1),
                         vec![
                             Case {
-                                pattern: Cons(
+                                pattern: ConsPat(
                                     false,
                                     ConHead {
                                         name: Ident {
@@ -758,7 +755,7 @@ mod tests {
                                 ),
                             },
                             Case {
-                                pattern: Cons(
+                                pattern: ConsPat(
                                     false,
                                     ConHead {
                                         name: Ident {
@@ -816,7 +813,7 @@ mod tests {
 
     #[test]
     fn test_build_case_tree_pairs() -> eyre::Result<()> {
-        use crate::syntax::pattern::Pat::*;
+        use crate::syntax::pattern::Pat::{Cons as ConsPat, Var};
 
         let _ = env_logger::try_init();
         let p = Parser::default();
@@ -857,7 +854,7 @@ mod tests {
         let cte = Term::match_elim(
             0,
             [Case {
-                pattern: Cons(
+                pattern: ConsPat(
                     false,
                     ConHead {
                         name: Ident {
@@ -884,7 +881,7 @@ mod tests {
         let cte = Term::match_elim(
             0,
             [Case {
-                pattern: Cons(
+                pattern: ConsPat(
                     false,
                     ConHead {
                         name: Ident {
@@ -968,11 +965,11 @@ mod tests {
             3,
             [
                 Case {
-                    pattern: Cons(false, zero_ch.clone(), vec![]),
+                    pattern: ConsPat(false, zero_ch.clone(), vec![]),
                     body: Term::cons(zero_ch.clone(), vec![]),
                 },
                 Case {
-                    pattern: Cons(
+                    pattern: ConsPat(
                         false,
                         ConHead {
                             name: Ident {
@@ -1035,7 +1032,7 @@ mod tests {
             2,
             [
                 Case {
-                    pattern: Cons(
+                    pattern: ConsPat(
                         false,
                         ConHead {
                             name: Ident {
@@ -1049,7 +1046,7 @@ mod tests {
                     body: Term::from_dbi(1),
                 },
                 Case {
-                    pattern: Cons(
+                    pattern: ConsPat(
                         false,
                         ConHead {
                             name: Ident {
@@ -1128,7 +1125,7 @@ mod tests {
             0,
             [
                 Case {
-                    pattern: Cons(
+                    pattern: ConsPat(
                         false,
                         ConHead {
                             name: Ident {
@@ -1142,7 +1139,7 @@ mod tests {
                     body: Term::from_dbi(0),
                 },
                 Case {
-                    pattern: Cons(
+                    pattern: ConsPat(
                         false,
                         ConHead {
                             name: Ident {
@@ -1190,7 +1187,7 @@ mod tests {
             1,
             [
                 Case {
-                    pattern: Cons(
+                    pattern: ConsPat(
                         false,
                         ConHead {
                             name: Ident {
@@ -1204,7 +1201,7 @@ mod tests {
                     body: Term::from_dbi(0),
                 },
                 Case {
-                    pattern: Cons(
+                    pattern: ConsPat(
                         false,
                         ConHead {
                             name: Ident {
@@ -1322,7 +1319,7 @@ mod tests {
             0,
             [
                 Case {
-                    pattern: Cons(
+                    pattern: ConsPat(
                         false,
                         ConHead {
                             name: Ident {
@@ -1336,7 +1333,7 @@ mod tests {
                     body: Term::from_dbi(0),
                 },
                 Case {
-                    pattern: Cons(
+                    pattern: ConsPat(
                         false,
                         ConHead {
                             name: Ident {
@@ -1697,7 +1694,7 @@ mod tests {
             0,
             [
                 Case {
-                    pattern: Cons(
+                    pattern: ConsPat(
                         false,
                         ConHead {
                             name: Ident {
@@ -1711,7 +1708,7 @@ mod tests {
                     body: Term::from_dbi(0),
                 },
                 Case {
-                    pattern: Cons(
+                    pattern: ConsPat(
                         false,
                         ConHead {
                             name: Ident {
@@ -1809,7 +1806,7 @@ mod tests {
             0,
             [
                 Case {
-                    pattern: Cons(
+                    pattern: ConsPat(
                         false,
                         ConHead {
                             name: Ident {
@@ -1823,7 +1820,7 @@ mod tests {
                     body: Term::from_dbi(0),
                 },
                 Case {
-                    pattern: Cons(
+                    pattern: ConsPat(
                         false,
                         ConHead {
                             name: Ident {

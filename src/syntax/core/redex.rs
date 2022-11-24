@@ -19,16 +19,16 @@ impl Term {
             return self;
         }
         match self {
-            Term::Whnf(Val::Var(f, mut a)) => {
+            Term::Var(f, mut a) => {
                 a.append(&mut args);
-                Term::Whnf(Val::Var(f, a))
+                Term::Var(f, a)
             }
-            Term::Whnf(Val::Meta(m, mut a)) => {
+            Term::Meta(m, mut a) => {
                 a.append(&mut args);
                 Term::meta(m, a)
             }
-            Term::Whnf(Val::Lam(lam)) => Term::Redex(Func::Lam(lam), Ident::new("<λ>", 0..0), args),
-            Term::Whnf(Val::Cons(c, mut a)) => {
+            Term::Lam(lam) => Term::Redex(Func::Lam(lam), Ident::new("<λ>", 0..0), args),
+            Term::Cons(c, mut a) => {
                 let mut iter = args.into_iter();
                 match iter.next() {
                     None => Term::cons(c, a),
@@ -243,7 +243,29 @@ impl Subst for Term {
 impl SubstWith<'_> for Term {
     fn subst_with(self, subst: Rc<Substitution>, tcs: &'_ mut TypeCheckState) -> Term {
         match self {
-            Term::Whnf(n) => n.subst_with(subst, tcs),
+            Term::Pi(arg, closure) => Term::pi2(
+                arg.unboxed().subst_with(subst.clone(), tcs).boxed(),
+                closure.subst_with(subst, tcs),
+            ),
+            Term::Lam(lam) => Term::Lam(lam.subst_with(subst, tcs)),
+            Term::Cons(name, args) => {
+                let xs = args
+                    .into_iter()
+                    .map(|t| t.subst_with(subst.clone(), tcs))
+                    .collect::<Vec<_>>();
+                Term::cons(name, xs)
+            }
+            Term::Universe(n) => Term::universe(n),
+            Term::Data(info) => Term::data(info.subst_with(subst, tcs)),
+            Term::Meta(m, a) => Term::meta(m, a.subst_with(subst, tcs)),
+            Term::Var(Var::Bound(f), args) => subst
+                .lookup_with(f, tcs)
+                .apply_elim(args.subst_with(subst, tcs)),
+            Term::Var(Var::Free(n), args) => {
+                Term::Var(Var::Free(n), vec![]).apply_elim(args.subst_with(subst, tcs))
+            }
+            Term::Id(id) => id.subst_with(subst, tcs),
+            Term::Refl(t) => Term::Refl(t.subst_with(subst, tcs).boxed()),
             Term::Redex(Func::Index(f), id, args) => {
                 def_app(f, id, vec![], args.subst_with(subst, tcs))
             }
@@ -261,13 +283,13 @@ impl SubstWith<'_> for Term {
                     x, subst, x_inst
                 );
                 match &x_inst {
-                    Term::Whnf(Val::Var(Var::Bound(y), es)) if es.is_empty() => {
+                    Term::Var(Var::Bound(y), es) if es.is_empty() => {
                         let cs = Self::subst_in_match_with_var(&subst, tcs, &x, *y, cs);
                         Term::Match(box x_inst, cs)
                     }
                     _ => {
                         let cs = match &*x {
-                            Term::Whnf(Val::Var(Var::Bound(x), es)) if es.is_empty() => {
+                            Term::Var(Var::Bound(x), es) if es.is_empty() => {
                                 Self::subst_non_var_in_cases_instead_of_var(&subst, tcs, cs, x)
                             }
                             _ => Self::subst_non_var_in_cases_instead_of_non_var(subst, tcs, cs),
@@ -309,43 +331,13 @@ impl SubstWith<'_> for Lambda {
 
 impl SubstWith<'_, Term> for Id {
     fn subst_with(self, subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Term {
-        Term::Whnf(Val::Id(Id {
+        Term::Id(Id {
             tele: self.tele.subst_with(subst.clone(), tcs),
             ty: self.ty.subst_with(subst.clone(), tcs).boxed(),
             paths: self.paths.subst_with(subst.clone(), tcs),
             a1: self.a1.subst_with(subst.clone(), tcs).boxed(),
             a2: self.a2.subst_with(subst, tcs).boxed(),
-        }))
-    }
-}
-
-impl SubstWith<'_, Term> for Val {
-    fn subst_with(self, subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Term {
-        match self {
-            Val::Pi(arg, closure) => Term::pi2(
-                arg.unboxed().subst_with(subst.clone(), tcs).boxed(),
-                closure.subst_with(subst, tcs),
-            ),
-            Val::Lam(lam) => Term::Whnf(Val::Lam(lam.subst_with(subst, tcs))),
-            Val::Cons(name, args) => {
-                let xs = args
-                    .into_iter()
-                    .map(|t| t.subst_with(subst.clone(), tcs))
-                    .collect::<Vec<_>>();
-                Term::cons(name, xs)
-            }
-            Val::Universe(n) => Term::universe(n),
-            Val::Data(info) => Term::data(info.subst_with(subst, tcs)),
-            Val::Meta(m, a) => Term::meta(m, a.subst_with(subst, tcs)),
-            Val::Var(Var::Bound(f), args) => subst
-                .lookup_with(f, tcs)
-                .apply_elim(args.subst_with(subst, tcs)),
-            Val::Var(Var::Free(n), args) => {
-                Term::Whnf(Val::Var(Var::Free(n), vec![])).apply_elim(args.subst_with(subst, tcs))
-            }
-            Val::Id(id) => id.subst_with(subst, tcs),
-            Val::Refl(t) => Term::Whnf(Val::Refl(t.subst_with(subst, tcs).boxed())),
-        }
+        })
     }
 }
 

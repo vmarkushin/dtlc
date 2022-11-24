@@ -47,7 +47,7 @@ pub enum Error {
     #[error("Different name: `{0}` and `{1}`")]
     DifferentName(Ident, Ident),
     #[error("Π components should be of type `Type`, but got: `{0}` and `{1}`")]
-    InvalidPi(Box<Val>, Box<Val>),
+    InvalidPi(Box<Term>, Box<Term>),
     #[error("Blocked: {0}")]
     Blocked(Box<Blocked<Term>>),
     #[error("Expected universe for data declaration `{0}`")]

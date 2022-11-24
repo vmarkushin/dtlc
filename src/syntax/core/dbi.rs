@@ -11,19 +11,6 @@ pub trait DeBruijn {
     fn from_dbi(dbi: DBI) -> Self;
 }
 
-impl DeBruijn for Val {
-    fn dbi_view(&self) -> Option<DBI> {
-        match self {
-            Val::Var(Var::Bound(i), v) if v.is_empty() => Some(*i),
-            _ => None,
-        }
-    }
-
-    fn from_dbi(dbi: DBI) -> Self {
-        Val::Var(Var::Bound(dbi), Default::default())
-    }
-}
-
 impl DeBruijn for Elim {
     fn dbi_view(&self) -> Option<DBI> {
         match self {
@@ -40,13 +27,13 @@ impl DeBruijn for Elim {
 impl DeBruijn for Term {
     fn dbi_view(&self) -> Option<DBI> {
         match self {
-            Term::Whnf(w) => w.dbi_view(),
+            Term::Var(Var::Bound(i), v) if v.is_empty() => Some(*i),
             _ => None,
         }
     }
 
     fn from_dbi(dbi: DBI) -> Self {
-        Term::Whnf(DeBruijn::from_dbi(dbi))
+        Term::Var(Var::Bound(dbi), Default::default())
     }
 }
 

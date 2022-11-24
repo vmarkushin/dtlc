@@ -204,8 +204,36 @@ impl HasMeta for Term {
     fn inline_meta(self, tcs: &mut TypeCheckState) -> Result<Self> {
         match self {
             // Prefer not to simplify
-            Term::Whnf(Val::Meta(mi, elims)) => solve_meta(tcs, mi, elims),
-            Term::Whnf(w) => w.inline_meta(tcs).map(Term::Whnf),
+            Term::Meta(mi, elims) => solve_meta(tcs, mi, elims),
+            Term::Universe(l) => Ok(Term::Universe(l)),
+            Term::Data(info) => info.inline_meta(tcs).map(Term::Data),
+            Term::Pi(t, clos) => {
+                let t = t.unboxed().inline_meta(tcs)?;
+                let clos = clos.inline_meta(tcs)?;
+                Ok(Term::Pi(t.boxed(), clos))
+            }
+            Term::Lam(Lambda(t, clos)) => {
+                let t = t.unboxed().inline_meta(tcs)?;
+                let clos = clos.inline_meta(tcs)?;
+                Ok(Term::Lam(Lambda(t.boxed(), clos)))
+            }
+            Term::Cons(c, ts) => ts.inline_meta(tcs).map(|ts| Term::Cons(c, ts)),
+            Term::Meta(mi, elims) => {
+                let sol = solve_meta(tcs, mi, elims)?;
+                tcs.simplify(sol)
+            }
+            Term::Var(head, args) => args.inline_meta(tcs).map(|a| Term::Var(head, a)),
+            Term::Id(id) => Ok(Term::Id(core::Id::new(
+                id.tele.inline_meta(tcs)?,
+                id.ty.inline_meta(tcs)?,
+                id.paths.inline_meta(tcs)?,
+                id.a1.inline_meta(tcs)?,
+                id.a2.inline_meta(tcs)?,
+            ))),
+            Term::Refl(val) => {
+                let val = val.inline_meta(tcs)?;
+                Ok(Term::Refl(val))
+            }
             Term::Redex(func, id, elims) => {
                 let func = func.inline_meta(tcs)?;
                 let elims = elims.inline_meta(tcs)?;
@@ -265,43 +293,6 @@ fn solve_meta(tcs: &mut TypeCheckState, mut mi: MI, elims: Vec<Elim>) -> Result<
     };
     let elims = elims.inline_meta(tcs)?;
     Ok(sol.apply_elim(elims))
-}
-
-impl HasMeta for Val {
-    fn inline_meta(self, tcs: &mut TypeCheckState) -> Result<Self> {
-        use Val::*;
-        match self {
-            Universe(l) => Ok(Universe(l)),
-            Data(info) => info.inline_meta(tcs).map(Data),
-            Pi(t, clos) => {
-                let t = t.unboxed().inline_meta(tcs)?;
-                let clos = clos.inline_meta(tcs)?;
-                Ok(Pi(t.boxed(), clos))
-            }
-            Lam(Lambda(t, clos)) => {
-                let t = t.unboxed().inline_meta(tcs)?;
-                let clos = clos.inline_meta(tcs)?;
-                Ok(Lam(Lambda(t.boxed(), clos)))
-            }
-            Cons(c, ts) => ts.inline_meta(tcs).map(|ts| Cons(c, ts)),
-            Meta(mi, elims) => {
-                let sol = solve_meta(tcs, mi, elims)?;
-                tcs.simplify(sol)
-            }
-            Var(head, args) => args.inline_meta(tcs).map(|a| Var(head, a)),
-            Id(id) => Ok(Id(core::Id::new(
-                id.tele.inline_meta(tcs)?,
-                id.ty.inline_meta(tcs)?,
-                id.paths.inline_meta(tcs)?,
-                id.a1.inline_meta(tcs)?,
-                id.a2.inline_meta(tcs)?,
-            ))),
-            Refl(val) => {
-                let val = val.inline_meta(tcs)?;
-                Ok(Refl(val))
-            }
-        }
-    }
 }
 
 impl<T: HasMeta, U: HasMeta> HasMeta for (T, U) {

@@ -6,7 +6,7 @@ pub trait FoldVal {
     fn try_fold_val<E, R>(
         &self,
         init: R,
-        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
+        f: impl Fn(R, &Term) -> Result<R, E> + Copy,
     ) -> Result<R, E>;
 }
 
@@ -14,7 +14,7 @@ impl<T: FoldVal> FoldVal for [T] {
     fn try_fold_val<E, R>(
         &self,
         init: R,
-        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
+        f: impl Fn(R, &Term) -> Result<R, E> + Copy,
     ) -> Result<R, E> {
         self.iter().try_fold(init, |a, v| v.try_fold_val(a, f))
     }
@@ -24,7 +24,7 @@ impl FoldVal for Lambda {
     fn try_fold_val<E, R>(
         &self,
         init: R,
-        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
+        f: impl Fn(R, &Term) -> Result<R, E> + Copy,
     ) -> Result<R, E> {
         self.1.try_fold_val(self.0.ty.try_fold_val(init, f)?, f)
     }
@@ -34,7 +34,7 @@ impl FoldVal for Func {
     fn try_fold_val<E, R>(
         &self,
         init: R,
-        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
+        f: impl Fn(R, &Term) -> Result<R, E> + Copy,
     ) -> Result<R, E> {
         match self {
             Func::Index(_) => Ok(init),
@@ -47,7 +47,7 @@ impl FoldVal for Pat {
     fn try_fold_val<E, R>(
         &self,
         init: R,
-        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
+        f: impl Fn(R, &Term) -> Result<R, E> + Copy,
     ) -> Result<R, E> {
         match self {
             Pat::Var(_) => Ok(init),
@@ -63,7 +63,7 @@ impl FoldVal for Case {
     fn try_fold_val<E, R>(
         &self,
         init: R,
-        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
+        f: impl Fn(R, &Term) -> Result<R, E> + Copy,
     ) -> Result<R, E> {
         self.pattern
             .try_fold_val(self.body.try_fold_val(init, f)?, f)
@@ -74,7 +74,7 @@ impl FoldVal for CaseTree {
     fn try_fold_val<E, R>(
         &self,
         init: R,
-        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
+        f: impl Fn(R, &Term) -> Result<R, E> + Copy,
     ) -> Result<R, E> {
         match self {
             CaseTree::Leaf(t) => t.try_fold_val(init, f),
@@ -87,7 +87,7 @@ impl FoldVal for Bind {
     fn try_fold_val<E, R>(
         &self,
         init: R,
-        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
+        f: impl Fn(R, &Term) -> Result<R, E> + Copy,
     ) -> Result<R, E> {
         self.ty.try_fold_val(init, f)
     }
@@ -96,62 +96,13 @@ impl FoldVal for Bind {
 impl FoldVal for Term {
     fn try_fold_val<E, R>(
         &self,
-        init: R,
-        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
+        mut init: R,
+        f: impl Fn(R, &Term) -> Result<R, E> + Copy,
     ) -> Result<R, E> {
         use Term::*;
-        match self {
-            Whnf(val) => val.try_fold_val(init, f),
-            Redex(func, _, args) => args.try_fold_val(func.try_fold_val(init, f)?, f),
-            Match(t, cases) => t.try_fold_val(cases.try_fold_val(init, f)?, f),
-            Ap(tele, ps, t) => t.try_fold_val(ps.try_fold_val(tele.try_fold_val(init, f)?, f)?, f),
+        if self.is_whnf() {
+            init = f(init, self)?;
         }
-    }
-}
-
-impl FoldVal for Elim {
-    fn try_fold_val<E, R>(
-        &self,
-        init: R,
-        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
-    ) -> Result<R, E> {
-        match self {
-            Elim::App(a) => a.try_fold_val(init, f),
-            Elim::Proj(..) => Ok(init),
-        }
-    }
-}
-
-impl FoldVal for Closure {
-    fn try_fold_val<E, R>(
-        &self,
-        init: R,
-        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
-    ) -> Result<R, E> {
-        match self {
-            Closure::Plain(t) => t.try_fold_val(init, f),
-        }
-    }
-}
-
-impl FoldVal for Tele {
-    fn try_fold_val<E, R>(
-        &self,
-        init: R,
-        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
-    ) -> Result<R, E> {
-        self.0.try_fold_val(init, f)
-    }
-}
-
-impl FoldVal for Val {
-    fn try_fold_val<E, R>(
-        &self,
-        init: R,
-        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
-    ) -> Result<R, E> {
-        use Val::*;
-        let init = f(init, self)?;
         match self {
             Cons(_, v) => v.try_fold_val(init, f),
             Data(i) => i.args.try_fold_val(init, f),
@@ -168,7 +119,45 @@ impl FoldVal for Val {
                 f,
             ),
             Refl(val) => val.try_fold_val(init, f),
+            Redex(func, _, args) => args.try_fold_val(func.try_fold_val(init, f)?, f),
+            Match(t, cases) => t.try_fold_val(cases.try_fold_val(init, f)?, f),
+            Ap(tele, ps, t) => t.try_fold_val(ps.try_fold_val(tele.try_fold_val(init, f)?, f)?, f),
         }
+    }
+}
+
+impl FoldVal for Elim {
+    fn try_fold_val<E, R>(
+        &self,
+        init: R,
+        f: impl Fn(R, &Term) -> Result<R, E> + Copy,
+    ) -> Result<R, E> {
+        match self {
+            Elim::App(a) => a.try_fold_val(init, f),
+            Elim::Proj(..) => Ok(init),
+        }
+    }
+}
+
+impl FoldVal for Closure {
+    fn try_fold_val<E, R>(
+        &self,
+        init: R,
+        f: impl Fn(R, &Term) -> Result<R, E> + Copy,
+    ) -> Result<R, E> {
+        match self {
+            Closure::Plain(t) => t.try_fold_val(init, f),
+        }
+    }
+}
+
+impl FoldVal for Tele {
+    fn try_fold_val<E, R>(
+        &self,
+        init: R,
+        f: impl Fn(R, &Term) -> Result<R, E> + Copy,
+    ) -> Result<R, E> {
+        self.0.try_fold_val(init, f)
     }
 }
 
@@ -176,7 +165,7 @@ impl<A: FoldVal, B: FoldVal> FoldVal for (A, B) {
     fn try_fold_val<E, R>(
         &self,
         init: R,
-        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
+        f: impl Fn(R, &Term) -> Result<R, E> + Copy,
     ) -> Result<R, E> {
         self.0.try_fold_val(self.1.try_fold_val(init, f)?, f)
     }
@@ -186,7 +175,7 @@ impl<T: FoldVal> FoldVal for Option<T> {
     fn try_fold_val<E, R>(
         &self,
         init: R,
-        f: impl Fn(R, &Val) -> Result<R, E> + Copy,
+        f: impl Fn(R, &Term) -> Result<R, E> + Copy,
     ) -> Result<R, E> {
         match self {
             Some(t) => t.try_fold_val(init, f),

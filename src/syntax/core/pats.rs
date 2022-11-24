@@ -57,7 +57,7 @@ impl Pat {
         match (t, self) {
             (v, Pat::Var(_)) => Some(Substitution::one(v.clone())),
             (_, Pat::Forced(..)) => Some(Substitution::id()),
-            (Term::Whnf(Val::Cons(con_head, ts)), Pat::Cons(forced, pat_head, ps)) => {
+            (Term::Cons(con_head, ts), Pat::Cons(forced, pat_head, ps)) => {
                 // skipping (implicit) type params passed to the constructor
                 let ts = &ts[ts.len() - ps.len()..];
                 if !*forced && con_head != pat_head {
@@ -231,10 +231,7 @@ mod tests {
             term_new,
             Term::cons(
                 con_head,
-                vec![
-                    Term::from_dbi(1),
-                    Term::Whnf(Val::Var(Var::Free(0), vec![]))
-                ]
+                vec![Term::from_dbi(1), Term::Var(Var::Free(0), vec![])]
             )
         );
         assert_eq!(

@@ -133,7 +133,7 @@ impl TypeCheckState {
     }
 
     /// The checked tele is put into the returned `tcs.gamma`.
-    pub fn check_tele(&mut self, tele: ATele, ty: &Val) -> Result<()> {
+    pub fn check_tele(&mut self, tele: ATele, ty: &Term) -> Result<()> {
         for bind in tele {
             let checked = self.check(bind.ty.as_ref().unwrap(), ty)?;
             let bind = bind.map_term(|_| checked.ast);
@@ -142,7 +142,7 @@ impl TypeCheckState {
         Ok(())
     }
 
-    fn check_cons(&mut self, cons: AConsInfo, data: &DataInfo, ty: &Val) -> Result<ConsInfo> {
+    fn check_cons(&mut self, cons: AConsInfo, data: &DataInfo, ty: &Term) -> Result<ConsInfo> {
         let param_len = self.gamma.len();
         self.check_tele(cons.tele, ty)?;
         let params = self.gamma.0.split_off(param_len);
@@ -168,7 +168,7 @@ impl TypeCheckState {
         let universe1 = data
             .uni
             .ok_or_else(|| Error::ExpectedUniverseForData(data.ident().clone()))?;
-        let t = Val::Universe(universe1);
+        let t = Term::Universe(universe1);
         self.check_tele(data.tele, &t)?;
         let param_len = self.gamma.len();
         let tele = self.gamma.clone().into_tele();
@@ -201,7 +201,7 @@ impl TypeCheckState {
     }
 
     #[allow(unused)]
-    fn tele(&mut self, abs: ATele, mut val: Val) -> Result<(Tele, Val)> {
+    fn tele(&mut self, abs: ATele, mut term: Term) -> Result<(Tele, Term)> {
         use itertools::Itertools;
 
         let mut tele = Vec::new();
@@ -213,15 +213,15 @@ impl TypeCheckState {
                     .cloned()
                     .map(|x| { x.map_term(|y| y.unwrap()) })
                     .join(" -> "),
-                val
+                term
             );
         }
 
         let len = abs.len();
         for bind in abs {
-            let target_ty = match val.into_pi() {
+            let target_ty = match term.into_pi() {
                 Right((target_bind, Closure::Plain(cl))) => {
-                    val = self.simplify(*cl.clone())?;
+                    term = self.simplify(*cl.clone())?;
                     self.simplify(*target_bind.ty.clone())?
                 }
                 Left(v) => {
@@ -237,7 +237,7 @@ impl TypeCheckState {
         }
         self.gamma.0.truncate(self.gamma.len() - len);
 
-        Ok((Tele(tele), val))
+        Ok((Tele(tele), term))
     }
 
     fn check_lam(&mut self, body: Expr, against: Term) -> Result<Term> {

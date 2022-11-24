@@ -11,7 +11,7 @@ pub enum Pat<Ix, Term> {
     Wildcard,
     /// Impossible pattern.
     Absurd,
-    /// Dual to [`crate::syntax::core::Val::Cons`],
+    /// Dual to [`crate::syntax::core::Term::Cons`],
     /// but can be forced (the first member is "is\_forced").
     Cons(bool, ConHead, Vec<Self>),
     /// Forced term as an expression.

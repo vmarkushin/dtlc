@@ -73,7 +73,35 @@ impl Id {
 
 /// Weak-head-normal-form terms, canonical values.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Val {
+pub enum Val {}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Func {
+    Index(GI),
+    Lam(Lambda),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Case {
+    pub pattern: Pat,
+    pub body: Term,
+}
+
+impl Display for Case {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "  | {} => {}", self.pattern, self.body)
+    }
+}
+
+impl Case {
+    pub fn new(pattern: Pat, body: Term) -> Self {
+        Self { pattern, body }
+    }
+}
+
+/// Type for terms.
+#[derive(Debug, PartialEq, Eq, Clone, From)]
+pub enum Term {
     /// Type universe.
     Universe(Universe),
     /// (Co)Data types, fully applied.
@@ -115,50 +143,6 @@ pub enum Val {
     Id(Id),
     /// A special case of `ap` that cannot be reduced further.
     Refl(Box<Term>),
-}
-
-impl Val {
-    pub(crate) fn is_cons(&self) -> bool {
-        matches!(self, Val::Cons(..))
-    }
-
-    #[allow(unused)]
-    pub(crate) fn into_pi(self) -> Either<Val, (Bind<Box<Term>>, Closure)> {
-        match self {
-            Val::Pi(b, c) => Right((b, c)),
-            v => Left(v),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Func {
-    Index(GI),
-    Lam(Lambda),
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Case {
-    pub pattern: Pat,
-    pub body: Term,
-}
-
-impl Display for Case {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "  | {} => {}", self.pattern, self.body)
-    }
-}
-
-impl Case {
-    pub fn new(pattern: Pat, body: Term) -> Self {
-        Self { pattern, body }
-    }
-}
-
-/// Type for terms.
-#[derive(Debug, PartialEq, Eq, Clone, From)]
-pub enum Term {
-    Whnf(Val),
     Redex(Func, Ident, Vec<Elim>),
     /// Data elimination.
     Match(Box<Term>, Vec<Case>),
@@ -217,14 +201,14 @@ pub trait TryIntoPat<Ix, T> {
 impl<Ix: From<DBI>, T: Subst<Term>> TryIntoPat<Ix, T> for Term {
     fn try_into_pat(self) -> Option<Pat<Ix, T>> {
         match self {
-            Term::Whnf(Val::Cons(con_head, params)) => Some(Pat::cons(
+            Term::Cons(con_head, params) => Some(Pat::cons(
                 con_head,
                 params
                     .into_iter()
                     .map(Term::try_into_pat)
                     .collect::<Option<Vec<_>>>()?,
             )),
-            Term::Whnf(Val::Var(Var::Bound(ix), _)) => Some(Pat::Var(Ix::from(ix))),
+            Term::Var(Var::Bound(ix), _) => Some(Pat::Var(Ix::from(ix))),
             _ => None,
         }
     }
@@ -286,7 +270,7 @@ impl BoundFreeVars for Closure {
 impl BoundFreeVars for Term {
     fn bound_free_vars(&mut self, vars: &HashMap<UID, DBI>, depth: usize) {
         match self {
-            Term::Whnf(Val::Var(var, args)) => {
+            Term::Var(var, args) => {
                 args.bound_free_vars(vars, depth);
                 let uid = if let Var::Free(uid) = var {
                     *uid
@@ -324,28 +308,28 @@ impl BoundFreeVars for Term {
                     }
                 }
             }
-            Term::Whnf(Val::Universe(_)) => {}
-            Term::Whnf(Val::Data(data)) => {
+            Term::Universe(_) => {}
+            Term::Data(data) => {
                 data.args.bound_free_vars(vars, depth);
             }
-            Term::Whnf(Val::Pi(x, ret)) => {
+            Term::Pi(x, ret) => {
                 x.ty.bound_free_vars(vars, depth);
                 ret.bound_free_vars(vars, depth);
             }
-            Term::Whnf(Val::Lam(lam)) => {
+            Term::Lam(lam) => {
                 lam.0.ty.bound_free_vars(vars, depth);
                 lam.1.bound_free_vars(vars, depth);
             }
-            Term::Whnf(Val::Cons(_, args)) => {
+            Term::Cons(_, args) => {
                 args.bound_free_vars(vars, depth);
             }
-            Term::Whnf(Val::Meta(_, args)) => {
+            Term::Meta(_, args) => {
                 args.bound_free_vars(vars, depth);
             }
-            Term::Whnf(Val::Id(id)) => {
+            Term::Id(id) => {
                 todo!("bound_free_vars for id")
             }
-            Term::Whnf(Val::Refl(t)) => {
+            Term::Refl(t) => {
                 t.bound_free_vars(vars, depth);
             }
             Term::Ap(tele, ps, t) => {
@@ -355,12 +339,6 @@ impl BoundFreeVars for Term {
                 todo!("bound_free_vars for ap")
             }
         }
-    }
-}
-
-impl From<Id> for Term {
-    fn from(id: Id) -> Self {
-        Term::Whnf(Val::Id(id))
     }
 }
 
@@ -378,43 +356,55 @@ impl Term {
 
     pub fn as_id(&self) -> Option<&Id> {
         match self {
-            Term::Whnf(Val::Id(id)) => Some(id),
+            Term::Id(id) => Some(id),
             _ => None,
         }
     }
 
     pub fn free_var(uid: UID) -> Self {
-        Term::Whnf(Val::Var(Var::Free(uid), Vec::new()))
+        Term::Var(Var::Free(uid), Vec::new())
     }
 
     pub(crate) fn is_cons(&self) -> bool {
-        matches!(self, Term::Whnf(Val::Cons(..)))
+        matches!(self, Term::Cons(..))
     }
 
     pub(crate) fn as_cons(&self) -> Option<(&ConHead, &Vec<Term>)> {
         match self {
-            Term::Whnf(Val::Cons(con_head, args)) => Some((con_head, args)),
+            Term::Cons(con_head, args) => Some((con_head, args)),
             _ => None,
         }
     }
 
     pub(crate) fn is_eta_var(&self) -> bool {
-        matches!(self, Term::Whnf(Val::Var(_, es)) if es.is_empty())
+        matches!(self, Term::Var(_, es) if es.is_empty())
+    }
+
+    pub fn is_whnf(&self) -> bool {
+        matches!(
+            self,
+            Term::Universe(_)
+                | Term::Data(_)
+                | Term::Pi(..)
+                | Term::Lam(..)
+                | Term::Cons(..)
+                | Term::Meta(..)
+                | Term::Var(..)
+                | Term::Id(..)
+                | Term::Refl(..)
+        )
     }
 
     #[allow(unused)]
     pub(crate) fn tele_len(&self) -> usize {
         match self {
-            Self::Whnf(v) => match v {
-                Val::Pi(_, Closure::Plain(t)) => t.tele_len() + 1,
-                _ => 0,
-            },
+            Term::Pi(_, Closure::Plain(t)) => t.tele_len() + 1,
             _ => 0,
         }
     }
 
     pub(crate) fn lam(p0: Bind<Box<Term>>, p1: Term) -> Term {
-        Term::Whnf(Val::Lam(Lambda(p0, Closure::Plain(box p1))))
+        Term::Lam(Lambda(p0, Closure::Plain(box p1)))
     }
 
     pub fn match_case(t: impl Into<Box<Term>>, cs: impl Into<Vec<Case>>) -> Self {
@@ -426,12 +416,12 @@ impl Term {
     }
 
     pub fn is_meta(&self) -> bool {
-        matches!(self, Term::Whnf(Val::Meta(_, _)))
+        matches!(self, Term::Meta(_, _))
     }
 
     pub fn as_meta(&self) -> Option<(MI, &Vec<Elim>)> {
         match self {
-            Term::Whnf(Val::Meta(i, elims)) => Some((*i, elims)),
+            Term::Meta(i, elims) => Some((*i, elims)),
             _ => None,
         }
     }
@@ -445,6 +435,14 @@ impl Term {
     }
 
     pub fn print(&self, tcs: &TypeCheckState) {}
+
+    #[allow(unused)]
+    pub(crate) fn into_pi(self) -> Either<Term, (Bind<Box<Term>>, Closure)> {
+        match self {
+            Term::Pi(b, c) => Right((b, c)),
+            v => Left(v),
+        }
+    }
 }
 
 pub type Bind<T = Term> = super::super::Bind<T>;
@@ -491,16 +489,10 @@ impl ValData {
     }
 }
 
-impl Val {
-    pub fn inductive(ix: GI, params: Vec<Term>) -> Self {
-        Val::Data(ValData::new(ix, params))
-    }
-}
-
 /// Constructors and traversal functions.
 impl Term {
     // pub fn is_type(&self) -> bool {
-    //     use Val::*;
+    //     use Term::*;
     //     match match self {
     //         Term::Whnf(val) => val,
     //         Term::Redex(..) => return false,
@@ -512,24 +504,28 @@ impl Term {
     //     }
     // }
 
+    pub fn inductive(ix: GI, params: Vec<Term>) -> Self {
+        Term::Data(ValData::new(ix, params))
+    }
+
     pub fn is_universe(&self) -> bool {
-        matches!(self, Term::Whnf(Val::Universe(..)))
+        matches!(self, Term::Universe(..))
     }
 
     pub fn cons(name: ConHead, params: Vec<Self>) -> Self {
-        Term::Whnf(Val::Cons(name, params))
+        Term::Cons(name, params)
     }
 
     pub fn data(info: ValData) -> Self {
-        Term::Whnf(Val::Data(info))
+        Term::Data(info)
     }
 
     pub fn meta(index: MI, params: Vec<Elim>) -> Self {
-        Term::Whnf(Val::Meta(index, params))
+        Term::Meta(index, params)
     }
 
     pub fn universe(uni: Universe) -> Self {
-        Term::Whnf(Val::Universe(uni))
+        Term::Universe(uni)
     }
 
     pub fn def(gi: GI, ident: Ident, elims: Vec<Elim>) -> Self {
@@ -556,12 +552,12 @@ impl Term {
     /// Returns telescope with _at most_ `n` members.
     pub fn tele_view_n(self, n: usize) -> (Tele, Self) {
         match self {
-            Term::Whnf(Val::Pi(bind, Closure::Plain(r))) if n != 0 => {
+            Term::Pi(bind, Closure::Plain(r)) if n != 0 => {
                 let (mut view, r) = r.tele_view_n(n - 1);
                 view.push(bind.unboxed());
                 (view, r)
             }
-            Term::Whnf(Val::Lam(Lambda(bind, Closure::Plain(r)))) if n != 0 => {
+            Term::Lam(Lambda(bind, Closure::Plain(r))) if n != 0 => {
                 let (mut view, r) = r.tele_view_n(n - 1);
                 view.push(bind.unboxed());
                 (view, r)
@@ -576,7 +572,7 @@ impl Term {
     // }
 
     pub fn pi2(param: Bind<Box<Term>>, body: Closure) -> Self {
-        Term::Whnf(Val::Pi(param, body))
+        Term::Pi(param, body)
     }
 }
 
