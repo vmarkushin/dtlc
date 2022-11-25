@@ -204,7 +204,7 @@ impl HasMeta for Term {
     fn inline_meta(self, tcs: &mut TypeCheckState) -> Result<Self> {
         match self {
             // Prefer not to simplify
-            Term::Meta(mi, elims) => solve_meta(tcs, mi, elims),
+            // Term::Meta(mi, elims) => solve_meta(tcs, mi, elims),
             Term::Universe(l) => Ok(Term::Universe(l)),
             Term::Data(info) => info.inline_meta(tcs).map(Term::Data),
             Term::Pi(t, clos) => {
@@ -288,7 +288,8 @@ fn solve_meta(tcs: &mut TypeCheckState, mut mi: MI, elims: Vec<Elim>) -> Result<
                 mi = idx;
             }
             Solved(ix, sol) => break (*ix, sol.clone()),
-            Unsolved => return Err(Error::MetaUnsolved(mi)),
+            Unsolved => return Ok(Term::Meta(mi, elims)),
+            // Unsolved => return Err(Error::MetaUnsolved(mi)),
         };
     };
     let elims = elims.inline_meta(tcs)?;

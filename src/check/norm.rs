@@ -1,8 +1,9 @@
-use crate::check::block::{Blocked, Stuck};
+use crate::check::block::{Blocked, NotBlocked};
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
 use crate::syntax::core::{
-    build_subst, Boxed, Case, Closure, Decl, Elim, Func, Simpl, SubstWith, Substitution, Term, Val,
+    build_subst, display_application, Boxed, Case, Closure, Decl, Elim, Func, Simpl, SubstWith,
+    Substitution, Term, Val,
 };
 use crate::syntax::{ConHead, Ident, Loc, GI};
 use std::collections::HashMap;
@@ -27,6 +28,13 @@ pub fn try_match(x: &Term, cs: &[Case]) -> Option<(usize, Rc<Substitution>)> {
 }
 
 impl TypeCheckState {
+    pub fn simplify_blocked(&mut self, term: Blocked<Term>) -> Result<Term> {
+        match term {
+            Blocked::Yes(_, t) => Ok(t),
+            Blocked::No(_, t) => self.simplify(t),
+        }
+    }
+
     /// Normalize a term.
     pub fn simplify(&mut self, term: Term) -> Result<Term> {
         if matches!(term, Term::Match(..)) {
@@ -34,8 +42,8 @@ impl TypeCheckState {
         }
         match term {
             Term::Id(mut id) => {
-                id.a1 = Term::from(self.simplify(*id.a1)?).boxed();
-                id.a2 = Term::from(self.simplify(*id.a2)?).boxed();
+                id.a1 = self.simplify(*id.a1)?.boxed();
+                id.a2 = self.simplify(*id.a2)?.boxed();
                 Ok(Term::Id(id).into())
             }
             t if t.is_whnf() => Ok(t),
@@ -49,15 +57,39 @@ impl TypeCheckState {
                     }
                     Decl::Proj { .. } => unimplemented!(),
                     Decl::Func(func) => {
-                        match self.unfold_func(
+                        let (simp, term) = self.unfold_func(
                             def,
                             id.clone(),
                             func.body.as_ref().unwrap().clone(),
                             elims.clone(),
-                        ) {
+                        )?;
+                        // Ok((simp, term)) =>{
+                            match simp {
+                                Simpl::Yes => {
+                                    self.simplify_blocked(term)
+                                }
+                                Simpl::No => {
+                                    Ok(Term::Redex(
+                                        f,
+                                        id,
+                                        elims
+                                            .into_iter()
+                                            .map(|e| match e {
+                                                Elim::App(t) => {
+                                                    Ok(Elim::App(self.simplify(*t)?.boxed()))
+                                                }
+                                                e => Ok(e),
+                                            })
+                                            .collect::<Result<_>>()?,
+                                    ))
+                                }
+                            }
+                            // self.simplify(term)
+                        // }
+                        // {
                             /*
                             Ok((simp, term)) => match simp {
-                                Simpl::Yes => self.simplify(term),
+                                Simpl::Yes => self.simplify_blocking(term),
                                 Simpl::No => Ok(Term::Redex(
                                     f,
                                     id,
@@ -65,7 +97,7 @@ impl TypeCheckState {
                                         .into_iter()
                                         .map(|e| match e {
                                             Elim::App(t) => {
-                                                Ok(Elim::App(self.simplify(*t)?.boxed()))
+                                                Ok(Elim::App(self.simplify_blocking(*t)?.boxed()))
                                             }
                                             e => Ok(e),
                                         })
@@ -73,19 +105,17 @@ impl TypeCheckState {
                                 )),
                             },
                              */
-                            Ok((_, term)) =>{
-                                self.simplify(term)
-                            }
-                            Err(blockage) => match blockage.stuck {
-                                Stuck::NotBlocked => self.simplify(blockage.anyway),
-                                // Stuck::OnElim(e) => {
-                                //     trace!("stuck on elim: {}", e);
-                                //     // TODO: simplify elims?
-                                //     Ok(Term::Redex(f, id, elims))
-                                // }
-                                _ => Err(Error::Blocked(box blockage)),
-                            },
-                        }
+
+                            // Err(blockage) => match blockage.stuck {
+                            //     NotBlocked::NotBlocked => self.simplify(blockage.anyway),
+                            //     NotBlocked::OnElim(e) => {
+                            //         trace!("stuck on elim: {}", e);
+                            //         // TODO: simplify elims?
+                            //         Ok(Term::Redex(f, id, elims))
+                            //     }
+                            //     _ => Err(Error::Blocked(box blockage)),
+                            // },
+                        // }
                     }
                 },
                 Func::Lam(lam) => {
@@ -105,7 +135,8 @@ impl TypeCheckState {
             },
             Term::Match(x, mut cs) => {
                 debug!("Simplifying match");
-                match try_match(&self.simplify(*x.clone())?, &cs) {
+                let simplified = self.simplify(*x.clone())?;
+                match try_match(&simplified, &cs) {
                     Some((i, sigma)) => {
                         debug!("matched {}th case with σ = {}", i, sigma);
                         let matched_case = cs.remove(i);
@@ -114,10 +145,16 @@ impl TypeCheckState {
                         trace!("matched_case.bodyσ = {}", term1);
                         self.simplify(term1)
                     }
+                    None => {
+                    // TODO: simplify cases?
+                        Ok(Term::Match(simplified.boxed(), cs))
+                    },
+                    /*
                     None => Err(Error::Blocked(box Blocked::new(
-                        Stuck::OnElim(Elim::App(x.clone())),
+                        NotBlocked::OnElim(Elim::App(x.clone())),
                         Term::Match(x, cs),
                     ))),
+                     */
                 }
             }
             Term::Ap(tele, ps, t) => {
@@ -153,10 +190,14 @@ impl TypeCheckState {
     pub fn unfold_func(
         &mut self,
         _def: GI,
-        _func_name: Ident,
+        func_name: Ident,
         body: Term,
         elims: Vec<Elim>,
-    ) -> Result<(Simpl, Term), Blocked<Term>> {
+    ) -> Result<(Simpl, Blocked<Term>)> {
+        let name = func_name.text;
+        if name == "+-zero" {
+            println!("func_name is empty");
+        }
         let mut es = elims;
         let es_len = es.len();
         let (tele, body) = body.tele_view_n(es_len);
@@ -178,7 +219,8 @@ impl TypeCheckState {
             .collect::<HashMap<_, _>>();
         let subst = build_subst(vs, tele_len);
 
-        let s = Simpl::No;
-        Ok((s, body.subst_with(subst, self).apply_elim(rest)))
+        let term = body.subst_with(subst, self).apply_elim(rest);
+        let s = Simpl::Yes;
+        Ok((s, Blocked::No(NotBlocked::NotBlocked, term)))
     }
 }

@@ -52,17 +52,7 @@ impl Display for Term {
             Lam(lam) => lam.fmt(f),
             Cons(name, a) => display_application(f, name, a),
             Data(info) => info.fmt(f),
-            Id(id) => {
-                write!(
-                    f,
-                    "Id (\\{}. {}) ({}) {} {}",
-                    id.ty,
-                    id.tele,
-                    id.paths.iter().join(", "),
-                    id.a1,
-                    id.a2
-                )
-            }
+            Id(id) => id.fmt(f),
             Refl(t) => write!(f, "refl {}", t),
             Redex(Func::Index(_), ident, args) => display_application(f, &ident.text, args),
             Redex(Func::Lam(lam), _ident, args) => {
@@ -81,6 +71,20 @@ impl Display for Term {
                 write!(f, "ap (\\{}. {}) {}", tele, t, ps.iter().join(", "))
             }
         }
+    }
+}
+
+impl Display for Id {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Id (\\{}. {}) ({}) {} {}",
+            self.ty,
+            self.tele,
+            self.paths.iter().join(", "),
+            self.a1,
+            self.a2
+        )
     }
 }
 
@@ -380,10 +384,13 @@ impl Display for Pretty<'_, Elim> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let s = self.s;
         match &self.inner {
-            Elim::App(_) => {}
-            Elim::Proj(_) => {}
-        };
-        todo!()
+            Elim::App(t) => {
+                write!(f, "{}", pretty(&**t, s))
+            }
+            Elim::Proj(_) => {
+                unimplemented!()
+            }
+        }
     }
 }
 

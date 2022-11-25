@@ -43,6 +43,7 @@ impl TypeCheckState {
                 })
             }
             (Id(id_a), Id(id_b)) => {
+                debug!("Checking id subtyping {} <= {}", id_a, id_b);
                 ensure!(
                     id_a.tele.len() == id_b.tele.len(),
                     Error::IdTelePathsLenMismatch
@@ -126,6 +127,7 @@ impl Unify for Case {
 
 impl Unify for Term {
     fn unify(tcs: &mut TypeCheckState, left: &Self, right: &Self) -> Result<()> {
+        debug!("{}Unify {} = {}", tcs.tc_depth_ws(), left, right);
         use Term::*;
         match (left, right) {
             (left, right) if left.is_whnf() && right.is_whnf() => tcs.unify_val(left, right),
@@ -143,7 +145,8 @@ impl Unify for Term {
             (a, b) => {
                 let a_simp = tcs.simplify(a.clone())?;
                 let b_simp = tcs.simplify(b.clone())?;
-                Unify::unify(tcs, &a_simp, &b_simp)
+                tcs.unify_val(&a_simp, &b_simp)
+                // Unify::unify(tcs, &a_simp, &b_simp)
             }
         }
     }
@@ -251,6 +254,7 @@ impl TypeCheckState {
     #[allow(clippy::many_single_char_names)]
     #[track_caller]
     fn unify_val(&mut self, left: &Term, right: &Term) -> Result<()> {
+        debug!("{}Unify val {} = {}", self.tc_depth_ws(), left, right);
         use Term::*;
         match (left, right) {
             (Universe(sub_l), Universe(sup_l)) if sub_l == sup_l => Ok(()),

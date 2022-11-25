@@ -69,11 +69,17 @@ fn + (x : Nat) (y : Nat) : Nat := match y {
     | (suc y') => suc (+ x y')
 }
 
+fn +-zero (x : Nat) : = Nat (+ x zero) (+ zero x)
+    := match x {
+      | zero => refl Nat zero
+      | (suc x') => ?todo1
+    }
+
 -- fn +-comm (x : Nat) (y : Nat) : = Nat (+ x y) (+ y x)
---    := match x {
---         | zero => refl Nat y
---         | (suc x') => refl Nat y
---       }
+--     := match y {
+--       | zero => +-zero x
+--       | (suc y') => ?todo2
+--     }
 
 -- fn fun-ext {A : Type} {B : Type} (f : A -> B) (g : A -> B) (Π (x : A), = _ (f x) (g x)) : = _ f g
 --    := ?todo2

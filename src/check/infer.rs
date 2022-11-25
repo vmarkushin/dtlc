@@ -354,24 +354,26 @@ impl TypeCheckState {
 
     pub(crate) fn check(&mut self, input_term: &Expr, against: &Term) -> Result<TermInfo> {
         if !self.trace_tc {
-            return match self.check_impl(input_term, against) {
-                Err(Error::Blocked(blocked)) if blocked.is_elim() => {
-                    debug!("{}, trying another way", blocked);
-                    self.check_blocked_impl(input_term, against.clone())
-                }
-                x => x,
-            };
+            return self.check_impl(input_term, against);
+            // return match self.check_impl(input_term, against) {
+            //     Err(Error::Blocked(blocked)) if blocked.is_elim() => {
+            //         debug!("{}, trying another way", blocked);
+            //         self.check_blocked_impl(input_term, against.clone())
+            //     }
+            //     x => x,
+            // };
         }
         let depth_ws = self.tc_depth_ws();
         debug!("{}⊢ {} ↑? {}", depth_ws, input_term, against);
         self.tc_deeper();
-        let a = match self.check_impl(input_term, against) {
-            Err(Error::Blocked(blocked)) if blocked.is_elim() => {
-                debug!("{}, trying another way", blocked);
-                self.check_blocked_impl(input_term, against.clone())
-            }
-            x => x,
-        };
+        let a = self.check_impl(input_term, against);
+        // let a = match self.check_impl(input_term, against) {
+        //     Err(Error::Blocked(blocked)) if blocked.is_elim() => {
+        //         debug!("{}, trying another way", blocked);
+        //         self.check_blocked_impl(input_term, against.clone())
+        //     }
+        //     x => x,
+        // };
         let a = a.map_err(|e| {
             debug!("{}Error checking {} ↑ {}", depth_ws, input_term, against);
             e
@@ -429,11 +431,11 @@ impl TypeCheckState {
                     Bind::identified(bind.licit, bind.name, bind_ty.ast, bind.ident.clone());
                 self.gamma.push(bind_new.clone());
                 let body = match self.simplify(*ret_pi.clone()) {
-                    Ok(val) => self.check(ret, &val)?,
-                    Err(Error::Blocked(blocked)) if blocked.is_elim() => {
-                        debug!("Term has blocked, trying checking with check_blocked");
-                        self.check_blocked_impl(ret, blocked.anyway)?
-                    }
+                    Ok(t) => self.check(ret, &t)?,
+                    // Err(Error::Blocked(blocked)) if blocked.is_elim() => {
+                    //     debug!("Term has blocked, trying checking with check_blocked");
+                    //     self.check_blocked_impl(ret, blocked.ignore_blocking())?
+                    // }
                     Err(e) => return Err(e),
                 };
                 self.gamma.pop();

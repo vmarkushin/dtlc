@@ -1,4 +1,4 @@
-use crate::check::block::Blocked;
+use crate::check::block::{Blocked, Blocker};
 use crate::syntax::abs::{Expr, Pat as PatA};
 use crate::syntax::core::{pretty, Elim, Pat, Pretty, Term, Val};
 use crate::syntax::{Ident, Loc, Universe, MI};
@@ -49,7 +49,7 @@ pub enum Error {
     #[error("Π components should be of type `Type`, but got: `{0}` and `{1}`")]
     InvalidPi(Box<Term>, Box<Term>),
     #[error("Blocked: {0}")]
-    Blocked(Box<Blocked<Term>>),
+    Blocked(Blocker, Box<Term>),
     #[error("Expected universe for data declaration `{0}`")]
     ExpectedUniverseForData(Ident),
     #[error("Non-exhaustive `match` expression")]
