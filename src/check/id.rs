@@ -13,6 +13,7 @@ mod tests {
         let p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
+        env.trace_tc = true;
         let mut des = desugar_prog(p.parse_prog_with_std(
             r#"
         data Single : Type

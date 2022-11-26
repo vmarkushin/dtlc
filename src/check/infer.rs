@@ -33,10 +33,10 @@ impl TypeCheckState {
             Expr::Pi(loc, bind, body) => {
                 let (bind_ty_ch, bind_ty_ty) = self.infer((*bind.ty).as_ref().unwrap())?;
                 let bind_ch = bind.clone().map_term(|_| bind_ty_ch.ast);
-                let bind_ty_ty = self.simplify(bind_ty_ty)?;
+                let bind_ty_ty = bind_ty_ty;
                 self.gamma.push(bind_ch);
                 let (body_ch, body_ty) = self.infer(body)?;
-                let body_ty = self.simplify(body_ty)?;
+                let body_ty = body_ty;
                 let bind_ch = self.gamma.pop().expect("Γ is empty");
                 let pi_ty = match (bind_ty_ty, body_ty) {
                     (Term::Universe(a), Term::Universe(b)) => Term::Universe(a.max(b)),
@@ -98,13 +98,13 @@ impl TypeCheckState {
             _ => {
                 let mut elims = Vec::with_capacity(view.args.len());
                 for arg in view.args {
-                    let ty_val = self.simplify(ty)?;
+                    let ty_val = ty;
                     let res: Result<_> = ty_val
                         .into_pi()
                         .map_left(|e| Error::NotPi(e, arg.loc()))
                         .into();
                     let (param, clos) = res?;
-                    let param_ty = self.simplify(*param.ty)?;
+                    let param_ty = *param.ty;
                     let arg = self.check(&arg, &param_ty)?;
                     ty = clos.instantiate_with(arg.ast.clone(), self);
                     elims.push(Elim::app(arg.ast));
@@ -130,13 +130,13 @@ impl TypeCheckState {
 
         let mut args = vec![];
         for arg in view.args {
-            let ty_val = self.simplify(ty)?;
+            let ty_val = ty;
             let res: Result<_> = ty_val
                 .into_pi()
                 .map_left(|e| Error::NotPi(e, arg.loc()))
                 .into();
             let (param, clos) = res?;
-            let param_ty = self.simplify(*param.ty)?;
+            let param_ty = *param.ty;
             let arg = self.check(&arg, &param_ty)?;
             ty = clos.instantiate_with(arg.ast.clone(), self);
             args.push(arg.ast);
@@ -277,15 +277,15 @@ impl TypeCheckState {
                     let x_checked = self.check_bind(x.clone())?;
                     let x_ty = &x_checked.ty;
                     let id_ty = &id.ty;
-                    let val = self.simplify(x_ty.clone())?;
-                    let val1 = self.simplify(*id_ty.clone())?;
+                    let val = x_ty.clone();
+                    let val1 = *id_ty.clone();
                     self.subtype(&val, &val1)?;
                     // self.lets.0.push(Let::new(p));
                     ps_checked.push(p.ast);
                     self.gamma.push(x_checked);
                 }
                 let (id_checked, id_ty) = self.infer(&id.ty)?;
-                let id_checked_val = self.simplify(id_checked.ast.clone())?;
+                let id_checked_val = id_checked.ast.clone();
                 let a1 = self.check(&id.a1, &id_checked_val)?.ast;
                 let a2 = self.check(&id.a2, &id_checked_val)?.ast;
                 let tele = self.gamma.popn(id.tele.len()).into_tele();
@@ -308,8 +308,8 @@ impl TypeCheckState {
                     let x_checked = self.check_bind(x.clone())?;
                     let x_ty = &x_checked.ty;
                     let id_ty = &id.ty;
-                    let val = self.simplify(x_ty.clone())?;
-                    let val1 = self.simplify(*id_ty.clone())?;
+                    let val = x_ty.clone();
+                    let val1 = *id_ty.clone();
                     self.subtype(&val, &val1)?;
                     ps_checked.push(p.ast);
                     self.gamma.push(x_checked);
@@ -388,7 +388,7 @@ impl TypeCheckState {
             if let Some(decl) = self.sigma.get(gi).cloned() {
                 let ty = decl.def_type();
                 let ident = decl.ident();
-                let simplified = self.simplify(ty)?;
+                let simplified = ty;
                 let loc = ident.loc;
                 let res = match decl {
                     Decl::Data(_) => Ok(Term::data(ValData::new(gi, vec![])).at(loc)),
@@ -423,37 +423,19 @@ impl TypeCheckState {
             }
             (Expr::Lam(_info, bind, ret), Term::Pi(bind_pi, ret_pi)) => {
                 let (bind_ty, _bind_ty_ty) = self.infer((*bind.ty).as_ref().unwrap())?;
-                let val1 = self.simplify(bind_ty.ast.clone())?;
-                let val2 = self.simplify(*bind_pi.ty.clone())?;
+                let val1 = bind_ty.ast.clone();
+                let val2 = *bind_pi.ty.clone();
                 self.subtype(&val1, &val2)?;
                 let Closure::Plain(ret_pi) = ret_pi;
                 let bind_new =
                     Bind::identified(bind.licit, bind.name, bind_ty.ast, bind.ident.clone());
                 self.gamma.push(bind_new.clone());
-                let body = match self.simplify(*ret_pi.clone()) {
-                    Ok(t) => self.check(ret, &t)?,
-                    // Err(Error::Blocked(blocked)) if blocked.is_elim() => {
-                    //     debug!("Term has blocked, trying checking with check_blocked");
-                    //     self.check_blocked_impl(ret, blocked.ignore_blocking())?
-                    // }
-                    Err(e) => return Err(e),
-                };
+                let body = self.check(ret, &t)?;
                 self.gamma.pop();
                 Ok(Term::lam(bind_new.boxed(), body.ast).at(bind_ty.loc))
             }
             (Expr::Match(m), against) => self.check_match(m, against.clone()),
             (expr, anything) => self.check_fallback(expr.clone(), anything),
-        }
-    }
-
-    fn check_blocked_impl(&mut self, abs: &Expr, blocked: Term) -> Result<TermInfo> {
-        match (abs, blocked) {
-            (Expr::Match(m), against) => self.check_match(m, against),
-            (expr, anything) => {
-                error!("Checking blocked failed");
-                let val = self.simplify(anything)?;
-                self.check_fallback(expr.clone(), &val)
-            }
         }
     }
 
@@ -483,8 +465,7 @@ impl TypeCheckState {
 
     pub fn check_fallback(&mut self, expr: Expr, expected_type: &Term) -> Result<TermInfo> {
         let (evaluated, inferred) = self.infer(&expr)?;
-        let whnf = self.simplify(inferred)?;
-        self.subtype(&whnf, expected_type)
+        self.subtype(&inferred, expected_type)
             .map_err(|e| e.wrap(expr.loc()))?;
         Ok(evaluated)
     }

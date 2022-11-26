@@ -262,11 +262,11 @@ impl<T: HasMeta> HasMeta for Bind<T> {
 
 impl HasMeta for Closure {
     fn inline_meta(self, mut tcs: &mut TypeCheckState) -> Result<Self> {
-        tcs.unify_depth += 1;
+        tcs.unify_depth_inc(1);
         let closure = match self {
             Closure::Plain(body) => {
                 let res = body.inline_meta(tcs);
-                tcs.unify_depth -= 1;
+                tcs.unify_depth_dec(1);
                 let body = res?;
                 Closure::Plain(body)
             }

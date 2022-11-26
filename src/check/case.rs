@@ -570,9 +570,7 @@ impl LshProblem {
         rhs1.subst_abs(refined_user_pats);
         trace!("rhs refined = {}", rhs1);
         trace!("target = {}", target);
-        let val = tcs.simplify(target)?;
-        trace!("target_val = {}", val);
-        let checked_rhs = tcs.check(&rhs1, &val)?.ast;
+        let checked_rhs = tcs.check(&rhs1, &target)?.ast;
         Ok(CaseTree::Leaf(checked_rhs))
     }
 }

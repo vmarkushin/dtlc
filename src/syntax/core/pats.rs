@@ -123,7 +123,7 @@ impl Term {
         let (subst, vars) = if let Some(x_max) = maybe_x_max {
             let len = x_max - x_min + 1;
             let mut y = x;
-            debug!("[push_in] Binding vars from {}", Var::Free(from_uid));
+            trace!("[push_in] Binding vars from {}", Var::Free(from_uid));
 
             let vars = (from_uid..from_uid + len)
                 .rev()

@@ -120,23 +120,23 @@ impl Term {
                      */
                     let fresh_uid = tcs.next_uid;
                     let popped_body = case.body.clone().pop_out(tcs, x, Some(x_max));
-                    debug!("Popped body: {}", &popped_body);
+                    trace!("Popped body: {}", &popped_body);
                     let popped_body_new = popped_body.subst_with(subst.clone(), tcs);
-                    debug!("Popped body': {}", &popped_body_new);
+                    trace!("Popped body': {}", &popped_body_new);
 
                     let new_pat_term = case.pattern.clone().into_term();
                     case.body =
                         popped_body_new.push_in(tcs, y, Some(y_max), fresh_uid, new_pat_term);
-                    debug!("Pushed in body: {}", &case.body);
+                    trace!("Pushed in body: {}", &case.body);
                 } else {
                     let popped_body = case.body.clone().pop_out(tcs, x, None);
-                    debug!("Popped body: {}", &popped_body);
+                    trace!("Popped body: {}", &popped_body);
                     let popped_body_new = popped_body.subst_with(subst.clone(), tcs);
-                    debug!("Popped body': {}", &popped_body_new);
+                    trace!("Popped body': {}", &popped_body_new);
 
                     case.body = popped_body_new.push_in(tcs, y, None, 0, pat_term);
 
-                    debug!("Pushed in body: {}", &case.body);
+                    trace!("Pushed in body: {}", &case.body);
                 };
                 case
             })
@@ -161,22 +161,22 @@ impl Term {
 
                     let fresh_uid = tcs.next_uid;
                     let popped_body = case.body.clone().pop_out(tcs, x, Some(x_max));
-                    debug!("Popped body: {}", &popped_body);
+                    trace!("Popped body: {}", &popped_body);
                     let popped_body_new = popped_body.subst_with(subst.clone(), tcs);
-                    debug!("Popped body': {}", &popped_body_new);
+                    trace!("Popped body': {}", &popped_body_new);
 
                     case.body =
                         popped_body_new.push_in_without_pat_subst(tcs, x, Some(x_max), fresh_uid);
-                    debug!("Pushed in body: {}", &case.body);
+                    trace!("Pushed in body: {}", &case.body);
                 } else {
                     let popped_body = case.body.clone().pop_out(tcs, x, None);
-                    debug!("Popped body: {}", &popped_body);
+                    trace!("Popped body: {}", &popped_body);
                     let popped_body_new = popped_body.subst_with(subst.clone(), tcs);
-                    debug!("Popped body': {}", &popped_body_new);
+                    trace!("Popped body': {}", &popped_body_new);
 
                     case.body = popped_body_new.push_in_without_pat_subst(tcs, x, None, 0);
 
-                    debug!("Pushed (w/s) in body: {}", &case.body);
+                    trace!("Pushed (w/s) in body: {}", &case.body);
                 };
                 case
             })
@@ -199,13 +199,13 @@ impl Term {
 
                     let fresh_uid = tcs.next_uid;
                     let popped_body = case.body.clone().pop_out_non_var(tcs, x_min, x_max);
-                    debug!("Popped body: {}", &popped_body);
+                    trace!("Popped body: {}", &popped_body);
                     let popped_body_new = popped_body.subst_with(subst.clone(), tcs);
-                    debug!("Popped body': {}", &popped_body_new);
+                    trace!("Popped body': {}", &popped_body_new);
 
                     case.body = popped_body_new
                         .push_in_without_pat_subst_non_var(tcs, x_min, x_max, fresh_uid);
-                    debug!("Pushed in body: {}", &case.body);
+                    trace!("Pushed in body: {}", &case.body);
                 } else {
                     case.body = case.body.subst(new_subst.clone());
                 };

@@ -66,28 +66,52 @@ fn ↓ {A : Type} {B : Type} (id : Id (Type, A, B,)) : 1-1-Corr A B := ?todo_dow
 -- #(lang := "nat-add")
 fn + (x : Nat) (y : Nat) : Nat := match y {
     | zero => x
-    | (suc y') => suc (+ x y')
+    | (suc y) => suc (+ x y)
 }
+
+fn pmap {A : Type} {B : Type} {x : A} {y : A} (f : A -> B) (p : = A x y) : = B (f x) (f y) := ?todo-pmap
+
+fn trans {A : Type} {x : A} {y : A} {z : A} (p : = A x y) (q : = A y z) : = A x z := ?trans
+
+fn sym {A : Type} {x : A} {y : A} (p : = A x y) : = A y x := ?sym
+
+fn +-suc (x : Nat) (y : Nat) : = Nat (+ (suc x) y) (+ x (suc y)) := ?todo-suc
 
 fn +-zero (x : Nat) : = Nat (+ x zero) (+ zero x)
     := match x {
       | zero => refl Nat zero
-      | (suc x') => ?todo1
+      | (suc x) => pmap _ _ _ _ suc (+-zero x)
     }
 
--- fn +-comm (x : Nat) (y : Nat) : = Nat (+ x y) (+ y x)
---     := match y {
---       | zero => +-zero x
---       | (suc y') => ?todo2
---     }
+fn +-comm (x : Nat) (y : Nat) : = Nat (+ x y) (+ y x)
+    := match y {
+      | zero => +-zero x
+      | (suc y) => trans _ _ _ _ (pmap _ _ _ _ suc (+-comm x y)) (sym _ _ _ (+-suc y x))
+    }
 
--- fn fun-ext {A : Type} {B : Type} (f : A -> B) (g : A -> B) (Π (x : A), = _ (f x) (g x)) : = _ f g
---    := ?todo2
+-- fn fun-ext {A : Type} {B : Type} (f : A -> B) (g : A -> B) (Π (x : A), = _ (f x) (g x)) : = _ f g := ?todo-fun-ext
+
+-- \func J
+--     {A : \Type} {a : A}
+--     (B : \Pi (a' : A) -> a = a' -> \Type)
+--     (b : B a idp)
+--     {a' : A} (p : a = a')
+--     : B a' p
+
+data D (DA : Type) (da : DA) : Type1
+    | d
+
+
+--fn bug2 (A : Type)
+--       (B : Π (b : _), ((B b ?todood) -> Type)) : Type := ?safsdf
+
+fn bug (A : Type)
+       (B : Π (b : _), ((D A b) -> Type))
+       (a : A)
+       : B a (d A a) := ?asdasd
 
 -- fn J
---     {A : Type}
---     (a : A)
---     (b : A)
---     (C : Π (x y : A), (Id (_, x, y,)) -> Type)
---     (u : C a a (refl a))
---     (e : Id (A, a, b,)) := ?todo-J
+--     {A : Type} {x : A}
+--     (B : Π (y : A), (= _ x y) -> Type)
+--     (b : B x (refl A x))
+--     (y : A) (p : = A x y) : B y p := ?todo-J

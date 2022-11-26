@@ -37,6 +37,17 @@ impl TypeCheckState {
 
     /// Normalize a term.
     pub fn simplify(&mut self, term: Term) -> Result<Term> {
+        let term_out = self.simplify_impl(term.clone())?;
+        debug!(
+            "{}[simplify]\n\t{}\n\t{}",
+            self.tc_depth_ws(),
+            term,
+            term_out
+        );
+        Ok(term_out)
+    }
+
+    pub fn simplify_impl(&mut self, term: Term) -> Result<Term> {
         if matches!(term, Term::Match(..)) {
             trace!("simplifying match: {}", &term);
         }

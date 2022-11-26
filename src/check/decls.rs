@@ -120,9 +120,8 @@ impl TypeCheckState {
                     let body = self.check_lam(f.expr.unwrap(), signature.clone())?;
                     let body = body.inline_meta(self)?;
                     let term = signature.inline_meta(self)?;
-                    let signature = self.simplify(term)?.into();
                     let func = self.sigma.last_mut().unwrap().as_func_mut();
-                    func.signature = signature;
+                    func.signature = term;
                     func.body = Some(body);
                 }
             }
@@ -221,15 +220,15 @@ impl TypeCheckState {
         for bind in abs {
             let target_ty = match term.into_pi() {
                 Right((target_bind, Closure::Plain(cl))) => {
-                    term = self.simplify(*cl.clone())?;
-                    self.simplify(*target_bind.ty.clone())?
+                    term = *cl.clone();
+                    *target_bind.ty.clone()
                 }
                 Left(v) => {
                     panic!("Expected Π, but got: {}", v);
                 }
             };
             let (inferred, _) = self.infer(bind.ty.as_ref().unwrap())?;
-            let inferred_simp = self.simplify(inferred.ast.clone())?;
+            let inferred_simp = inferred.ast.clone();
             self.subtype(&inferred_simp, &target_ty)?;
             let bind = bind.map_term(|_| inferred.ast);
             self.gamma.push(bind.clone());
@@ -241,7 +240,7 @@ impl TypeCheckState {
     }
 
     fn check_lam(&mut self, body: Expr, against: Term) -> Result<Term> {
-        let against_val = self.simplify(against)?;
+        let against_val = against;
         let body_ch = self.check(&body, &against_val)?.ast;
         Ok(body_ch)
     }

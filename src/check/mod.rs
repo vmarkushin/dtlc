@@ -70,6 +70,8 @@ pub enum Error {
     IdTeleOrSubstsNotEmpty,
     #[error("Not refl {0}")]
     NotRefl(Box<Term>, Loc),
+    #[error("Different telescope lengths: `{0}` and `{1}`")]
+    DifferentTeleLen(usize, usize),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

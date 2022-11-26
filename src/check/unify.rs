@@ -6,7 +6,8 @@ use crate::syntax::core::{
     pretty, Case, Closure, Elim, FoldVal, Func, Lambda, Pat, SubstWith, Substitution, Term, Val,
     ValData,
 };
-use crate::syntax::{GI, MI};
+use crate::syntax::core::{Bind, Tele};
+use crate::syntax::{DBI, GI, MI};
 use std::cmp::Ordering;
 
 impl TypeCheckState {
@@ -60,10 +61,10 @@ impl TypeCheckState {
                 for (i, (a, b)) in id_a.tele.iter().zip(id_b.tele.iter()).enumerate() {
                     let res = Unify::unify(self, &a.ty, &b.ty);
                     if res.is_err() {
-                        self.unify_depth -= i;
+                        self.unify_depth_dec(i);
                         res?;
                     }
-                    self.unify_depth += 1;
+                    self.unify_depth_inc(1);
                 }
                 let res = try {
                     Unify::unify(self, &id_a.ty, &id_b.ty)?;
@@ -71,7 +72,7 @@ impl TypeCheckState {
                     Unify::unify(self, &id_b.a1, &id_b.a2)?;
                     Unify::unify(self, &id_a.a1, &id_b.a1)?;
                 };
-                self.unify_depth -= id_a.tele.len();
+                self.unify_depth_dec(id_a.tele.len());
                 res
             }
             (e, t) => Unify::unify(self, e, t),
@@ -183,13 +184,38 @@ impl TypeCheckState {
         term_cmp: impl FnOnce(&mut TypeCheckState, &Term, &Term) -> Result<()>,
     ) -> Result<()> {
         use Closure::*;
-        self.unify_depth += 1;
+        self.unify_depth_inc(1);
         let res = match (left, right) {
             (Plain(a), Plain(b)) => term_cmp(self, a, b),
         };
-        self.unify_depth -= 1;
+        self.unify_depth_dec(1);
         res?;
         Ok(())
+    }
+
+    pub fn unify_depth_set(&mut self, n: DBI) {
+        self.unify_depth = n;
+        debug!("{}Unify depth ={}", self.tc_depth_ws(), n);
+    }
+
+    pub fn unify_depth_dec(&mut self, n: DBI) {
+        self.unify_depth -= n;
+        debug!(
+            "{}Unify depth -{} -> {}",
+            self.tc_depth_ws(),
+            n,
+            self.unify_depth
+        );
+    }
+
+    pub fn unify_depth_inc(&mut self, n: DBI) {
+        self.unify_depth += n;
+        debug!(
+            "{}Unify depth +{} -> {}",
+            self.tc_depth_ws(),
+            n,
+            self.unify_depth
+        );
     }
 }
 
@@ -203,6 +229,24 @@ impl Unify for ValData {
     fn unify(tcs: &mut TypeCheckState, left: &Self, right: &Self) -> Result<()> {
         Unify::unify(tcs, &left.def, &right.def)?;
         Unify::unify(tcs, left.args.as_slice(), right.args.as_slice())
+    }
+}
+
+impl Unify for Bind {
+    fn unify(tcs: &mut TypeCheckState, left: &Self, right: &Self) -> Result<()> {
+        Unify::unify(tcs, &left.ty, &right.ty)
+    }
+}
+
+impl Unify for Tele {
+    fn unify(tcs: &mut TypeCheckState, left: &Self, right: &Self) -> Result<()> {
+        if left.len() != right.len() {
+            return Err(Error::DifferentTeleLen(left.len(), right.len()));
+        }
+        for (a, b) in left.iter().zip(right.iter()) {
+            Unify::unify(tcs, a, b)?;
+        }
+        Ok(())
     }
 }
 
@@ -220,34 +264,44 @@ impl TypeCheckState {
             MetaSol::Unsolved => {
                 check_solution(mi, term)?;
                 if self.trace_tc {
-                    debug!("{}?{} := {}", self.tc_depth_ws(), mi, term);
+                    debug!("{}?{} := {} at {}", self.tc_depth_ws(), mi, term, depth);
                 }
                 let solution = term.clone();
                 self.mut_meta_ctx().solve_meta(mi, depth, solution);
                 Ok(())
             }
-            MetaSol::Solved(ix, sol) => match ix.cmp(&depth) {
-                Ordering::Equal => {
-                    let sol = self.simplify(*sol)?;
-                    Unify::unify(self, &sol, term)
+            MetaSol::Solved(ix, sol) => {
+                debug!(
+                    "{}using ?{} := {} at {}. cd = {}",
+                    self.tc_depth_ws(),
+                    mi,
+                    sol,
+                    ix,
+                    depth
+                );
+                match ix.cmp(&depth) {
+                    Ordering::Equal => {
+                        let sol = self.simplify(*sol)?;
+                        Unify::unify(self, &sol, term)
+                    }
+                    Ordering::Less => {
+                        let sol = sol.subst_with(Substitution::raise(depth - ix), self);
+                        let sol = self.simplify(sol)?;
+                        Unify::unify(self, &sol, term)
+                    }
+                    Ordering::Greater => {
+                        let sol_ix = ix;
+                        let term = term
+                            .clone()
+                            .subst_with(Substitution::raise(sol_ix - depth), self);
+                        self.unify_depth_set(sol_ix);
+                        let res = Unify::unify(self, &*sol, &term);
+                        self.unify_depth_set(depth);
+                        res?;
+                        Ok(())
+                    }
                 }
-                Ordering::Less => {
-                    let sol = sol.subst_with(Substitution::raise(depth - ix), self);
-                    let sol = self.simplify(sol)?;
-                    Unify::unify(self, &sol, term)
-                }
-                Ordering::Greater => {
-                    let sol_ix = ix;
-                    let term = term
-                        .clone()
-                        .subst_with(Substitution::raise(sol_ix - depth), self);
-                    self.unify_depth = sol_ix;
-                    let res = Unify::unify(self, &*sol, &term);
-                    self.unify_depth = depth;
-                    res?;
-                    Ok(())
-                }
-            },
+            }
         }
     }
 
@@ -287,6 +341,13 @@ impl TypeCheckState {
                 Ok(())
             }
             (Var(i, a), Var(j, b)) if i == j => Unify::unify(self, a.as_slice(), b.as_slice()),
+            (Id(left), Id(right)) => {
+                Unify::unify(self, &left.ty, &right.ty)?;
+                Unify::unify(self, &left.tele, &right.tele)?;
+                Unify::unify(self, &left.a1, &right.a1)?;
+                Unify::unify(self, &left.a2, &right.a2)?;
+                Unify::unify(self, &left.a1, &right.a2)
+            }
             (a, b) => {
                 debug!("Got different terms when unifying {} {}", a, b);
 

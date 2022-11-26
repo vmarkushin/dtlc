@@ -279,7 +279,7 @@ impl BoundFreeVars for Term {
                 };
                 if let Some(ix) = vars.get(&uid) {
                     let new_dbi = *ix + depth;
-                    debug!("bound {} := {}", uid, new_dbi);
+                    trace!("bound {} := {}", uid, new_dbi);
                     *var = Var::Bound(new_dbi);
                 }
             }
