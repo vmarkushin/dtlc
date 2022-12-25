@@ -1,5 +1,5 @@
-use crate::syntax::core::{Tele, Term, TermInfo, Val};
-use crate::syntax::{ConHead, Ident, Loc, Universe, GI};
+use crate::syntax::core::{Tele, Term, TermInfo};
+use crate::syntax::{Ident, Loc, Universe, GI};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ProjInfo {

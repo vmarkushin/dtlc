@@ -1,32 +1,23 @@
-#![allow(non_snake_case, confusable_idents, mixed_script_confusables, dead_code)]
-#![feature(box_syntax, box_patterns, type_alias_impl_trait)]
-#![feature(cell_update)]
-#![feature(generic_associated_types)]
-#![feature(try_blocks)]
-#![feature(never_type)]
-#![feature(closure_lifetime_binder)]
-#![feature(specialization)]
-#![feature(adt_const_params)]
-#![feature(let_else)]
-
-#[allow(
-    clippy::needless_lifetimes,
-    clippy::new_without_default,
-    clippy::just_underscores_and_digits,
-    clippy::clone_on_copy,
-    clippy::type_complexity,
-    clippy::unit_arg,
-    clippy::extra_unused_lifetimes,
-    clippy::match_single_binding,
+#![allow(
+    non_snake_case,
+    confusable_idents,
+    mixed_script_confusables,
     dead_code,
-    unused_imports
+    incomplete_features
 )]
-mod grammar {
-    pub use grammar::*;
-    use lalrpop_util::lalrpop_mod;
-
-    lalrpop_mod!(grammar);
-}
+#![feature(
+    box_syntax,
+    box_patterns,
+    type_alias_impl_trait,
+    cell_update,
+    try_blocks,
+    never_type,
+    closure_lifetime_binder,
+    specialization,
+    adt_const_params,
+    trait_alias
+)]
+#![feature(let_chains)]
 
 #[macro_use]
 extern crate log;

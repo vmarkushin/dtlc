@@ -1,12 +1,9 @@
 use crate::check::state::TypeCheckState;
-use crate::check::{Error, Result};
-use crate::syntax;
+use crate::check::Result;
 use crate::syntax::core::{
-    self, Bind, Case, Closure, Elim, Func, Lambda, Pat, Subst, Substitution, Tele, Term, Val,
-    ValData,
+    self, Bind, Case, Closure, Elim, Func, Lambda, Pat, Subst, Substitution, Tele, Term, ValData,
 };
 use crate::syntax::{DBI, MI};
-use codespan_reporting::term;
 use std::{
     fmt::{Debug, Display, Formatter, Write},
     rc::Rc,
@@ -261,7 +258,7 @@ impl<T: HasMeta> HasMeta for Bind<T> {
 }
 
 impl HasMeta for Closure {
-    fn inline_meta(self, mut tcs: &mut TypeCheckState) -> Result<Self> {
+    fn inline_meta(self, tcs: &mut TypeCheckState) -> Result<Self> {
         tcs.unify_depth_inc(1);
         let closure = match self {
             Closure::Plain(body) => {

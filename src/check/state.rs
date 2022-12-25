@@ -1,6 +1,6 @@
 use crate::check::meta::MetaContext;
 use crate::syntax::core::{
-    Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, SubstWith, Substitution, Term, Val, Var,
+    Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, SubstWith, Substitution, Term, Var,
 };
 use crate::syntax::{LangItem, DBI, GI, UID};
 use std::collections::HashMap;

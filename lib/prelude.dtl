@@ -46,7 +46,7 @@ data Id {A : Type} (x : A) (y : A) : Type1
 fn = {A : Type} (x : A) (y : A) := Id (A, x, y,)
 
 #(lang := "ap")
-fn ap {A : Telescope -> Type} (f : Π (es : Telescope), A) (ps : List Id) : Id (A, _, _,) := ?compiler-built-in
+fn ap {A : Telescope -> Type} (f : Telescope -> A) (ps : List Id) : Id (A, _, _,) := ?compiler-built-in
 
 fn refl (A : Type) (a : A) := ap a
 
@@ -54,8 +54,8 @@ fn is-contr (A : Type) (x : A) : Type1 := Σ _ (lam (y : A) => = _ x y)
 
 fn 1-1-Corr (A : Type) (B : Type) :=
     Σ-l2 _ (lam (R : (A -> B -> Type)) => Pair-l1
-        (Π (a : A), is-contr _ (Σ _ (lam (b : B) => R a b)))
-        (Π (b : B), is-contr _ (Σ _ (lam (a : A) => R a b))))
+        ((a : A) -> (is-contr _ (Σ _ (lam (b : B) => R a b))))
+        ((b : B) -> (is-contr _ (Σ _ (lam (a : A) => R a b)))))
 
 #(lang := "corr-up")
 fn ↑ {A : Type} {B : Type} (R : 1-1-Corr A B) : Id (Type, A, B,) := ?todo_up
@@ -89,7 +89,7 @@ fn +-comm (x : Nat) (y : Nat) : = Nat (+ x y) (+ y x)
       | (suc y) => trans _ _ _ _ (pmap _ _ _ _ suc (+-comm x y)) (sym _ _ _ (+-suc y x))
     }
 
--- fn fun-ext {A : Type} {B : Type} (f : A -> B) (g : A -> B) (Π (x : A), = _ (f x) (g x)) : = _ f g := ?todo-fun-ext
+-- fn fun-ext {A : Type} {B : Type} (f : A -> B) (g : A -> B) ((x : A) -> (= _ (f x) (g x))) : = _ f g := ?todo-fun-ext
 
 -- \func J
 --     {A : \Type} {a : A}
@@ -103,15 +103,15 @@ data D (DA : Type) (da : DA) : Type1
 
 
 --fn bug2 (A : Type)
---       (B : Π (b : _), ((B b ?todood) -> Type)) : Type := ?safsdf
+--       (B : (b : _) -> ((B b ?todood) -> Type)) : Type := ?safsdf
 
 fn bug (A : Type)
-       (B : Π (b : _), ((D A b) -> Type))
+       (B : (b : _) -> ((D A b) -> Type))
        (a : A)
        : B a (d A a) := ?asdasd
 
 -- fn J
 --     {A : Type} {x : A}
---     (B : Π (y : A), (= _ x y) -> Type)
+--     (B : (y : A) -> (= _ x y) -> Type)
 --     (b : B x (refl A x))
 --     (y : A) (p : = A x y) : B y p := ?todo-J

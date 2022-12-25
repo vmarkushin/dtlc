@@ -2,11 +2,9 @@ use crate::syntax;
 use crate::syntax::core::display_application;
 use crate::syntax::surf::Literal;
 use crate::syntax::{pattern, Ident, Loc, Plicitness, Universe, GI, MI, UID};
-use derive_more::Deref;
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::ops::Deref;
 use std::rc::Rc;
 use vec1::Vec1;
 
@@ -172,7 +170,7 @@ impl Expr {
                 cs.iter_mut().for_each(|x| x.subst_abs(subst.clone()));
             }
             Expr::Lit(..) => {}
-            Expr::Id(_, id) => {
+            Expr::Id(_, _id) => {
                 todo!()
             }
             Expr::Ap(_, _, _, _) => {

@@ -53,10 +53,10 @@ impl<Ix, Term> Pat<Ix, Term> {
     /// [norell_phd](Ulf Norell's PhD, page. 35)
     pub fn vars(&self) -> Vec<Ix>
     where
-        Ix: Copy,
+        Ix: Clone,
     {
         match self {
-            Pat::Var(ix) => vec![*ix],
+            Pat::Var(ix) => vec![ix.clone()],
             Pat::Wildcard => vec![],
             Pat::Absurd => vec![],
             Pat::Cons(_, _, args) => args.iter().flat_map(|arg| arg.vars()).collect(),

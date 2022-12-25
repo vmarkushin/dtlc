@@ -1,38 +1,225 @@
-use crate::grammar::{DeclParser, ExprParser, ProgParser};
+use crate::syntax::core::Boxed;
+use crate::syntax::surf::*;
 use crate::syntax::surf::{Decl, Expr, Prog};
-use crate::token::{lexer, Position, Token};
+use crate::syntax::Plicitness::{Explicit, Implicit};
+use crate::syntax::{Ident, Loc};
+use crate::syntax::{Plicitness, Universe};
+use crate::token::Token;
+use ariadne::{Color, Config, Fmt, Label, Report, ReportKind, Source};
+use chumsky::prelude::end;
+use chumsky::prelude::*;
+use chumsky::Parser as _;
+use chumsky::Stream;
 use codespan_reporting::files::SimpleFile;
+use itertools::Itertools;
+use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::fmt::Formatter;
+use std::fmt::{Debug, Display};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
+use vec1::Vec1;
 
-pub type ParseError<'a> = lalrpop_util::ParseError<Position, Token<'a>, &'static str>;
+pub type ParseError<'a> = Simple<Token<'a>, Loc>;
+const UNIT: &() = &();
+
+fn err_to_static<'a>(e: ParseError<'a>) -> ParseError<'static> {
+    e.map(|x| match x {
+        Token::__Unused(_) => Token::__Unused(UNIT),
+        Token::Universe(x) => Token::Universe(x),
+        Token::Pi => Token::Pi,
+        Token::Ident(x) => Token::Ident(x),
+        Token::Data => Token::Data,
+        Token::Codata => Token::Codata,
+        Token::Match => Token::Match,
+        Token::At => Token::At,
+        Token::Hash => Token::Hash,
+        Token::Colon => Token::Colon,
+        Token::Comma => Token::Comma,
+        Token::Dot => Token::Dot,
+        Token::DArrow => Token::DArrow,
+        Token::Lam => Token::Lam,
+        Token::Fn => Token::Fn,
+        Token::Let => Token::Let,
+        Token::Pipe => Token::Pipe,
+        Token::RArrow => Token::RArrow,
+        Token::Underscore => Token::Underscore,
+        Token::Bang => Token::Bang,
+        Token::Question => Token::Question,
+        Token::MetaIdent(x) => Token::MetaIdent(x),
+        Token::Nat(x) => Token::Nat(x),
+        Token::Str(x) => Token::Str(x),
+        Token::LBrace => Token::LBrace,
+        Token::RBrace => Token::RBrace,
+        Token::LBracket => Token::LBracket,
+        Token::RBracket => Token::RBracket,
+        Token::LParen => Token::LParen,
+        Token::RParen => Token::RParen,
+        Token::Assignment => Token::Assignment,
+        Token::Whitespace => Token::Whitespace,
+        Token::Comment => Token::Comment,
+    })
+}
+
+const FORBIDDEN: &str = "(){}, \n\t\r";
 
 pub struct Parser {
-    expr: ExprParser,
-    decl: DeclParser,
-    prog: ProgParser,
     file: SimpleFile<String, String>,
+    scope: Vec<Ident>,
+    should_refine: bool,
 }
 
 impl Parser {
-    pub fn parse_expr<'inp>(&self, input: &'inp str) -> Result<Expr, ParseError<'inp>> {
-        let tokens = lexer(input);
-        self.expr.parse(tokens)
+    fn parse_using<'inp, T: Display + Debug>(
+        &self,
+        parser: impl chumsky::Parser<Token<'static>, T, Error = ParseError<'static>>,
+        input: &'inp str,
+    ) -> Result<T, ParseError<'inp>> {
+        let len = input.chars().count();
+        let stream = Stream::<_, Loc, _>::from_iter(
+            Loc::new(len, len + 1),
+            Box::new(
+                input
+                    .chars()
+                    .enumerate()
+                    .map(|(i, c)| (c, Loc::new(i, i + 1))),
+            ),
+        );
+        let additional_tokens = self
+            .scope
+            .iter()
+            .map(|id| id.text.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let (tokens, les) = lexer(additional_tokens).parse_recovery(stream);
+        let mut out = None;
+        let mut err = None;
+        let es = if let Some(tokens) = tokens {
+            let toks = tokens.iter().map(|t| format!("{}", t.0)).join(" ");
+            println!("tokens: {toks}",);
+            // println!("tokens: {toks}\n{tokens:#?}",);
+            let (e, es) = parser.then_ignore(end()).parse_recovery(Stream::from_iter(
+                Loc::new(len, len + 1),
+                tokens.into_iter(),
+            ));
+            out = e;
+            err = es.first().cloned();
+            es
+        } else {
+            vec![]
+        };
+
+        les.into_iter()
+            .map(|e| e.map(|c| c.to_string()))
+            .chain(es.into_iter().map(|e| e.map(|tok| tok.to_string())))
+            .for_each(|e| {
+                let report = Report::build(ReportKind::Error, (), e.span().start);
+                let report = match e.reason() {
+                    chumsky::error::SimpleReason::Unclosed { span, delimiter } => report
+                        .with_message(format!(
+                            "Unclosed delimiter {}",
+                            delimiter.fg(Color::Yellow)
+                        ))
+                        .with_label(
+                            Label::new(span.clone())
+                                .with_message(format!(
+                                    "Unclosed delimiter {}",
+                                    delimiter.fg(Color::Yellow)
+                                ))
+                                .with_color(Color::Yellow),
+                        )
+                        .with_label(
+                            Label::new(e.span())
+                                .with_message(format!(
+                                    "Must be closed before this {}",
+                                    e.found()
+                                        .unwrap_or(&"end of file".to_string())
+                                        .fg(Color::Red)
+                                ))
+                                .with_color(Color::Red),
+                        ),
+                    chumsky::error::SimpleReason::Unexpected => {
+                        let unexpected = if e.found().is_some() {
+                            "Unexpected token in input"
+                        } else {
+                            "Unexpected end of input"
+                        };
+                        report
+                            .with_message(if e.expected().len() != 0 {
+                                format!(
+                                    "{unexpected}, expected {}",
+                                    e.expected()
+                                        .map(|expected| match expected {
+                                            Some(expected) => expected.to_string(),
+                                            None => "end of input".to_string(),
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                )
+                            } else {
+                                format!("{unexpected}")
+                            })
+                            .with_label(
+                                Label::new(e.span())
+                                    .with_message(format!(
+                                        "Unexpected token {}",
+                                        e.found()
+                                            .unwrap_or(&"end of file".to_string())
+                                            .fg(Color::Red)
+                                    ))
+                                    .with_color(Color::Red),
+                            )
+                    }
+                    chumsky::error::SimpleReason::Custom(msg) => {
+                        report.with_message(msg).with_label(
+                            Label::new(e.span())
+                                .with_message(format!("{}", msg.fg(Color::Red)))
+                                .with_color(Color::Red),
+                        )
+                    }
+                };
+                report.finish().print(Source::from(input)).unwrap();
+            });
+
+        if let Some(e) = out {
+            println!("e: {}", e);
+            Ok(e)
+        } else {
+            Err(err.take().unwrap())
+        }
     }
 
-    pub fn parse_decl<'inp>(&self, input: &'inp str) -> Result<Decl, ParseError<'inp>> {
-        let tokens = lexer(input);
-        self.decl.parse(tokens)
+    pub fn parse_expr<'inp>(&mut self, input: &'inp str) -> Result<Expr, ParseError<'inp>> {
+        let mut expr = self.parse_using(self.expr(), input)?;
+        if self.should_refine {
+            self.refine(&mut expr)?;
+        }
+        Ok(expr)
     }
 
-    pub fn parse_prog<'inp>(&self, input: &'inp str) -> Result<Prog, ParseError<'inp>> {
-        let tokens = lexer(input);
-        self.prog.parse(tokens)
+    pub fn parse_decl<'inp>(&mut self, input: &'inp str) -> Result<Decl, ParseError<'inp>> {
+        let mut decl = self.parse_using(self.decl(), input)?;
+        if self.should_refine {
+            self.refine_decl(&mut decl)?;
+        }
+        Ok(decl)
+    }
+
+    pub fn parse_prog<'inp>(&mut self, input: &'inp str) -> Result<Prog, ParseError<'inp>> {
+        let mut prog = self.parse_using(self.prog(), input)?;
+        if self.should_refine {
+            for decl in prog.0.iter_mut() {
+                self.refine_decl(decl)?;
+            }
+        }
+        Ok(prog)
     }
 
     pub fn parse_prog_with_std<'inp>(
-        &self,
+        &mut self,
         input: &'inp str,
         path: Option<PathBuf>,
     ) -> Result<Prog, ParseError<'inp>> {
@@ -40,42 +227,885 @@ impl Parser {
         let content = fs::read_to_string(path.join("prelude.dtl")).unwrap();
         let mut std = self.parse_prog(&content).unwrap();
         let prog = self.parse_prog(input)?;
-        std.extend(prog);
+        std.0.extend(prog.0);
         Ok(std)
+    }
+
+    pub fn new() -> Self {
+        let file = SimpleFile::new("".to_owned(), "".to_owned());
+        Self {
+            file,
+            scope: vec![],
+            should_refine: false,
+        }
+    }
+
+    pub fn scoped(self, scope: Vec<Ident>) -> Self {
+        Self { scope, ..self }
+    }
+
+    pub fn expr(
+        &self,
+    ) -> impl chumsky::Parser<Token<'static>, Expr, Error = ParseError<'static>> + Clone {
+        recursive(|expr: Recursive<_, Expr, _>| {
+            let prim_expr = prim_expr(&expr);
+            let pattern = pattern(&prim_expr);
+            let case = case(&expr, &pattern);
+            let forall_params = forall_params(&expr);
+            let param_parser = param(&expr, &prim_expr);
+            let pi = (param_parser.clone().then_ignore(just(Token::RArrow)))
+                .repeated()
+                .at_least(1)
+                .debug("parsed pi and waiting for <expr>")
+                .then(expr.clone())
+                .debug("pi");
+            let lam = just(Token::Lam)
+                .ignore_then(
+                    forall_params.clone().or(forall_params
+                        .delimited_by(just(Token::LParen), just(Token::RParen))
+                        .repeated()
+                        .at_least(1)
+                        .map(|v| Vec1::try_from_vec(v.into_iter().flatten().collect()).unwrap())),
+                )
+                .then_ignore(just(Token::DArrow))
+                .then(expr.clone())
+                .debug("lam");
+            let mat = just(Token::Match)
+                .ignore_then(expr.clone().separated_by(just(Token::Comma)).at_least(1))
+                .then_ignore(just(Token::LBrace))
+                .then(case.clone().repeated())
+                .then_ignore(just(Token::RBrace))
+                .debug("mat");
+            let app = prim_expr
+                .clone()
+                .then(prim_expr.clone().repeated())
+                .debug("app");
+
+            lam.map(|(ps, body)| Expr::Lam(ps, body.boxed()))
+                .or(mat
+                    .map(|(exprs, cases)| Expr::Match(Vec1::try_from_vec(exprs).unwrap(), cases)))
+                .or(pi.map(|(ps, ret)| {
+                    let ps = ps.into_iter().flatten().collect::<Vec<_>>();
+                    Expr::Pi(Vec1::try_from_vec(ps).unwrap(), ret.boxed())
+                }))
+                .or(app.map(|(f, args)| {
+                    if args.is_empty() {
+                        f
+                    } else {
+                        Expr::App(Box::new(f), Vec1::try_from_vec(args).unwrap())
+                    }
+                }))
+        })
+        .debug("expr")
+    }
+
+    pub fn decl(&self) -> impl chumsky::Parser<Token<'static>, Decl, Error = ParseError<'static>> {
+        let expr = self.expr();
+        let prim_expr = prim_expr(&expr);
+        let param_parser = param(&expr, &prim_expr);
+        let params = params(&param_parser);
+        let ident = ident_parser();
+
+        let meta_attrs = meta_attr().repeated();
+        let func = meta_attrs
+            .clone()
+            .then_ignore(just(Token::Fn))
+            .then(ident.clone())
+            .then(params.clone())
+            .then(just(Token::Colon).ignore_then(expr.clone()).or_not())
+            .then_ignore(just(Token::Assignment))
+            .then(expr.clone());
+        let data = meta_attrs
+            .then_ignore(just(Token::Data))
+            .then(ident.clone())
+            .then(params.clone())
+            .then(just(Token::Colon).ignore_then(universe_parser()).or_not())
+            .then(cons(&params).repeated());
+        func.map(|((((meta_attrs, name), params), ret_ty), body)| {
+            Decl::from(Func {
+                name,
+                params: params.into(),
+                ret_ty,
+                body,
+                meta_attrs,
+            })
+        })
+        .or(
+            data.map(|((((meta_attrs, name), ty_params), universe), cons)| {
+                Decl::from(Data {
+                    sig: NamedTele::new(name, ty_params.into()),
+                    universe,
+                    cons,
+                    meta_attrs,
+                })
+            }),
+        )
+        .recover_with(skip_then_retry_until([
+            Token::Fn,
+            Token::Data,
+            Token::Codata,
+        ]))
+    }
+
+    pub fn prog(&self) -> impl chumsky::Parser<Token<'static>, Prog, Error = ParseError<'static>> {
+        self.decl().repeated().map(Prog)
+    }
+
+    fn push(&mut self, name: Ident) {
+        self.scope.push(name);
+    }
+
+    fn pop(&mut self) {
+        self.scope.pop();
+    }
+
+    pub fn refine<'inp>(&mut self, expr: &'inp mut Expr) -> Result<(), ParseError<'static>> {
+        debug!(target: "parser", "refining {}", expr);
+        self.traverse_scoped(expr, |var, scope| {
+            let mut parser = Parser::new().scoped(scope);
+            debug!(target: "parser", "Parse scoped: {:?}", var);
+            let mut e = parser
+                .parse_using(parser.expr(), &var)
+                .map_err(err_to_static)?;
+            debug!(target: "parser", "Parse scoped out: {}", e);
+            if let Expr::Var(v) = &e {
+                if v == var {
+                    return Ok(None);
+                }
+            }
+            parser.refine(&mut e)?;
+            return Ok(Some(e));
+        })
+    }
+
+    pub fn refine_decl<'inp>(&mut self, decl: &'inp mut Decl) -> Result<(), ParseError<'static>> {
+        match decl {
+            Decl::Data(_) => {
+                // TODO: refine data
+                warn!("Data refinement not implemented");
+            }
+            Decl::Fn(f) => {
+                let mut l = 0;
+                for p in &mut f.params.0 {
+                    if let Some(e) = &mut p.ty {
+                        self.refine(e)?;
+                    }
+                    if let Some(ident) = &p.name {
+                        self.push(ident.clone());
+                        l += 1;
+                    }
+                }
+                if let Some(e) = &mut f.ret_ty {
+                    self.refine(e)?;
+                }
+                self.refine(&mut f.body)?;
+                for _ in 0..l {
+                    self.pop();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn traverse_scoped<'a>(
+        &mut self,
+        expr: &'a mut Expr,
+        f: impl for<'b> Fn(&'b Ident, Vec<Ident>) -> Result<Option<Expr>, ParseError<'static>> + Clone,
+    ) -> Result<(), ParseError<'static>> {
+        match expr {
+            Expr::Var(ident) => {
+                if let Some(e2) = f(ident, self.scope.clone()).map_err(err_to_static)? {
+                    *expr = e2;
+                }
+            }
+            Expr::Lam(ps, e) => {
+                let mut l = 0;
+                for p in ps {
+                    if let Some(ty) = &mut p.ty {
+                        self.traverse_scoped(ty, f.clone())?;
+                    }
+                    if let Some(name) = &p.name {
+                        self.push(name.clone());
+                        l += 1;
+                    }
+                }
+                self.traverse_scoped(e, f.clone())?;
+                for _ in 0..l {
+                    self.pop();
+                }
+            }
+            Expr::App(ff, args) => {
+                self.traverse_scoped(ff, f.clone())?;
+                for arg in args {
+                    self.traverse_scoped(arg, f.clone())?;
+                }
+            }
+            Expr::Universe(_, _) => {}
+            Expr::Pi(ps, e) => {
+                let mut l = 0;
+                for p in ps {
+                    if let Some(ty) = &mut p.ty {
+                        self.traverse_scoped(ty, f.clone())?;
+                    }
+                    if let Some(name) = &p.name {
+                        self.push(name.clone());
+                        l += 1;
+                    }
+                }
+                self.traverse_scoped(e, f.clone())?;
+                for _ in 0..l {
+                    self.pop();
+                }
+            }
+            Expr::Tuple(_, es) => {
+                for e in es {
+                    self.traverse_scoped(e, f.clone())?;
+                }
+            }
+            Expr::Hole(_) => {}
+            Expr::Match(es, cases) => {
+                for e in es {
+                    self.traverse_scoped(e, f.clone())?;
+                }
+                for c in cases {
+                    let mut l = 0;
+                    for p in &mut c.patterns {
+                        let vec = p.vars();
+                        match p {
+                            Pat::Var(_) => {} // TODO: refine pattern var
+                            Pat::Wildcard => {}
+                            Pat::Absurd => {}
+                            Pat::Cons(_, _, _) => {}
+                            Pat::Forced(e) => {
+                                self.traverse_scoped(e, f.clone())?;
+                            }
+                        }
+                        for var in vec {
+                            self.push(var.clone());
+                            l += 1;
+                        }
+                    }
+                    if let Some(e) = &mut c.body {
+                        self.traverse_scoped(e, f.clone())?;
+                    }
+                    for _ in 0..l {
+                        self.pop();
+                    }
+                }
+            }
+            Expr::Lit(_, _) => {}
+        }
+        Ok(())
+    }
+
+    fn funcs_parser(
+        &self,
+    ) -> impl chumsky::Parser<Token<'static>, HashMap<Ident, Operator>, Error = ParseError<'static>>
+           + Clone {
+        let expr = self.expr();
+        let prim_expr = prim_expr(&expr);
+        let param_parser = param(&expr, &prim_expr);
+        let params = params(&param_parser);
+        let ident = ident_parser();
+
+        let func = just(Token::Fn)
+            .ignore_then(
+                ident
+                    .map_with_span(|name, span| (name, span))
+                    .labelled("function name"),
+            )
+            .then(params)
+            .map(|((name, name_span), params)| {
+                let params_num = params.len();
+                let def = Operator::from_ident(Associativity::None, 10, &name, params_num);
+                ((name, name_span), def)
+            })
+            .then_ignore(take_until(just(Token::Fn).rewind().ignored().or(end())))
+            .labelled("function");
+
+        func.repeated()
+            .try_map(|fs, _| {
+                let mut funcs = HashMap::new();
+                for ((name, name_span), f) in fs {
+                    if funcs.insert(name.clone(), f).is_some() {
+                        return Err(Simple::custom(
+                            name_span.clone(),
+                            format!("Function '{}' already exists", name),
+                        ));
+                    }
+                }
+                Ok(funcs)
+            })
+            .then_ignore(end())
     }
 }
 
-impl Parser {
-    pub fn new(expr: ExprParser, decl: DeclParser, prog: ProgParser) -> Self {
-        let file = SimpleFile::new("".to_owned(), "".to_owned());
-        Self {
-            expr,
-            decl,
-            prog,
-            file,
+fn prim_expr(
+    expr: &(impl chumsky::Parser<Token<'static>, Expr, Error = ParseError<'static>> + Clone),
+) -> impl chumsky::Parser<Token<'static>, Expr, Error = ParseError<'static>> + Clone {
+    {
+        let ident = ident_parser().debug("ident");
+        let universe = universe_parser().debug("universe");
+        let literal = literal_parser().debug("literal");
+        let tuple = expr
+            .clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .at_least(2)
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .debug("tuple");
+
+        let very_prim_expr = select! {
+            Token::Underscore, loc => Expr::Hole(loc),
+            Token::MetaIdent(..), loc => Expr::Hole(loc),
         }
+        .debug("very prim expr");
+        universe
+            .map_with_span(|uni, loc| Expr::Universe(loc, uni))
+            .or(literal.map_with_span(|literal, loc| Expr::Lit(loc, literal)))
+            .or(ident.map(Expr::Var))
+            .or(tuple.map_with_span(|es, loc| Expr::Tuple(loc, es)))
+            .or(expr
+                .clone()
+                .delimited_by(just(Token::LParen), just(Token::RParen)))
+            .or(very_prim_expr)
     }
+    .debug("prim_expr")
+}
+
+pub fn lexer(
+    mut additional_tokens: Vec<String>,
+) -> impl chumsky::Parser<char, Vec<(Token<'static>, Loc)>, Error = Simple<char, Loc>> {
+    let ident = none_of(FORBIDDEN)
+        .repeated()
+        .at_least(1)
+        .collect::<String>();
+
+    let universe = just("Type").ignore_then(
+        text::digits::<char, _>(10)
+            .or_not()
+            .map(|opt| opt.unwrap_or_default()),
+    );
+    let meta = just("?").ignore_then(ident.clone());
+    let str = just('"')
+        .ignore_then(filter(|c| *c != '"').repeated())
+        .then_ignore(just('"'))
+        .collect::<String>();
+
+    let base_token = universe
+        .map(Token::Universe)
+        .or(meta.map(|s| Token::MetaIdent(s)))
+        .or(str.map(Token::Str))
+        .or(just("forall").to(Token::Pi))
+        .or(just("data").to(Token::Data))
+        .or(just("codata").to(Token::Codata))
+        .or(just("match").to(Token::Match))
+        .or(just("@").to(Token::At))
+        .or(just("#").to(Token::Hash))
+        .or(just(":=").to(Token::Assignment))
+        .or(just(":").to(Token::Colon))
+        .or(just(",").to(Token::Comma))
+        .or(just(".").to(Token::Dot))
+        .or(just("=>").to(Token::DArrow))
+        .or(just("lam").to(Token::Lam))
+        .or(just("fn").to(Token::Fn))
+        .or(just("let").to(Token::Let))
+        .or(just("|").to(Token::Pipe))
+        .or(just("->").to(Token::RArrow))
+        .or(just("_").to(Token::Underscore))
+        .or(just("!").to(Token::Bang))
+        .or(just("?").to(Token::Question))
+        .or(just("{").to(Token::LBrace))
+        .or(just("}").to(Token::RBrace))
+        .or(just("[").to(Token::LBracket))
+        .or(just("]").to(Token::RBracket))
+        .or(just("(").to(Token::LParen))
+        .or(just(")").to(Token::RParen));
+    let token = if additional_tokens.is_empty() {
+        Box::new(base_token) as Box<dyn chumsky::Parser<char, _, Error = _>>
+    } else {
+        let first = additional_tokens.remove(0);
+        let init = just(first).map(|s| Token::Ident(s));
+        let add_tokens_ref = additional_tokens
+            .into_iter()
+            .map(|s| just(s).map(|s| Token::Ident(s)))
+            .fold(
+                Box::new(init) as Box<dyn chumsky::Parser<char, _, Error = _>>,
+                |acc, x| {
+                    let or = acc.or(x);
+                    Box::new(or) as Box<dyn chumsky::Parser<char, _, Error = _>>
+                },
+            );
+
+        let p = base_token.or(add_tokens_ref);
+        Box::new(p) as Box<dyn chumsky::Parser<char, _, Error = _>>
+    };
+    let token = token
+        .or(ident.map(|x| Token::Ident(x)))
+        .or(text::digits(10).map(|s| Token::Nat(s)));
+    let comment = just("--").then(take_until(just('\n'))).ignored().padded();
+    let block_comment = just("/*")
+        .then(take_until(just("*/")))
+        .then(just("*/"))
+        .ignored()
+        .padded();
+    let whitespace = text::whitespace().at_least(1).ignored();
+    token
+        .map_with_span(|tok, span| (tok, span))
+        .padded_by(whitespace.or(comment).or(block_comment).repeated())
+        .repeated()
+}
+
+fn ident_parser() -> impl chumsky::Parser<Token<'static>, Ident, Error = ParseError<'static>> + Clone
+{
+    select! {
+        Token::Ident(ident), loc => Ident::new(ident, loc)
+    }
+}
+
+fn universe_parser(
+) -> impl chumsky::Parser<Token<'static>, Universe, Error = ParseError<'static>> + Clone {
+    select! {
+        Token::Universe(lvl) => Universe(
+            if lvl.is_empty() {
+                0
+            } else {
+            lvl.parse()
+                .expect("the number is always valid, because we've used `digits`; qed")
+            }
+        )
+    }
+}
+
+fn str_parser() -> impl chumsky::Parser<Token<'static>, String, Error = ParseError<'static>> + Clone
+{
+    select! {
+        Token::Str(s) => s
+    }
+}
+
+fn nat_parser() -> impl chumsky::Parser<Token<'static>, Nat, Error = ParseError<'static>> + Clone {
+    select! {
+        Token::Nat(n) =>
+            n.parse::<Nat>()
+                .expect("the number is always valid, because we've used `digits`; qed"),
+    }
+}
+
+fn literal_parser(
+) -> impl chumsky::Parser<Token<'static>, Literal, Error = ParseError<'static>> + Clone {
+    nat_parser()
+        .map(Literal::Nat)
+        .or(str_parser().map(Literal::Str))
+}
+
+fn params(
+    param_parser: &(impl chumsky::Parser<Token<'static>, Vec<Param>, Error = ParseError<'static>>
+          + Clone),
+) -> impl chumsky::Parser<Token<'static>, Vec<Param>, Error = ParseError<'static>> + Clone {
+    param_parser
+        .clone()
+        .repeated()
+        .flatten()
+        .labelled("params_parser")
+}
+
+fn param(
+    expr: &(impl chumsky::Parser<Token<'static>, Expr, Error = ParseError<'static>> + Clone),
+    prim_expr: &(impl chumsky::Parser<Token<'static>, Expr, Error = ParseError<'static>> + Clone),
+) -> impl chumsky::Parser<Token<'static>, Vec<Param>, Error = ParseError<'static>> + Clone {
+    {
+        let ident = ident_parser();
+
+        let params = ident
+            .clone()
+            .repeated()
+            .at_least(1)
+            .then_ignore(just(Token::Colon))
+            .then(expr.clone());
+
+        fn build_params(ps: Vec<Ident>, ty: Expr, plicit: Plicitness) -> Vec<Param> {
+            ps.into_iter()
+                .map(|ident| {
+                    let p = Param::new(ident, ty.clone(), plicit);
+                    debug!(target: "parser", "parsed explicit param: {p}");
+                    p
+                })
+                .collect()
+        }
+
+        let paramss = (params
+            .clone()
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .map(|(ps, ty)| build_params(ps, ty, Explicit)))
+        .or(params
+            .clone()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            .map(|(ps, ty)| build_params(ps, ty, Implicit)))
+        .or(prim_expr.clone().map(|e| {
+            let param = Param::from_type(e, Explicit);
+            debug!(target: "parser", "parsed explicit param: {param}");
+            vec![param]
+        }))
+        .labelled("param_parser");
+        paramss
+    }
+    .debug("param_parser")
+}
+
+fn forall_params(
+    expr: &(impl chumsky::Parser<Token<'static>, Expr, Error = ParseError<'static>> + Clone),
+) -> impl chumsky::Parser<Token<'static>, Vec1<Param>, Error = ParseError<'static>> + Clone {
+    {
+        ident_parser()
+            .clone()
+            .repeated()
+            .at_least(1)
+            .then_ignore(just(Token::Colon))
+            .then(expr.clone())
+            .map(|(idents, ty)| {
+                Vec1::try_from_vec(
+                    idents
+                        .into_iter()
+                        .map(|ident| Param::new(ident, ty.clone(), Explicit))
+                        .collect(),
+                )
+                .unwrap()
+            })
+    }
+    .debug("forall params")
+}
+
+fn case(
+    expr: &(impl chumsky::Parser<Token<'static>, Expr, Error = ParseError<'static>> + Clone),
+    pattern: &(impl chumsky::Parser<Token<'static>, Pat, Error = ParseError<'static>> + Clone),
+) -> impl chumsky::Parser<Token<'static>, Case, Error = ParseError<'static>> + Clone {
+    just(Token::Pipe)
+        .ignore_then(pattern.clone().separated_by(just(Token::Comma)))
+        .then(
+            just(Token::DArrow)
+                .ignore_then(expr.clone())
+                .or_not()
+                .debug("=> ..."),
+        )
+        .map(|(pats, body)| Case::new(pats, body))
+        .debug("case")
+}
+
+fn pattern(
+    prim_expr: &(impl chumsky::Parser<Token<'static>, Expr, Error = ParseError<'static>>
+          + Clone
+          + 'static),
+) -> impl chumsky::Parser<Token<'static>, Pat, Error = ParseError<'static>> + Clone + 'static {
+    fn pat_rest(
+        prim_expr: &(impl chumsky::Parser<Token<'static>, Expr, Error = ParseError<'static>>
+              + Clone
+              + 'static),
+        rec_pattern: &(impl chumsky::Parser<Token<'static>, Pat, Error = ParseError<'static>>
+              + Clone
+              + 'static),
+    ) -> impl chumsky::Parser<Token<'static>, Pat, Error = ParseError<'static>> + Clone + 'static
+    {
+        just(Token::Underscore)
+            .to(Pat::Wildcard)
+            .or(rec_pattern
+                .clone()
+                .delimited_by(just(Token::LParen), just(Token::RParen)))
+            .or(just(Token::Bang).to(Pat::Absurd))
+            .or(just(Token::Dot)
+                .ignore_then(prim_expr.clone())
+                .map(Pat::Forced))
+    }
+
+    let var_pat = ident_parser().map(Pat::Var);
+    let pat_cons_start = just(Token::Dot).or_not().then(ident_parser());
+    let sub_pat = recursive(|prim_pattern: Recursive<_, Pat, _>| {
+        var_pat
+            .clone()
+            .or(pat_cons_start
+                .clone()
+                .then(prim_pattern.clone().repeated().at_least(1))
+                .map(|((dot, con), args)| Pat::cons_surf(dot.is_some(), con, args)))
+            .or(pat_rest(prim_expr, &prim_pattern))
+    });
+    recursive(|top_pat| {
+        pat_cons_start
+            .then(sub_pat.clone().repeated().at_least(1))
+            .map(|((dot, con), args)| Pat::cons_surf(dot.is_some(), con, args))
+            .or(var_pat)
+            .or(pat_rest(prim_expr, &top_pat))
+    })
+    .debug("pattern")
+}
+
+fn meta_attr() -> impl chumsky::Parser<Token<'static>, MetaAttr, Error = ParseError<'static>> + Clone
+{
+    let prim_meta_attr = recursive(|prim_meta_attr: Recursive<_, MetaAttr, _>| {
+        let ident = ident_parser();
+        let meta_field = ident
+            .clone()
+            .then_ignore(just(Token::Assignment))
+            .then(str_parser())
+            .map(|(name, value)| (name, value));
+
+        let meta_attr_app =
+            ident
+                .clone()
+                .then(prim_meta_attr.clone().repeated())
+                .map(|(f, args)| {
+                    if args.is_empty() {
+                        MetaAttr::Ident(f)
+                    } else {
+                        MetaAttr::App(f, Vec1::try_from_vec(args).unwrap())
+                    }
+                });
+
+        meta_attr_app
+            .clone()
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .or(meta_field
+                .clone()
+                .map(|field| MetaAttr::Struct(Vec1::new(field))))
+            .or(meta_field
+                .clone()
+                .separated_by(just(Token::Comma))
+                .at_least(1)
+                .map(|fields| MetaAttr::Struct(Vec1::try_from_vec(fields).unwrap())))
+            .or(ident.map(MetaAttr::Ident))
+    });
+
+    just(Token::Hash)
+        .ignore_then(just(Token::LParen))
+        .ignore_then(prim_meta_attr)
+        .then_ignore(just(Token::RParen))
+}
+
+pub fn cons(
+    params: &(impl chumsky::Parser<Token<'static>, Vec<Param>, Error = ParseError<'static>> + Clone),
+) -> impl chumsky::Parser<Token<'static>, NamedTele, Error = ParseError<'static>> {
+    let ident = ident_parser();
+    just(Token::Pipe)
+        .ignore_then(ident)
+        .then(params.clone())
+        .map(|(name, params)| NamedTele::new(name, params.into()))
 }
 
 impl Default for Parser {
     fn default() -> Self {
-        Self::new(ExprParser::new(), DeclParser::new(), ProgParser::new())
+        Self::new()
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Ord)]
+enum Associativity {
+    Left,
+    Right,
+    None,
+}
+
+impl PartialOrd for Associativity {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        use Associativity::*;
+        Some(match (self, other) {
+            (Left, _) => Ordering::Less,
+            (_, Left) => Ordering::Greater,
+            (None, _) => Ordering::Greater,
+            (_, None) => Ordering::Less,
+            _ => Ordering::Equal,
+        })
+    }
+}
+
+type Precedence = u8;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum OperatorPattern {
+    Tok(String),
+    Expr,
+}
+
+impl OperatorPattern {
+    pub(crate) fn as_token(&self) -> Token {
+        match self {
+            OperatorPattern::Tok(s) => Token::Ident(s.clone()),
+            OperatorPattern::Expr => unreachable!(),
+        }
+    }
+}
+
+impl Display for OperatorPattern {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OperatorPattern::Tok(s) => write!(f, "{}", s),
+            OperatorPattern::Expr => write!(f, "<expr>"),
+        }
+    }
+}
+
+impl PartialOrd<Self> for OperatorPattern {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for OperatorPattern {
+    fn cmp(&self, other: &Self) -> Ordering {
+        use OperatorPattern::*;
+        match (self, other) {
+            (Tok(s1), Tok(s2)) => s1.cmp(s2),
+            (Tok(_), Expr) => Ordering::Greater,
+            (Expr, Tok(_)) => Ordering::Less,
+            (Expr, Expr) => Ordering::Equal,
+        }
+    }
+}
+
+impl OperatorPattern {
+    pub fn from_token(s: String) -> Self {
+        assert!(FORBIDDEN.chars().all(|c| !s.contains(c)));
+        OperatorPattern::Tok(s)
+    }
+
+    pub fn is_expr(&self) -> bool {
+        match self {
+            OperatorPattern::Expr => true,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct OperatorPatterns(Vec<OperatorPattern>);
+
+impl OperatorPatterns {
+    pub fn is_unary(&self) -> bool {
+        self.0.len() == 2
+    }
+
+    pub fn is_binary(&self) -> bool {
+        self.0.len() == 3
+    }
+
+    pub fn is_prefix(&self) -> bool {
+        self.is_unary() && self.0[1].is_expr()
+    }
+
+    pub fn is_postfix(&self) -> bool {
+        self.is_unary() && self.0[0].is_expr()
+    }
+
+    pub fn new(patterns: Vec<OperatorPattern>) -> Self {
+        let mut is_expr = patterns[0].is_expr();
+        assert!(
+            patterns.iter().all(|p| {
+                is_expr = !is_expr;
+                p.is_expr() != is_expr
+            }),
+            "can't have consecutive patterns of the same kind"
+        );
+        Self(patterns)
+    }
+}
+
+impl PartialOrd<Self> for OperatorPatterns {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for OperatorPatterns {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0
+            .len()
+            .cmp(&other.0.len())
+            .reverse()
+            .then(self.0.cmp(&other.0))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Operator {
+    associativity: Associativity,
+    precedence: Precedence,
+    patterns: OperatorPatterns,
+}
+
+impl Operator {
+    fn from_ident(
+        associativity: Associativity,
+        precedence: Precedence,
+        ident: &str,
+        params_num: usize,
+    ) -> Self {
+        let mut patterns = Vec::new();
+        let parts = ident.split('_');
+        let mut expr_num = 0;
+        let starts_with_underscore = ident.starts_with('_');
+        for (i, part) in parts.enumerate() {
+            if !part.is_empty() {
+                let offset = if starts_with_underscore { 1 } else { 0 };
+                if i > offset {
+                    patterns.push(OperatorPattern::Expr);
+                    expr_num += 1;
+                }
+                patterns.push(OperatorPattern::from_token(part.to_string()));
+            } else {
+                patterns.push(OperatorPattern::Expr);
+                expr_num += 1;
+            }
+        }
+        if expr_num > params_num {
+            panic!("Too many underscores in {}", ident);
+        }
+        Self::new(associativity, precedence, patterns)
+    }
+
+    fn new(
+        mut associativity: Associativity,
+        precedence: Precedence,
+        patterns: Vec<OperatorPattern>,
+    ) -> Self {
+        let patterns = OperatorPatterns::new(patterns);
+        match associativity {
+            Associativity::Left | Associativity::Right => {
+                assert!(patterns.is_binary());
+            }
+            Associativity::None => {
+                if patterns.is_binary() {
+                    associativity = Associativity::Left;
+                }
+            }
+        }
+        Self {
+            associativity,
+            precedence,
+            patterns,
+        }
+    }
+}
+
+struct State {
+    n: usize,
+    def_map: HashMap<String, Operator>,
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::parser::{ParseError, Parser};
+    use crate::parser::Parser;
     use crate::syntax::surf::Expr::{self};
-    use crate::syntax::Ident;
-    use crate::token::{Position, Token};
+    use crate::syntax::{Ident, Loc};
+    use crate::token::Token;
+    use chumsky::error::Simple;
+    use chumsky::Error;
 
     #[test]
     fn parse_pi() {
-        let parser = Parser::default();
+        let _ = env_logger::try_init();
+
+        let mut parser = Parser::default();
 
         assert_eq!(
-            parser.parse_expr("forall (T : A), T").unwrap(),
+            parser.parse_expr("(T : A) -> T").unwrap(),
             Expr::pi_many(
                 vec![(Ident::new("T", 8..9), Expr::var("A", 12..13))].into_iter(),
                 Expr::var("T", 16..17),
@@ -83,7 +1113,7 @@ mod tests {
         );
 
         assert_eq!(
-            parser.parse_expr("forall (T U V : A), T").unwrap(),
+            parser.parse_expr("(T U V : A) -> T").unwrap(),
             Expr::pi_many(
                 vec![
                     (Ident::new("T", 8..9), Expr::var("A", 16..17)),
@@ -96,7 +1126,7 @@ mod tests {
         );
 
         assert_eq!(
-            parser.parse_expr("forall (T U : A) (V : B), T").unwrap(),
+            parser.parse_expr("(T U : A) -> (V : B) -> T").unwrap(),
             Expr::pi_many(
                 vec![
                     (Ident::new("T", 8..9), Expr::var("A", 14..15)),
@@ -109,28 +1139,26 @@ mod tests {
         );
 
         assert_eq!(
-            parser.parse_expr("forall (T U : A) X : A , T").unwrap_err(),
-            ParseError::UnrecognizedToken {
-                token: ((17, 1, 18).into(), Token::Ident("X"), (18, 1, 19).into()),
-                expected: vec!["\"(\"".into(), "\",\"".into()]
-            }
+            parser.parse_expr("(T U : A) -> X : A -> T").unwrap_err(),
+            Simple::expected_input_found(
+                Loc::new(17, 19),
+                vec![None, Some(Token::LParen), Some(Token::RArrow)],
+                Some(Token::Colon),
+            )
         );
         assert_eq!(
-            parser.parse_expr("forall T U : A, T").unwrap_err(),
-            ParseError::UnrecognizedToken {
-                token: (
-                    Position::new(7, 1, 8),
-                    Token::Ident("T"),
-                    Position::new(8, 1, 9)
-                ),
-                expected: vec!["\"(\"".into()]
-            }
+            parser.parse_expr("T U : A -> T").unwrap_err(),
+            Simple::expected_input_found(
+                Loc::new(4, 5),
+                vec![Some(Token::LParen), None],
+                Some(Token::Colon),
+            )
         );
     }
 
     #[test]
     fn parse_lam() {
-        let parser = Parser::default();
+        let mut parser = Parser::default();
 
         assert_eq!(
             parser.parse_expr("lam x : T => x").unwrap(),
@@ -148,18 +1176,18 @@ mod tests {
         //     )
         // );
         //
-        // assert_eq!(
-        //     parser.parse_expr("lam (x y z : T) => x").unwrap(),
-        //     Expr::lam_many(
-        //         "x".parse().unwrap(),
-        //         vec![
-        //             ("x".into(), "T".parse().unwrap()),
-        //             ("y".into(), "T".parse().unwrap()),
-        //             ("z".into(), "T".parse().unwrap())
-        //         ]
-        //         .into_iter(),
-        //     )
-        // );
+        assert_eq!(
+            parser.parse_expr("lam x y z : T => x").unwrap(),
+            Expr::lam_many(
+                Expr::var("x", 17..18),
+                vec![
+                    ("x".into(), Expr::var("T", 12..13)),
+                    ("y".into(), Expr::var("T", 12..13)),
+                    ("z".into(), Expr::var("T", 12..13)),
+                ]
+                .into_iter(),
+            )
+        );
         //
         // assert_eq!(
         //     parser.parse_expr("lam (x y : T) (z : U) => x").unwrap(),

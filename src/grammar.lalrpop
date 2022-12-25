@@ -9,9 +9,9 @@ extern {
     type Location = Position;
 
     enum Token<'input> {
-        "ident" => Token::Ident(<&'input str>),
+        "ident" => Token::Ident(<String>),
         "universe" => Token::Universe(<&'input str>),
-        "metaident" => Token::MetaIdent(<&'input str>),
+        "metaident" => Token::MetaIdent(String),
         "nat" => Token::Nat(<&'input str>),
         "string" => Token::Str(<&'input str>),
         "forall" => Token::Pi,
@@ -108,10 +108,10 @@ PrimExpr: Expr = {
     "(" <Expr> ")",
 };
 
-Arg : Expr = {
-    <var: Ident> => Expr::Var(var),
-    "(" <Expr> ")",
-}
+//Arg : Expr = {
+//    <var: Ident> => Expr::Var(var),
+//    "(" <Expr> ")",
+//}
 
 AppExpr : Expr = {
     PrimExpr,

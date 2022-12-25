@@ -1,6 +1,6 @@
 use crate::check::CaseTree;
 use crate::syntax::core::term::{Case, Pat};
-use crate::syntax::core::{Bind, Closure, Elim, Func, Lambda, Tele, Term, Val};
+use crate::syntax::core::{Bind, Closure, Elim, Func, Lambda, Tele, Term};
 
 pub trait FoldVal {
     fn try_fold_val<E, R>(

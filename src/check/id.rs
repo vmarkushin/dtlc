@@ -1,16 +1,16 @@
 #[cfg(test)]
 mod tests {
-    use crate::check::{TypeCheckState, Unify};
+    use crate::check::TypeCheckState;
     use crate::error::Error;
     use crate::parser::Parser;
-    use crate::syntax::core::{pretty, Val};
+    use crate::syntax::core::pretty;
     use crate::syntax::desugar::desugar_prog;
-    use crate::{pct, pe, peit, typeck};
+    use crate::{pct, pe, typeck};
 
     #[test]
     fn test_infer_id() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         env.trace_tc = true;

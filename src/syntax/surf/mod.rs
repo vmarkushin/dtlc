@@ -10,7 +10,17 @@ pub use lit::*;
 pub use meta_attr::*;
 use std::fmt::{Display, Formatter};
 
-pub type Prog = Vec<Decl>;
+#[derive(Debug)]
+pub struct Prog(pub Vec<Decl>);
+
+impl Display for Prog {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for decl in &self.0 {
+            writeln!(f, "{}", decl)?;
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Param {

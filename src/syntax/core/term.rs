@@ -3,11 +3,10 @@ use crate::syntax::core::redex::Subst;
 use crate::syntax::core::subst::Substitution;
 use crate::syntax::core::{DeBruijn, SubstWith, Tele};
 use crate::syntax::pattern;
-use crate::syntax::{ConHead, Ident, Loc, Plicitness, Universe, DBI, GI, MI, UID};
+use crate::syntax::{ConHead, Ident, Universe, DBI, GI, MI, UID};
 use derive_more::From;
 use itertools::Either;
 use itertools::Either::*;
-use regex::internal::Input;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
@@ -326,13 +325,13 @@ impl BoundFreeVars for Term {
             Term::Meta(_, args) => {
                 args.bound_free_vars(vars, depth);
             }
-            Term::Id(id) => {
+            Term::Id(_id) => {
                 todo!("bound_free_vars for id")
             }
             Term::Refl(t) => {
                 t.bound_free_vars(vars, depth);
             }
-            Term::Ap(tele, ps, t) => {
+            Term::Ap(_tele, _ps, _t) => {
                 // tele.bound_free_vars(vars, depth);
                 // ps.bound_free_vars(vars, depth);
                 // t.bound_free_vars(vars, depth);
@@ -434,7 +433,7 @@ impl Term {
         )
     }
 
-    pub fn print(&self, tcs: &TypeCheckState) {}
+    pub fn print(&self, _tcs: &TypeCheckState) {}
 
     #[allow(unused)]
     pub(crate) fn into_pi(self) -> Either<Term, (Bind<Box<Term>>, Closure)> {

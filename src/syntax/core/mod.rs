@@ -278,7 +278,7 @@ mod tests {
     #[test]
     fn test_id() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut des = desugar_prog(p.parse_prog(
             r#"
         data Nat : Type
@@ -295,7 +295,7 @@ mod tests {
             (A : Type)
             (B : Type)
             (C : B -> Type)
-            (f : Π (x : B), C x)
+            (f : (x : B) -> C x)
             (g : A -> B)
             (x : A)
             : C (g x)

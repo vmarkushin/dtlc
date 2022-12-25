@@ -1,7 +1,6 @@
-use std::rc::Rc;
-
-use crate::syntax::core::{subst::PrimSubst, Elim, Term, Val, Var};
+use crate::syntax::core::{subst::PrimSubst, Elim, Term, Var};
 use crate::syntax::DBI;
+use std::rc::Rc;
 
 pub trait DeBruijn {
     /// [Agda](https://hackage.haskell.org/package/Agda-2.6.0.1/docs/src/Agda.TypeChecking.Substitute.DeBruijn.html#deBruijnView).

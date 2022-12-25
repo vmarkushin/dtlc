@@ -4,12 +4,12 @@ use crate::syntax::abs::{
     Expr as ExprA, Func as FuncA, Id, Match, Pat as PatA, Tele as TeleA,
 };
 use crate::syntax::core::Boxed;
-use crate::syntax::surf::{Case, Data, Decl, Expr, Func, MetaAttr, NamedTele, Param, Pat};
+use crate::syntax::surf::{Case, Data, Decl, Expr, Func, MetaAttr, NamedTele, Param, Pat, Prog};
 use crate::syntax::{ConHead, Ident, LangItem, Plicitness, GI, MI, UID};
 use itertools::Either;
 use itertools::Either::{Left, Right};
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 use vec1::Vec1;
 
@@ -161,11 +161,11 @@ pub enum DesugarError {
 
 pub type Result<T, E = DesugarError> = std::result::Result<T, E>;
 
-pub fn desugar_prog(decls: Vec<Decl>) -> Result<DesugarState> {
+pub fn desugar_prog(decls: Prog) -> Result<DesugarState> {
     let mut s = DesugarState::default();
     s.enter_local_scope();
     s.cur_meta_id.push(Default::default());
-    for decl in decls {
+    for decl in decls.0 {
         s.desugar_decl(decl)?;
     }
     Ok(s)
@@ -200,6 +200,7 @@ impl DesugarState {
                     if let Some((DeclA::Cons(..), ix)) = self.lookup_by_name(&head.name.text) {
                         ix
                     } else {
+                        debug!(target: "desugar", "context: {:?}", self.local);
                         panic!("{} not found", head.name.text)
                     };
                 let head = ConHead::new(head.name, head_ix);
@@ -249,9 +250,10 @@ impl DesugarState {
                     let (tele, triple) = args.remove(0).into_tele_view();
                     let paths = args;
                     ensure!(tele.len() == paths.len(), DesugarError::IdWrongArity);
-                    let [ty, a1, a2]: [ExprA; 3] = self.desugar_tuple(triple)?.try_into().map_err(|_| DesugarError::IdNoTuple)? else {
-                            return Err(DesugarError::IdNoTuple);
-                        };
+                    let [ty, a1, a2]: [ExprA; 3] = self
+                        .desugar_tuple(triple)?
+                        .try_into()
+                        .map_err(|_| DesugarError::IdNoTuple)?;
                     let id = Id::new(tele, ty.boxed(), paths, a1.boxed(), a2.boxed());
                     Ok(Left(ExprA::Id(v.loc, id)))
                 }
@@ -291,7 +293,7 @@ impl DesugarState {
                 } else if let Some((decl, ix)) = self.lookup_by_name(&v) {
                     use DeclA::*;
                     match decl {
-                        Data(data) => Ok(ExprA::Data(v, ix)),
+                        Data(_data) => Ok(ExprA::Data(v, ix)),
                         Fn(_) => Ok(ExprA::Fn(v, ix)),
                         Cons(_) => Ok(ExprA::Cons(v, ix)),
                     }
@@ -438,6 +440,7 @@ impl DesugarState {
     }
 
     pub fn desugar_decl(&mut self, decl: Decl) -> Result<DeclA> {
+        debug!(target: "desugar", "Desugaring decl: {}\n{:?}", decl.name(), &decl);
         match decl {
             Decl::Data(Data {
                 sig,
@@ -532,10 +535,9 @@ mod tests {
     use vec1::{vec1, Vec1};
 
     #[test]
-    #[ignore]
     fn test_desugar() {
         use ExprA::{App, Match, Meta, Pi, Var};
-        let parser = Parser::default();
+        let mut parser = Parser::default();
         let state = desugar_prog(
             parser
                 .parse_prog(
@@ -545,9 +547,9 @@ data Nat : Type
     | S Nat
 
 fn foo (p : Nat) := match p {
-        | Z => (lam (f : Nat -> Nat) => f p) (lam (n : Nat) => n)
-        | (S n) => n
-    }
+    | Z => (lam f : Nat -> Nat => f p) (lam n : Nat => n)
+    | S n => n
+}
 "#,
                 )
                 .unwrap(),
@@ -610,7 +612,7 @@ fn foo (p : Nat) := match p {
                                     },
                                     0
                                 )),
-                                ident: Ident::new("A", Loc::new(46, 47))
+                                ident: Ident::new("p", Loc::new(46, 47))
                             },
                             box Match(abs::Match::new(
                                 vec1![Var(
@@ -652,7 +654,7 @@ fn foo (p : Nat) := match p {
                                                                 },
                                                                 0
                                                             )),
-                                                            ident: Ident::new("A", Loc::default())
+                                                            ident: Ident::new("1", Loc::default())
                                                         },
                                                         box Data(
                                                             Ident {
@@ -662,7 +664,7 @@ fn foo (p : Nat) := match p {
                                                             0
                                                         )
                                                     )),
-                                                    ident: Ident::new("A", Loc::default())
+                                                    ident: Ident::new("f", Loc::default())
                                                 },
                                                 box ExprA::App(
                                                     box ExprA::Var(
@@ -693,7 +695,7 @@ fn foo (p : Nat) := match p {
                                                         },
                                                         0
                                                     )),
-                                                    ident: Ident::new("A", Loc::default())
+                                                    ident: Ident::new("n", Loc::default())
                                                 },
                                                 box ExprA::Var(
                                                     Ident {
@@ -731,11 +733,11 @@ fn foo (p : Nat) := match p {
                         )),
                         Some(Pi(
                             Loc::new(50, 44),
-                            Bind::new(
+                            Bind::identified(
                                 Explicit,
                                 0,
                                 box Some(Data(Ident::new("Nat", Loc::new(50, 53)), 0)),
-                                Loc::new(46, 47)
+                                Ident::new("p", Loc::new(46, 47))
                             ),
                             box Meta(Ident::new("hole0", Loc::new(41, 44)), 0)
                         )),

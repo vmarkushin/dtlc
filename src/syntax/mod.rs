@@ -1,5 +1,6 @@
 use crate::syntax::core::Term;
 use crate::token::Position;
+use chumsky::Span;
 use codespan::{ColumnIndex, LineIndex};
 use derive_more::{Add, AsRef, Deref, From};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -19,12 +20,53 @@ pub enum Plicitness {
     Implicit,
 }
 
-#[derive(Debug, Clone, Copy, Eq, Default)]
+#[derive(Clone, Copy, Eq, Default, Hash)]
 pub struct Loc {
     pub start: usize,
     pub end: usize,
     pub line: LineIndex,
     pub col: ColumnIndex,
+}
+
+impl Debug for Loc {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "_")
+    }
+}
+
+impl Span for Loc {
+    type Context = ();
+    type Offset = usize;
+
+    fn new((): Self::Context, range: Range<Self::Offset>) -> Self {
+        Self {
+            start: range.start,
+            end: range.end,
+            line: LineIndex::from(0),
+            col: ColumnIndex::from(0),
+        }
+    }
+    fn context(&self) -> Self::Context {}
+    fn start(&self) -> Self::Offset {
+        self.start
+    }
+    fn end(&self) -> Self::Offset {
+        self.end
+    }
+}
+
+impl ariadne::Span for Loc {
+    type SourceId = ();
+
+    fn source(&self) -> &Self::SourceId {
+        &()
+    }
+    fn start(&self) -> usize {
+        self.start
+    }
+    fn end(&self) -> usize {
+        self.end
+    }
 }
 
 impl PartialEq for Loc {
@@ -84,7 +126,7 @@ impl Display for Loc {
     }
 }
 
-#[derive(Debug, Clone, Eq, Deref, AsRef, From)]
+#[derive(Debug, Clone, Eq, Deref, AsRef, From, Hash)]
 pub struct Ident {
     #[deref]
     #[as_ref]
@@ -202,7 +244,7 @@ impl Display for Bind<Term> {
 }
 
 impl<T> Bind<T> {
-    pub fn new(licit: Plicitness, name: UID, ty: T, loc: Loc) -> Self {
+    pub fn new(licit: Plicitness, name: UID, ty: T, _loc: Loc) -> Self {
         Self {
             licit,
             name,

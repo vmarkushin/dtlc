@@ -2,8 +2,7 @@ use crate::check::block::{Blocked, NotBlocked};
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
 use crate::syntax::core::{
-    build_subst, display_application, Boxed, Case, Closure, Decl, Elim, Func, Simpl, SubstWith,
-    Substitution, Term, Val,
+    build_subst, Boxed, Case, Closure, Decl, Elim, Func, Simpl, SubstWith, Substitution, Term,
 };
 use crate::syntax::{ConHead, Ident, Loc, GI};
 use std::collections::HashMap;

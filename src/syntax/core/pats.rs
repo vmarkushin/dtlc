@@ -1,7 +1,7 @@
 use crate::check::TypeCheckState;
 use crate::syntax::core::redex::SubstWith;
 use crate::syntax::core::term::BoundFreeVars;
-use crate::syntax::core::{DeBruijn, Pat, Substitution, Term, Val, Var};
+use crate::syntax::core::{DeBruijn, Pat, Substitution, Term, Var};
 use crate::syntax::{DBI, UID};
 use itertools::Itertools;
 use std::rc::Rc;
@@ -217,7 +217,7 @@ impl Term {
 #[cfg(test)]
 mod tests {
     use crate::check::TypeCheckState;
-    use crate::syntax::core::{DeBruijn, Pat, Subst, Term, Val, Var};
+    use crate::syntax::core::{DeBruijn, Pat, Subst, Term, Var};
     use crate::syntax::ConHead;
 
     #[test]

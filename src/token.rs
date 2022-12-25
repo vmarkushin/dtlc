@@ -1,88 +1,92 @@
+use chumsky::Span;
 pub use codespan::{
     ByteIndex, ByteIndex as BytePos, ByteOffset, ColumnIndex as Column, ColumnOffset,
     LineIndex as Line, LineOffset, RawIndex,
 };
-use logos::{Lexer, Logos};
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Formatter};
+use std::ops::Range;
+
 struct Foo;
 
-#[derive(Clone, Debug, Logos, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Token<'input> {
-    #[regex("Type[0-9]*")]
-    Universe(&'input str),
-    #[token("forall")]
-    #[token("Π")]
+    // #[regex("Type[0-9]*")]
+    Universe(String),
+    // #[token("forall")]
+    // #[token("Π")]
     Pi,
     // #[token("exists")]
     // #[token("Σ")]
     // Sigma,
-    #[regex("[~!@#$%^&*\\-+=<>?/|:a-zA-Z_∀-⋿Ͱ-Ͽ←-⇿'0-9]*")]
-    Ident(&'input str),
-    #[token("data")]
+    // #[regex("[~!@#$%^&*\\-+=<>?/|:a-zA-Z_∀-⋿Ͱ-Ͽ←-⇿'0-9]*")]
+    Ident(String),
+    // Ident(String),
+    // #[token("data")]
     Data,
-    #[token("codata")]
+    // #[token("codata")]
     Codata,
-    #[token("match")]
+    // #[token("match")]
     Match,
-    #[token("@")]
+    // #[token("@")]
     At,
-    #[token("#")]
+    // #[token("#")]
     Hash,
-    #[token(":")]
+    // #[token(":")]
     Colon,
-    #[token(",")]
+    // #[token(",")]
     Comma,
-    #[token(".")]
+    // #[token(".")]
     Dot,
-    #[token("=>")]
+    // #[token("=>")]
     DArrow,
-    #[token("lam")]
-    #[token("λ")]
+    // #[token("lam")]
+    // #[token("λ")]
     Lam,
-    #[token("fn")]
+    // #[token("fn")]
     Fn,
-    #[token("let")]
+    // #[token("let")]
     Let,
-    #[token("|")]
+    // #[token("|")]
     Pipe,
-    #[token("->")]
-    #[token("→")]
+    // #[token("->")]
+    // #[token("→")]
     RArrow,
-    #[token("_")]
+    // #[token("_")]
     Underscore,
-    #[token("!")]
+    // #[token("!")]
     Bang,
-    #[token("?")]
+    // #[token("?")]
     Question,
-    #[regex("\\?[a-zA-Z0-9_-]+")]
-    MetaIdent(&'input str),
-    #[regex("[0-9]+")]
-    Nat(&'input str),
-    #[regex("\"[a-zA-Z0-9_-]*\"")]
-    Str(&'input str),
-    #[token("{")]
+    // #[regex("\\?[a-zA-Z0-9_-]+")]
+    MetaIdent(String),
+    // #[regex("[0-9]+")]
+    Nat(String),
+    // #[regex("\"[a-zA-Z0-9_-]*\"")]
+    Str(String),
+    // #[token("{")]
     LBrace,
-    #[token("}")]
+    // #[token("}")]
     RBrace,
-    #[token("[")]
+    // #[token("[")]
     LBracket,
-    #[token("]")]
+    // #[token("]")]
     RBracket,
-    #[token("(")]
+    // #[token("(")]
     LParen,
-    #[token(")")]
+    // #[token(")")]
     RParen,
-    #[token(":=")]
+    // #[token(":=")]
     Assignment,
     // #[token("=")]
     // MetaAssignment,
-    #[error]
-    #[regex(r"[ \t\n\f]+", logos::skip)]
+    // #[error]
+    // #[regex(r"[ \t\n\f]+", logos::skip)]
     Whitespace,
-    #[regex(r"--.*", logos::skip)]
+    // #[regex(r"--.*", logos::skip)]
     Comment,
     // #[regex(r"\{-(.|\n)*-\}", logos::skip)]
     // BlockComment,
+    __Unused(&'input ()),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -114,72 +118,94 @@ impl Display for Position {
     }
 }
 
+impl Span for Position {
+    type Context = ();
+    type Offset = usize;
+
+    fn new((): Self::Context, range: Range<usize>) -> Self {
+        Self {
+            abs: range.start,
+            line: Default::default(),
+            col: Default::default(),
+        }
+    }
+    fn context(&self) -> Self::Context {}
+    fn start(&self) -> Self::Offset {
+        self.abs.clone()
+    }
+    fn end(&self) -> Self::Offset {
+        self.abs.clone()
+    }
+}
+
 pub struct SpannedIter<'source> {
-    lexer: Lexer<'source, Token<'source>>,
+    //    lexer: Lexer<'source, Token<'source>>,
+    _phantom: std::marker::PhantomData<&'source ()>,
     line: Line,
     col: Column,
     last_pos: usize,
 }
 
-impl<'source> Iterator for SpannedIter<'source> {
-    type Item = (Position, Token<'source>, Position);
+// impl<'source> Iterator for SpannedIter<'source> {
+//     type Item = (Position, Token<'source>, Position);
+//
+//     fn next(&mut self) -> Option<Self::Item> {
+//         self.lexer.next().map(|token| {
+//             let range = self.lexer.span();
+//             if self.last_pos < range.start {
+//                 let raw = &self.lexer.source()[(self.last_pos + 1)..range.start];
+//                 for ch in raw.chars() {
+//                     if ch == '\n' {
+//                         self.line += LineOffset(1);
+//                         self.col = Column(1);
+//                     } else {
+//                         self.col += ColumnOffset(1);
+//                     }
+//                 }
+//                 if self.col == Column(0) {
+//                     self.col = Column(1);
+//                 }
+//             }
+//
+//             let line_start = self.line;
+//             let col_start = self.col;
+//
+//             let raw = &self.lexer.source()[range.start..range.end];
+//             for ch in raw.chars() {
+//                 if ch == '\n' {
+//                     self.line += LineOffset(1);
+//                     self.col = Column(1);
+//                 } else {
+//                     self.col += ColumnOffset(1);
+//                 }
+//             }
+//             if self.col == Column(0) {
+//                 self.col = Column(1);
+//             }
+//
+//             let line_end = self.line;
+//             let col_end = self.col;
+//
+//             self.last_pos = range.end - 1;
+//
+//             (
+//                 Position::new(range.start, line_start, col_start),
+//                 token,
+//                 Position::new(range.end, line_end, col_end),
+//             )
+//         })
+//     }
+// }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        self.lexer.next().map(|token| {
-            let range = self.lexer.span();
-            if self.last_pos < range.start {
-                let raw = &self.lexer.source()[(self.last_pos + 1)..range.start];
-                for ch in raw.chars() {
-                    if ch == '\n' {
-                        self.line += LineOffset(1);
-                        self.col = Column(1);
-                    } else {
-                        self.col += ColumnOffset(1);
-                    }
-                }
-                if self.col == Column(0) {
-                    self.col = Column(1);
-                }
-            }
-
-            let line_start = self.line;
-            let col_start = self.col;
-
-            let raw = &self.lexer.source()[range.start..range.end];
-            for ch in raw.chars() {
-                if ch == '\n' {
-                    self.line += LineOffset(1);
-                    self.col = Column(1);
-                } else {
-                    self.col += ColumnOffset(1);
-                }
-            }
-            if self.col == Column(0) {
-                self.col = Column(1);
-            }
-
-            let line_end = self.line;
-            let col_end = self.col;
-
-            self.last_pos = range.end - 1;
-
-            (
-                Position::new(range.start, line_start, col_start),
-                token,
-                Position::new(range.end, line_end, col_end),
-            )
-        })
-    }
-}
-
-pub fn lexer(input: &str) -> SpannedIter {
-    SpannedIter {
-        lexer: Token::lexer(input),
-        line: Line(1),
-        col: Column(1),
-        last_pos: 0,
-    }
-}
+// pub fn lexer(input: &str) -> SpannedIter {
+//     todo!()
+//     //     SpannedIter {
+//     //         lexer: Token::lexer(input),
+//     //         line: Line(1),
+//     //         col: Column(1),
+//     //         last_pos: 0,
+//     //     }
+// }
 
 impl<'a> Display for Token<'a> {
     #[rustfmt::skip]
@@ -219,9 +245,10 @@ impl<'a> Display for Token<'a> {
             Question            => f.write_str("?"),
             Comment             => Ok(()),
             Nat(n)              => write!(f, "{}", n),
-            MetaAssignment      => f.write_str("="),
+            // MetaAssignment      => f.write_str("="),
             Str(s)              => f.write_str(s),
             // BlockComment        => Ok(()),
+            __Unused(_) => {unreachable!()}
         }
     }
 }

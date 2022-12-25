@@ -2,11 +2,10 @@ use crate::check::meta::MetaSol;
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
 use crate::ensure;
-use crate::syntax::core::{
-    pretty, Case, Closure, Elim, FoldVal, Func, Lambda, Pat, SubstWith, Substitution, Term, Val,
-    ValData,
-};
 use crate::syntax::core::{Bind, Tele};
+use crate::syntax::core::{
+    Case, Closure, Elim, FoldVal, Func, Lambda, Pat, SubstWith, Substitution, Term, ValData,
+};
 use crate::syntax::{DBI, GI, MI};
 use std::cmp::Ordering;
 

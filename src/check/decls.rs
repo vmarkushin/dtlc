@@ -6,7 +6,7 @@ use crate::syntax::abs::{
     ConsInfo as AConsInfo, DataInfo as ADataInfo, Decl as ADecl, Expr, Tele as ATele,
 };
 use crate::syntax::core::{
-    Closure, ConsInfo, Ctx, DataInfo, DeBruijn, Decl, FuncInfo, Tele, Term, Val, ValData,
+    Closure, ConsInfo, Ctx, DataInfo, DeBruijn, Decl, FuncInfo, Tele, Term, ValData,
 };
 use crate::syntax::desugar::DesugarState;
 use crate::syntax::{LangItem, Universe, GI};
@@ -68,7 +68,7 @@ impl TypeCheckState {
                         ADecl::Data(info) => {
                             let cs = (info.conses.iter())
                                 .map(|j| match take(&mut decls, *j - curr_decl_len) {
-                                    ADecl::Cons(i) => (i.name),
+                                    ADecl::Cons(i) => i.name,
                                     _ => unreachable!(),
                                 })
                                 .collect::<Vec<_>>();

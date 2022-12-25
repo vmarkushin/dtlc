@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 logos = "0.12.0"
 lalrpop-util = { version = "0.19.6", features = ["lexer"] }
+chumsky = { git = "https://github.com/zesterer/chumsky", rev = "a2922b1" }
+ariadne = "0.1.2"
 regex = "1"
 codespan = "0.11.1"
 codespan-reporting = "0.11.1"
@@ -13,7 +15,6 @@ rustyline = "9.0.0"
 derive_more = "0.99.16"
 logru = "0.2.0"
 vec1 = "1"
-
 thiserror = "1.0.30"
 eyre = "0.6.5"
 log = "0.4.14"
@@ -29,4 +30,4 @@ walkdir = "2.3.2"
 rand = "0.8.5"
 
 [build-dependencies]
-lalrpop = "0.19.6"
+#lalrpop = "0.19.6"

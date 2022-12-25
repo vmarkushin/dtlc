@@ -20,7 +20,7 @@ mod tests {
         use walkdir::WalkDir;
         let _ = env_logger::try_init();
 
-        let p = Parser::default();
+        let mut p = Parser::default();
         for entry in WalkDir::new("examples") {
             let entry1 = entry?;
             let x = entry1.path();

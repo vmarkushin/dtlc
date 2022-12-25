@@ -1,5 +1,5 @@
 use crate::syntax::core::Term;
-use crate::syntax::{ConHead, GI};
+use crate::syntax::ConHead;
 use std::fmt::{Display, Formatter};
 
 pub type Nat = usize;

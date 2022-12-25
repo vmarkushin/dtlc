@@ -2,7 +2,7 @@ use super::Term;
 use crate::check::{Constraint, TypeCheckState};
 use crate::syntax::core::subst::{PrimSubst, Substitution};
 use crate::syntax::core::term::{Id, Lambda};
-use crate::syntax::core::{Boxed, Case, Closure, DeBruijn, Elim, Func, Val, ValData, Var};
+use crate::syntax::core::{Boxed, Case, Closure, DeBruijn, Elim, Func, ValData, Var};
 use crate::syntax::pattern::Pat;
 use crate::syntax::{Bind, Ident, DBI, GI};
 use itertools::Itertools;
@@ -299,7 +299,7 @@ impl SubstWith<'_> for Term {
                     }
                 }
             }
-            Term::Ap(tele, ps, t) => {
+            Term::Ap(_tele, _ps, _t) => {
                 // let ps = ps.subst_with(subst.clone(), tcs);
                 // let t = t.subst_with(subst, tcs);
                 // Term::Ap(tele, ps, box t)

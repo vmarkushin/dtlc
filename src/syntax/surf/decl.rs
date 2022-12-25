@@ -172,6 +172,15 @@ pub enum Decl {
     Fn(Func),
 }
 
+impl Decl {
+    pub fn name(&self) -> &Ident {
+        match self {
+            Decl::Data(d) => &d.sig.name,
+            Decl::Fn(f) => &f.name,
+        }
+    }
+}
+
 impl Display for Decl {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {

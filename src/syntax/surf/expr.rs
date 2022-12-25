@@ -48,9 +48,7 @@ impl Expr {
         }
         (params, expr)
     }
-}
 
-impl Expr {
     pub fn app_many(f: impl Into<Expr>, args: impl IntoIterator<Item = impl Into<Expr>>) -> Expr {
         Expr::App(
             Box::new(f.into()),
@@ -110,8 +108,8 @@ impl Display for Expr {
                 write!(f, "{}", func)?;
                 for arg in args {
                     match arg {
-                        app @ Self::App(..) => write!(f, "({})", app)?,
-                        e => write!(f, "{}", e)?,
+                        app @ Self::App(..) => write!(f, " ({})", app)?,
+                        e => write!(f, " {}", e)?,
                     }
                 }
                 Ok(())
@@ -123,7 +121,7 @@ impl Display for Expr {
             Self::Universe(_, k) => write!(f, "{}", k),
             Self::Hole(_) => write!(f, "_"),
             Self::Match(expr, cases) => {
-                write!(f, "match")?;
+                write!(f, "match ")?;
                 pretty_list(f, expr, ", ")?;
                 for Case { patterns, body } in cases {
                     if let Some(body) = body {

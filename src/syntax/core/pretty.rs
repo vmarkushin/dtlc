@@ -1,13 +1,12 @@
 use crate::check::TypeCheckState;
-use crate::syntax::abs::Type;
 use crate::syntax::core::term::{Bind, Case, Id, Lambda};
-use crate::syntax::core::{Closure, Elim, Func, Pat, Tele, Term, TermInfo, Val, ValData, Var};
+use crate::syntax::core::{Closure, Elim, Func, Pat, Tele, Term, TermInfo, ValData, Var};
 use crate::syntax::surf::Nat;
+use crate::syntax::Plicitness::*;
 use crate::syntax::{ConHead, LangItem, Plicitness};
 use core::fmt;
 use itertools::Itertools;
-use std::any::Any;
-use std::fmt::{Display, Error, Formatter, Pointer, Write};
+use std::fmt::{Display, Error, Formatter, Write};
 use std::marker::PhantomData;
 
 #[derive(Copy, Clone, Debug, Default)]

@@ -1,11 +1,11 @@
 use crate::check::state::TypeCheckState;
-use crate::check::{Clause, Error, LshProblem, Result, Unify};
+use crate::check::{Clause, Error, LshProblem, Result};
+use crate::ensure;
 use crate::syntax::abs::{AppView, Expr, Match};
 use crate::syntax::core::{self, Boxed, Closure, Tele};
-use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, Val, ValData, Var};
+use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, ValData, Var};
 use crate::syntax::surf::{nat_to_term, Literal};
-use crate::syntax::{abs, ConHead, Ident, LangItem, Let, Loc, Universe, GI};
-use crate::{ensure, syntax};
+use crate::syntax::{abs, ConHead, Ident, LangItem, Loc, Universe, GI};
 
 impl TypeCheckState {
     /// Infer the type of the expression. Returns evaluated term and its type.
@@ -430,7 +430,7 @@ impl TypeCheckState {
                 let bind_new =
                     Bind::identified(bind.licit, bind.name, bind_ty.ast, bind.ident.clone());
                 self.gamma.push(bind_new.clone());
-                let body = self.check(ret, &t)?;
+                let body = self.check(ret, &ret_pi)?;
                 self.gamma.pop();
                 Ok(Term::lam(bind_new.boxed(), body.ast).at(bind_ty.loc))
             }
@@ -484,7 +484,7 @@ mod tests {
     #[test]
     fn test_check_basic() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut des = desugar_prog(p.parse_prog(
             r#"
             data T : Type
@@ -498,15 +498,15 @@ mod tests {
         let ty = pct!(p, des, env, "T -> T");
         env.check(&pe!(p, des, "lam (y : T) => y"), &ty)?;
 
-        let ty = pct!(p, des, env, "forall (ff : T -> T) (x : T), T");
+        let ty = pct!(p, des, env, "(ff : T -> T) -> (x : T) -> T");
         env.check(&pe!(p, des, "lam (f : T -> T) (y : T) => f y"), &ty)?;
 
         let ty = pct!(p, des, env, "Type");
-        env.check(&pe!(p, des, "forall (ff : T -> T) (x : T), T"), &ty)?;
+        env.check(&pe!(p, des, "(ff : T -> T) -> (x : T) -> T"), &ty)?;
 
         let ty = pct!(p, des, env, "Type2");
         env.check(
-            &pe!(p, des, "forall (T : Type1) (ff : T -> T) (x : T), T"),
+            &pe!(p, des, "(T : Type1) -> (ff : T -> T) -> (x : T) -> T"),
             &ty,
         )?;
 
@@ -521,7 +521,7 @@ mod tests {
 
         let ty = pct!(p, des, env, "T");
         assert_err!(
-            env.check(&pe!(p, des, "forall (ff : T -> T) (x : T), x"), &ty),
+            env.check(&pe!(p, des, "(ff : T -> T) -> (x : T) -> x"), &ty),
             Error::InvalidPi(
                 box Term::Universe(Universe(0)),
                 box Term::Data(ValData::new(0, vec![]))
@@ -534,7 +534,7 @@ mod tests {
     #[test]
     fn test_infer() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         let mut des = desugar_prog(p.parse_prog(
             r#"
@@ -547,8 +547,8 @@ mod tests {
             fn id (A : Type) (a : A) := a
             fn bool := true
             fn idb := id _ bool
-            fn deep (f : forall (A : Type), A -> A -> A) (x : Bool) := (lam (y : _) => f _ y x) x
-            fn deep' (f : forall (A : Type), A -> A -> A) (x : Bool) := (lam (y : _) => f _ x y) x
+            fn deep (f : (A : Type) -> A -> A -> A) (x : Bool) := (lam (y : _) => f _ y x) x
+            fn deep' (f : (A : Type) -> A -> A -> A) (x : Bool) := (lam (y : _) => f _ x y) x
        "#,
         )?)?;
 
@@ -571,7 +571,7 @@ mod tests {
         let ty = pct!(p, des, env, "Type");
         env.check(&pe!(p, des, "Bool"), &ty)?;
 
-        let ty = pct!(p, des, env, "forall (A : Type) (a : A), A");
+        let ty = pct!(p, des, env, "(A : Type) -> (a : A) -> A");
         env.check(&pe!(p, des, "id"), &ty)?;
 
         let ty = pct!(p, des, env, "Bool");
@@ -581,7 +581,7 @@ mod tests {
             p,
             des,
             env,
-            "forall (f : forall (A : Type), A -> A -> A) (x : Bool), Bool"
+            "(f : (A : Type) -> A -> A -> A) -> (x : Bool) -> Bool"
         );
         env.check(&pe!(p, des, "deep"), &ty)?;
         env.check(&pe!(p, des, "deep'"), &ty)?;
@@ -592,7 +592,7 @@ mod tests {
     #[test]
     fn test_data() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         let mut des = desugar_prog(p.parse_prog(
             r#"
@@ -615,14 +615,14 @@ mod tests {
         env.check(&pe!(p, des, "List"), &ty)?;
         env.infer(&pe!(p, des, "List"))?.1;
 
-        let ty = pct!(p, des, env, "forall (T : Type), List T");
+        let ty = pct!(p, des, env, "(T : Type) -> List T");
         env.check(&pe!(p, des, "nil"), &ty)?;
 
         let ty = pct!(
             p,
             des,
             env,
-            "forall (T : Type) (x : T) (xs : List T), (List T)"
+            "(T : Type) -> (x : T) -> (xs : List T) -> (List T)"
         );
         env.check(&pe!(p, des, "cons"), &ty)?;
 
@@ -655,7 +655,7 @@ mod tests {
     #[test]
     fn test_complex_data() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         let mut des = desugar_prog(p.parse_prog(
@@ -682,30 +682,18 @@ mod tests {
         )?)?;
         env.check_prog(des.clone())?;
 
-        typeck!(
-            p,
-            des,
-            env,
-            "ok",
-            "forall (T : Type) (E : Type), T -> Result T E"
-        );
+        typeck!(p, des, env, "ok", "(T E : Type) -> T -> Result T E");
 
         typeck!(p, des, env, "ok _ Nat true", "Result Bool Nat");
 
-        typeck!(
-            p,
-            des,
-            env,
-            "err",
-            "forall (T : Type) (E : Type), E -> Result T E"
-        );
+        typeck!(p, des, env, "err", "(T E : Type) -> E -> Result T E");
 
         typeck!(
             p,
             des,
             env,
             "mkSigma",
-            "forall (A : Type) (B : A -> Type) (x : A) (y : B x), Sigma A B"
+            "(A : Type)->(B : A -> Type) -> (x : A) -> (y : B x) -> Sigma A B"
         );
 
         typeck!(

@@ -1,14 +1,13 @@
-use crate::check::block::{Blocked, Blocker};
-use crate::syntax::abs::{Expr, Pat as PatA};
-use crate::syntax::core::{pretty, Elim, Pat, Pretty, Term, Val};
-use crate::syntax::{Ident, Loc, Universe, MI};
-use std::fmt;
-use std::fmt::{Display, Formatter};
-
+use crate::check::block::Blocker;
 pub use crate::check::norm::try_match;
+use crate::syntax::abs::{Expr, Pat as PatA};
+use crate::syntax::core::{pretty, Elim, Pat, Pretty, Term};
+use crate::syntax::{Ident, Loc, Universe, MI};
 pub use case::{CaseTree, Clause, Constraint, LshProblem};
 pub use meta::{HasMeta, MetaSol};
 pub use state::TypeCheckState;
+use std::fmt;
+use std::fmt::{Display, Formatter};
 pub use unify::Unify;
 
 mod block;

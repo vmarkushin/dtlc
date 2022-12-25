@@ -2,7 +2,7 @@ use crate::check::meta::HasMeta;
 use crate::check::{Error, Result, TypeCheckState};
 use crate::syntax::abs::{Expr, Pat as PatA};
 use crate::syntax::core::{
-    Case, DataInfo, DeBruijn, Decl, Pat, SubstWith, Substitution, Term, Val, Var,
+    Case, DataInfo, DeBruijn, Decl, Pat, SubstWith, Substitution, Term, Var,
 };
 use crate::syntax::{ConHead, DBI, UID};
 use itertools::{EitherOrBoth, Itertools};
@@ -580,17 +580,17 @@ mod tests {
     use super::*;
     use crate::check::Unify;
     use crate::parser::Parser;
+    use crate::pct;
     use crate::syntax::core::{Elim, Func, Subst, ValData};
     use crate::syntax::desugar::desugar_prog;
     use crate::syntax::pattern::Pat::{Cons as ConsPat, Var};
     use crate::syntax::Plicitness::Explicit;
     use crate::syntax::{Bind, ConHead, Ident, Loc};
-    use crate::{dsp, pct};
 
     #[test]
     fn test_fail_build_case_tree() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         let des = desugar_prog(p.parse_prog(
@@ -651,11 +651,11 @@ mod tests {
 
     #[test]
     fn test_build_case_tree() -> eyre::Result<()> {
-        use crate::syntax::pattern::Pat::{Cons as ConsPat, Var};
+        use crate::syntax::pattern::Pat::Cons as ConsPat;
         use Term::*;
 
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         let des = desugar_prog(p.parse_prog(
@@ -814,7 +814,7 @@ mod tests {
         use crate::syntax::pattern::Pat::{Cons as ConsPat, Var};
 
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         let des = desugar_prog(p.parse_prog(
@@ -895,11 +895,6 @@ mod tests {
         );
         assert_eq!(ct, cte);
 
-        dsp!(
-            &env.def(*des.decls_map.get("tst").unwrap())
-                .as_func()
-                .signature
-        );
         let ct = env
             .def(*des.decls_map.get("tst").unwrap())
             .as_func()
@@ -923,10 +918,8 @@ mod tests {
 
     #[test]
     fn test_build_case_tree_shift_pat_vars() -> eyre::Result<()> {
-        use crate::syntax::pattern::Pat::*;
-
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         let des = desugar_prog(p.parse_prog(
@@ -991,7 +984,7 @@ mod tests {
     #[test]
     fn test_eval_case_tree_if() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         let mut des = desugar_prog(p.parse_prog(
@@ -1072,7 +1065,7 @@ mod tests {
     #[test]
     fn test_eval_case_tree_add() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         let mut des = desugar_prog(p.parse_prog(
@@ -1264,7 +1257,7 @@ mod tests {
     #[test]
     fn test_eval_case_tree_sub() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         let mut des = desugar_prog(p.parse_prog(
@@ -1384,7 +1377,7 @@ mod tests {
     #[test]
     fn test_eval_case_tree_1() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         let mut des = desugar_prog(p.parse_prog(
@@ -1432,7 +1425,7 @@ mod tests {
     #[test]
     fn test_eval_case_tree_2() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         let mut des = desugar_prog(p.parse_prog(
@@ -1486,7 +1479,7 @@ mod tests {
     #[test]
     fn test_eval_case_tree_3() -> eyre::Result<()> {
         let _ = env_logger::try_init();
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         env.trace_tc = true;
@@ -1874,7 +1867,7 @@ mod tests {
 
     #[test]
     fn test_subst_in_case_tree() -> eyre::Result<()> {
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         let des = desugar_prog(p.parse_prog(
@@ -2181,7 +2174,7 @@ mod tests {
 
     #[test]
     fn test_subst_in_case_tree_2() -> eyre::Result<()> {
-        let p = Parser::default();
+        let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         let des = desugar_prog(p.parse_prog(
