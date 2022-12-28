@@ -579,10 +579,10 @@ impl LshProblem {
 mod tests {
     use super::*;
     use crate::check::Unify;
-    use crate::parser::Parser;
     use crate::pct;
     use crate::syntax::core::{Elim, Func, Subst, ValData};
     use crate::syntax::desugar::desugar_prog;
+    use crate::syntax::parser::Parser;
     use crate::syntax::pattern::Pat::{Cons as ConsPat, Var};
     use crate::syntax::Plicitness::Explicit;
     use crate::syntax::{Bind, ConHead, Ident, Loc};

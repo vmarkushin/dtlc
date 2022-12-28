@@ -526,9 +526,9 @@ impl DesugarState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
     use crate::syntax::abs::Expr::Data;
     use crate::syntax::desugar::desugar_prog;
+    use crate::syntax::parser::Parser;
     use crate::syntax::Plicitness::Explicit;
     use crate::syntax::{abs, Ident, Loc, Universe};
     use itertools::Itertools;

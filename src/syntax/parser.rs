@@ -1,11 +1,11 @@
 use crate::syntax::core::Boxed;
 use crate::syntax::surf::*;
 use crate::syntax::surf::{Decl, Expr, Prog};
+use crate::syntax::token::Token;
 use crate::syntax::Plicitness::{Explicit, Implicit};
 use crate::syntax::{Ident, Loc};
 use crate::syntax::{Plicitness, Universe};
-use crate::token::Token;
-use ariadne::{Color, Config, Fmt, Label, Report, ReportKind, Source};
+use ariadne::{Color, Fmt, Label, Report, ReportKind, Source};
 use chumsky::prelude::end;
 use chumsky::prelude::*;
 use chumsky::Parser as _;
@@ -1091,10 +1091,10 @@ struct State {
 
 #[cfg(test)]
 mod tests {
-    use crate::parser::Parser;
+    use crate::syntax::parser::Parser;
     use crate::syntax::surf::Expr::{self};
+    use crate::syntax::token::Token;
     use crate::syntax::{Ident, Loc};
-    use crate::token::Token;
     use chumsky::error::Simple;
     use chumsky::Error;
 

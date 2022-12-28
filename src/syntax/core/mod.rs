@@ -271,8 +271,8 @@ impl<T> Boxed for T {
 mod tests {
 
     use crate::check::{TypeCheckState, Unify};
-    use crate::parser::Parser;
     use crate::syntax::desugar::desugar_prog;
+    use crate::syntax::parser::Parser;
     use crate::{pct, pe};
 
     #[test]

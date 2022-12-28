@@ -2,9 +2,9 @@
 mod tests {
     use crate::check::TypeCheckState;
     use crate::error::Error;
-    use crate::parser::Parser;
     use crate::syntax::core::pretty;
     use crate::syntax::desugar::desugar_prog;
+    use crate::syntax::parser::Parser;
     use crate::{pct, pe, typeck};
 
     #[test]

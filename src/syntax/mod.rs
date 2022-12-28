@@ -1,5 +1,5 @@
 use crate::syntax::core::Term;
-use crate::token::Position;
+use crate::syntax::token::Position;
 use chumsky::Span;
 use codespan::{ColumnIndex, LineIndex};
 use derive_more::{Add, AsRef, Deref, From};
@@ -10,8 +10,10 @@ use std::str::FromStr;
 pub mod abs;
 pub mod core;
 pub mod desugar;
+pub mod parser;
 pub mod pattern;
 pub mod surf;
+pub mod token;
 
 /// Plicitness (plɪsɪtnəs), noun - the quality of being explicit or implicit (Oxford dictionary (no)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -21,22 +21,15 @@
 
 #[macro_use]
 extern crate log;
-extern crate core;
 
 pub mod check;
 pub mod error;
 pub mod macros;
-pub mod parser;
 pub mod repl;
 pub mod syntax;
-pub mod token;
 
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 extern crate quickcheck;
-
-fn main() {
-    println!("Hello, world!");
-}

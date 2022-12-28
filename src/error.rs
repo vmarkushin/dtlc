@@ -1,7 +1,7 @@
 use crate::check::Error as CheckError;
-use crate::parser::ParseError;
 use crate::syntax::core::{pretty, Pretty};
 use crate::syntax::desugar::DesugarError;
+use crate::syntax::parser::ParseError;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 

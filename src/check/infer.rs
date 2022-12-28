@@ -474,7 +474,7 @@ impl TypeCheckState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
+    use crate::syntax::parser::Parser;
 
     use crate::syntax::core::ValData;
     use crate::syntax::desugar::desugar_prog;

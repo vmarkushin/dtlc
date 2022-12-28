@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::{borrow::Cow, fmt, fs};
 
 use crate::check::TypeCheckState;
-use crate::parser::Parser;
 use crate::syntax::desugar::{desugar_prog, DesugarState};
+use crate::syntax::parser::Parser;
 use eyre::{Result, WrapErr};
 use rustyline::{
     completion::Completer,

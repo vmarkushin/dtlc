@@ -10,8 +10,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use dtlc::check::TypeCheckState;
-    use dtlc::parser::Parser;
     use dtlc::syntax::desugar::desugar_prog;
+    use dtlc::syntax::parser::Parser;
 
     use std::fs;
 
