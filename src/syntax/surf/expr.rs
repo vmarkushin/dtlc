@@ -93,8 +93,8 @@ impl Expr {
         )
     }
 
-    pub fn var(name: impl Into<String>, loc: impl Into<Loc>) -> Self {
-        Self::Var(Ident::new(name, loc.into()))
+    pub fn var(name: impl Into<String>) -> Self {
+        Self::Var(Ident::new(name))
     }
 }
 

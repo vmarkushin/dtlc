@@ -105,10 +105,10 @@ data D (DA : Type) (da : DA) : Type1
 --fn bug2 (A : Type)
 --       (B : (b : _) -> ((B b ?todood) -> Type)) : Type := ?safsdf
 
-fn bug (A : Type)
-       (B : (b : _) -> ((D A b) -> Type))
-       (a : A)
-       : B a (d A a) := ?asdasd
+-- fn bug (A : Type)
+--        (B : (b : _) -> ((D A b) -> Type))
+--        (a : A)
+--        : B a (d A a) := ?asdasd
 
 -- fn J
 --     {A : Type} {x : A}

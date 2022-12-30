@@ -68,6 +68,13 @@ macro_rules! assert_err {
 }
 
 #[macro_export]
+macro_rules! assert_term_eq {
+    ($p:ident, $d:ident, $e:ident, $x:expr, $y:expr) => {
+        assert_eq!($crate::pct!($p, $d, $e, $x), $crate::pct!($p, $d, $e, $y));
+    };
+}
+
+#[macro_export]
 macro_rules! dsp {
     // NOTE: We cannot use `concat!` to make a static string as a format argument
     // of `eprintln!` because `file!` could contain a `{` or

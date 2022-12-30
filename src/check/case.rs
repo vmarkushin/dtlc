@@ -1649,7 +1649,7 @@ mod tests {
         ];
         gamma1.extend(delta.clone());
         let _cons = Term::cons(
-            ConHead::new(Ident::new("Cons", Loc::default()), 7),
+            ConHead::new(Ident::new("Cons"), 7),
             (0..delta.len()).rev().map(Term::from_dbi).collect(),
         );
         let _rise = delta.len();
@@ -1755,14 +1755,14 @@ mod tests {
         //   ^
         // A Ba Bb Bc C D
         let cons = Term::cons(
-            ConHead::new(Ident::new("CC", Loc::default()), 7),
+            ConHead::new(Ident::new("CC"), 7),
             [2, 1, 3].into_iter().map(Term::from_dbi).collect(),
         );
         // CC B C A
         // CC (Cons Ba Bb Bc) C A
         let term = cons.clone().apply(vec![Term::from_dbi(2)]);
         let cons2 = Term::cons(
-            ConHead::new(Ident::new("Cons", Loc::default()), 7),
+            ConHead::new(Ident::new("Cons"), 7),
             (0..3).rev().map(Term::from_dbi).collect(),
         );
         let rise = 3;
@@ -1775,7 +1775,7 @@ mod tests {
         // n m
         let x = Term::from_dbi(1);
         let cons2 = Term::cons(
-            ConHead::new(Ident::new("C2", Loc::default()), 7),
+            ConHead::new(Ident::new("C2"), 7),
             [2, 1, 3].into_iter().map(Term::from_dbi).collect(),
         );
         let rc = Substitution::one(cons).cons(cons2);
@@ -1846,11 +1846,7 @@ mod tests {
             ],
         );
         println!("{}", ct);
-        let subst = Substitution::one(Term::Redex(
-            Func::Index(1),
-            Ident::new("n1", Loc::default()),
-            vec![],
-        ));
+        let subst = Substitution::one(Term::Redex(Func::Index(1), Ident::new("n1"), vec![]));
         // let subst = Substitution::one(Term::cons(
         //     ConHead {
         //         name: Ident {
@@ -2418,9 +2414,9 @@ mod tests {
         use CaseTree::*;
 
         // Γ = (m : Nat) (n : Nat)
-        let con_z = ConHead::new(Ident::new("Z", Loc::default()), 0);
+        let con_z = ConHead::new(Ident::new("Z"), 0);
         let pat_z = Cons(false, con_z.clone(), vec![]);
-        let con_s = ConHead::new(Ident::new("S", Loc::default()), 1);
+        let con_s = ConHead::new(Ident::new("S"), 1);
         let pat_s = |x: DBI| Cons(false, con_s.clone(), vec![Var(x)]);
         let ct_1 = Case(
             Term::from_dbi(1),
@@ -2478,7 +2474,7 @@ mod tests {
                                 con_s.clone(),
                                 vec![Term::def(
                                     2,
-                                    Ident::new("max", Loc::default()),
+                                    Ident::new("max"),
                                     vec![Elim::from_dbi(1), Elim::from_dbi(0)],
                                 )],
                             )],
@@ -2517,7 +2513,7 @@ mod tests {
                                         con_s.clone(),
                                         vec![Term::def(
                                             2,
-                                            Ident::new("max", Loc::default()),
+                                            Ident::new("max"),
                                             vec![Elim::from_dbi(1), Elim::from_dbi(0)],
                                         )],
                                     )],

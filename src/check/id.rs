@@ -37,6 +37,7 @@ mod tests {
         };
         if let Err(e) = result {
             println!("{}", pretty(&e, &env));
+            return Err(e.into());
         }
         Ok(())
     }

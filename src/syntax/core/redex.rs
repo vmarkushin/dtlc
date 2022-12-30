@@ -27,7 +27,7 @@ impl Term {
                 a.append(&mut args);
                 Term::meta(m, a)
             }
-            Term::Lam(lam) => Term::Redex(Func::Lam(lam), Ident::new("<λ>", 0..0), args),
+            Term::Lam(lam) => Term::Redex(Func::Lam(lam), Ident::new("<λ>"), args),
             Term::Cons(c, mut a) => {
                 let mut iter = args.into_iter();
                 match iter.next() {

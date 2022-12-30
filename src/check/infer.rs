@@ -70,7 +70,7 @@ impl TypeCheckState {
                     view,
                     &head,
                     *def,
-                    Ident::new("<data>", Loc::default()),
+                    Ident::new("<data>"),
                     info.signature.clone(),
                     |_, gi, args| Term::data(ValData::new(gi, args)),
                 )
@@ -479,7 +479,7 @@ mod tests {
     use crate::syntax::core::ValData;
     use crate::syntax::desugar::desugar_prog;
     use crate::syntax::Loc;
-    use crate::{assert_err, pct, pe, typeck};
+    use crate::{assert_err, assert_term_eq, pct, pe, typeck};
 
     #[test]
     fn test_check_basic() -> eyre::Result<()> {
@@ -703,6 +703,37 @@ mod tests {
             "mkSigma _ _ (S O) false",
             "Sigma Nat (lam (x : Nat) => Bool)"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_infer_literal() -> eyre::Result<()> {
+        use crate::check::TypeCheckState;
+        use crate::error::Error;
+        use crate::syntax::core::pretty;
+        use crate::syntax::desugar::desugar_prog;
+        use crate::syntax::parser::Parser;
+        use crate::{pct, pe, typeck};
+
+        let _ = env_logger::try_init();
+        let mut p = Parser::default();
+        let mut env = TypeCheckState::default();
+        env.indentation_size(2);
+        env.trace_tc = true;
+        let mut des = desugar_prog(p.parse_prog_with_std(r#""#, None)?)?;
+        let result: Result<(), Error> = try {
+            env.check_prog(des.clone())?;
+            env.trace_tc = true;
+
+            typeck!(p, des, env, "0", "Nat");
+            typeck!(p, des, env, "1", "Nat");
+            assert_term_eq!(p, des, env, "1", "suc zero");
+            assert_term_eq!(p, des, env, "3", "suc (suc (suc zero))");
+        };
+        if let Err(e) = result {
+            println!("{}", pretty(&e, &env));
+            return Err(e.into());
+        }
         Ok(())
     }
 }

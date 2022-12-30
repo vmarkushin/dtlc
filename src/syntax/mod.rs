@@ -152,7 +152,14 @@ impl PartialEq for Ident {
 }
 
 impl Ident {
-    pub fn new(text: impl Into<String>, loc: impl Into<Loc>) -> Self {
+    pub fn new(text: impl Into<String>) -> Self {
+        Ident {
+            loc: Loc::default(),
+            text: text.into(),
+        }
+    }
+
+    pub fn located(text: impl Into<String>, loc: impl Into<Loc>) -> Self {
         Ident {
             loc: loc.into(),
             text: text.into(),
@@ -230,7 +237,7 @@ impl<T> From<(UID, T)> for Bind<T> {
             licit: Plicitness::Explicit,
             name,
             ty,
-            ident: Ident::new(format!("{}", name), Loc::default()),
+            ident: Ident::new(format!("{}", name)),
         }
     }
 }
@@ -246,12 +253,12 @@ impl Display for Bind<Term> {
 }
 
 impl<T> Bind<T> {
-    pub fn new(licit: Plicitness, name: UID, ty: T, _loc: Loc) -> Self {
+    pub fn new(licit: Plicitness, name: UID, ty: T, loc: Loc) -> Self {
         Self {
             licit,
             name,
             ty,
-            ident: Ident::new(format!("{}", name), Loc::default()),
+            ident: Ident::located(format!("{}", name), loc),
         }
     }
 

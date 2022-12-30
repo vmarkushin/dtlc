@@ -318,7 +318,7 @@ mod tests {
 
     use crate::syntax::core::{Case, Ctx, ValData};
     use crate::syntax::pattern::Pat;
-    use crate::syntax::{ConHead, Ident, Loc};
+    use crate::syntax::{ConHead, Ident};
 
     #[test]
     fn test_strengthening() {
@@ -485,7 +485,7 @@ mod tests {
             x,
             vec![Case::new(
                 Pat::cons(
-                    ConHead::new(Ident::new("C", Loc::default()), 4),
+                    ConHead::new(Ident::new("C"), 4),
                     vec![Pat::Var(2), Pat::Var(1)],
                 ),
                 Term::from_dbi(3).apply(vec![

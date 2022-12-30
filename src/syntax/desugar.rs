@@ -351,7 +351,7 @@ impl DesugarState {
             }
             Expr::Hole(loc) => {
                 let i = self.next_meta();
-                Ok(ExprA::Meta(Ident::new(format!("hole{}", i), loc), i))
+                Ok(ExprA::Meta(Ident::located(format!("hole{}", i), loc), i))
             }
             Expr::Match(exprs, cases) => {
                 let exprs = exprs
@@ -567,7 +567,7 @@ fn foo (p : Nat) := match p {
                     "Nat".to_owned(),
                     DeclA::Data(DataInfoA::new(
                         (6..9).into(),
-                        Ident::new("Nat", 6..9),
+                        Ident::new("Nat"),
                         Some(Universe(0)),
                         vec![],
                         vec![1, 2]
@@ -575,22 +575,17 @@ fn foo (p : Nat) := match p {
                 ),
                 (
                     "Z".to_owned(),
-                    DeclA::Cons(ConsInfoA::new(
-                        (23..24).into(),
-                        Ident::new("Z", 23..24),
-                        vec![],
-                        0
-                    )),
+                    DeclA::Cons(ConsInfoA::new((23..24).into(), Ident::new("Z"), vec![], 0)),
                 ),
                 (
                     "S".to_owned(),
                     DeclA::Cons(ConsInfoA::new(
                         (31..32).into(),
-                        Ident::new("S", 31..32),
+                        Ident::new("S"),
                         vec![Bind::new(
                             Explicit,
                             0,
-                            Some(ExprA::Data(Ident::new("Nat", 33..36), 0)),
+                            Some(ExprA::Data(Ident::new("Nat"), 0)),
                             Loc::new(33, 36)
                         )],
                         0
@@ -599,7 +594,7 @@ fn foo (p : Nat) := match p {
                 (
                     "foo".to_owned(),
                     DeclA::Fn(FuncA::new(
-                        Ident::new("foo", Loc::new(41, 44),),
+                        Ident::new("foo",),
                         Some(ExprA::Lam(
                             Loc::default(),
                             Bind {
@@ -612,7 +607,7 @@ fn foo (p : Nat) := match p {
                                     },
                                     0
                                 )),
-                                ident: Ident::new("p", Loc::new(46, 47))
+                                ident: Ident::new("p",)
                             },
                             box Match(abs::Match::new(
                                 vec1![Var(
@@ -654,7 +649,7 @@ fn foo (p : Nat) := match p {
                                                                 },
                                                                 0
                                                             )),
-                                                            ident: Ident::new("1", Loc::default())
+                                                            ident: Ident::new("1")
                                                         },
                                                         box Data(
                                                             Ident {
@@ -664,7 +659,7 @@ fn foo (p : Nat) := match p {
                                                             0
                                                         )
                                                     )),
-                                                    ident: Ident::new("f", Loc::default())
+                                                    ident: Ident::new("f")
                                                 },
                                                 box ExprA::App(
                                                     box ExprA::Var(
@@ -695,7 +690,7 @@ fn foo (p : Nat) := match p {
                                                         },
                                                         0
                                                     )),
-                                                    ident: Ident::new("n", Loc::default())
+                                                    ident: Ident::new("n")
                                                 },
                                                 box ExprA::Var(
                                                     Ident {
@@ -736,10 +731,10 @@ fn foo (p : Nat) := match p {
                             Bind::identified(
                                 Explicit,
                                 0,
-                                box Some(Data(Ident::new("Nat", Loc::new(50, 53)), 0)),
-                                Ident::new("p", Loc::new(46, 47))
+                                box Some(Data(Ident::new("Nat",), 0)),
+                                Ident::new("p",)
                             ),
-                            box Meta(Ident::new("hole0", Loc::new(41, 44)), 0)
+                            box Meta(Ident::new("hole0",), 0)
                         )),
                     )),
                 )
