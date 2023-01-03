@@ -240,6 +240,18 @@ impl Subst for Term {
     }
 }
 
+impl Subst for Elim {
+    fn subst(self, subst: Rc<Substitution>) -> Elim {
+        match self {
+            Elim::App(t) => {
+                let t = t.subst(subst.clone());
+                Elim::App(t.boxed())
+            }
+            Elim::Proj(p) => Elim::Proj(p),
+        }
+    }
+}
+
 impl SubstWith<'_> for Term {
     fn subst_with(self, subst: Rc<Substitution>, tcs: &'_ mut TypeCheckState) -> Term {
         match self {

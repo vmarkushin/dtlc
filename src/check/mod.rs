@@ -18,6 +18,7 @@ mod infer;
 mod meta;
 mod norm;
 mod state;
+mod unification;
 mod unify;
 
 #[cfg_attr(test, derive(PartialEq, Eq))]

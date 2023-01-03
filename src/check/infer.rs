@@ -2,7 +2,7 @@ use crate::check::state::TypeCheckState;
 use crate::check::{Clause, Error, LshProblem, Result};
 use crate::ensure;
 use crate::syntax::abs::{AppView, Expr, Match};
-use crate::syntax::core::{self, Boxed, Closure, Tele};
+use crate::syntax::core::{self, Boxed, Closure, Ctx, Tele};
 use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, ValData, Var};
 use crate::syntax::surf::{nat_to_term, Literal};
 use crate::syntax::{abs, ConHead, Ident, LangItem, Loc, Universe, GI};
@@ -188,6 +188,12 @@ impl TypeCheckState {
             }
             Decl::Func(func) => Ok(func.signature.clone().at(func.loc)),
         }
+    }
+
+    pub fn type_of(&mut self, term: &Term) -> Result<Term> {
+        let (e, ty) = self.infer(&term.to_expr())?;
+        debug_assert_eq!(e.ast, *term);
+        Ok(ty)
     }
 
     fn infer_head(&mut self, input_term: &Expr) -> Result<(TermInfo, Term)> {

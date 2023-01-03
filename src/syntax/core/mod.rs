@@ -258,14 +258,22 @@ impl LetList {
 }
 
 pub trait Boxed {
-    fn boxed(self) -> Box<Self>;
-}
-
-impl<T> Boxed for T {
-    fn boxed(self) -> Box<Self> {
+    fn boxed(self) -> Box<Self>
+    where
+        Self: Sized,
+    {
         Box::new(self)
     }
+
+    fn unboxed(self: Box<Self>) -> Self
+    where
+        Self: Sized,
+    {
+        *self
+    }
 }
+
+impl<T> Boxed for T {}
 
 #[cfg(test)]
 mod tests {

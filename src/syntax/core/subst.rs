@@ -543,4 +543,13 @@ mod tests {
         //       3       2        1        0
         // σ -- BROKEN
     }
+
+    #[test]
+    fn test_raise() {
+        let _ = env_logger::try_init();
+        let term = Term::fun_app(0, "foo", [0, 1, 2].map(Term::from_dbi));
+        println!("{}", term);
+        let subst = Substitution::raise(2);
+        println!("{}", term.subst(subst));
+    }
 }
