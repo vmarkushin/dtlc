@@ -288,6 +288,15 @@ impl<T> Bind<T> {
         Bind::identified(self.licit, self.name, f(self.ty), self.ident)
     }
 
+    pub fn try_map_term<R, E>(self, f: impl FnOnce(T) -> Result<R, E>) -> Result<Bind<R>, E> {
+        Ok(Bind::identified(
+            self.licit,
+            self.name,
+            f(self.ty)?,
+            self.ident,
+        ))
+    }
+
     pub fn ident(self) -> Ident {
         self.ident
     }

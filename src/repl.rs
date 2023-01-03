@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::{borrow::Cow, fmt, fs};
 
 use crate::check::TypeCheckState;
+use crate::syntax::core::pretty;
 use crate::syntax::desugar::{desugar_prog, DesugarState};
 use crate::syntax::parser::Parser;
 use eyre::{Result, WrapErr};
@@ -185,6 +186,7 @@ impl Completer for Helper {
 
 pub fn repl(
     prompt: &str,
+    use_std: bool,
     mut f: impl FnMut(&mut Parser, &mut DesugarState, &mut TypeCheckState, &'static str) -> Result<()>,
 ) {
     let mut rl = Editor::with_config(
@@ -193,7 +195,19 @@ pub fn repl(
             .color_mode(ColorMode::Enabled)
             .build(),
     );
-    rl.set_helper(Some(Helper::default()));
+
+    let mut helper = Helper::default();
+    if use_std {
+        load_module(
+            &mut helper.parser,
+            &mut helper.des,
+            &mut helper.env,
+            "lib/prelude.dtl",
+        )
+        .expect("Failed to load prelude");
+    }
+
+    rl.set_helper(Some(helper));
 
     let history = PathBuf::from(std::env::var("HOME").unwrap()).join(".dtlc_history");
     drop(rl.load_history(&history));
@@ -229,10 +243,7 @@ pub fn run_repl(
     input: &'static str,
 ) -> Result<()> {
     if let Some(input) = input.strip_prefix(":l ") {
-        let content = fs::read_to_string(input)?;
-        let prog = parser.parse_prog(&content).unwrap();
-        *des = desugar_prog(prog).unwrap();
-        env.check_prog(des.clone())?;
+        load_module(parser, des, env, input)?;
         return Ok(());
     }
     if input.starts_with("fn ") || input.starts_with("data ") {
@@ -279,11 +290,10 @@ pub fn run_repl(
             des.cur_meta_id.pop();
         }
         let term = infer_res?;
-        println!(
-            "{}",
-            env.simplify(term)
-                .wrap_err("Failed to simplify the expression")?
-        );
+        let norm = env
+            .normalize(term)
+            .wrap_err("Failed to simplify the expression")?;
+        println!("{}", pretty(&norm, env));
     } else {
         des.cur_meta_id.push(Default::default());
         env.enter_def(env.sigma.len(), *des.cur_meta_id.last().unwrap());
@@ -297,6 +307,19 @@ pub fn run_repl(
         let t = res?;
         println!("{}", t);
     }
+    Ok(())
+}
+
+fn load_module(
+    parser: &mut Parser,
+    des: &mut DesugarState,
+    env: &mut TypeCheckState,
+    input: &str,
+) -> Result<()> {
+    let content = fs::read_to_string(input)?;
+    let prog = parser.parse_prog(&content).unwrap();
+    *des = desugar_prog(prog).unwrap();
+    env.check_prog(des.clone())?;
     Ok(())
 }
 

@@ -4,7 +4,7 @@ use dtlc::repl;
 
 fn main() {
     env_logger::init();
-    repl::repl("> ", repl::run_repl);
+    repl::repl("> ", true, repl::run_repl);
 }
 
 #[cfg(test)]
