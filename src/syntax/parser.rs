@@ -11,6 +11,7 @@ use chumsky::prelude::*;
 use chumsky::Parser as _;
 use chumsky::Stream;
 use codespan_reporting::files::SimpleFile;
+use dyn_clone::DynClone;
 use itertools::{Either, Itertools};
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -26,19 +27,35 @@ use vec1::Vec1;
 pub type ParseError<'a> = Simple<Token<'a>, Loc>;
 const UNIT: &() = &();
 
-#[track_caller]
 macro_rules! Parser {
     ($O:path) => { impl chumsky::Parser<Token<'static>, $O, Error = ParseError<'static>> + Clone + 'static };
     ($O:path: $($bounds:tt)*) => { impl chumsky::Parser<Token<'static>, $O, Error = ParseError<'static>> + $($bounds)* };
     ($I:path, $O:path) => { impl chumsky::Parser<$I, $O, Error = Simple<$I, Loc>> };
 }
 
-type BoxedParser<I, O, E> = Box<dyn chumsky::Parser<I, O, Error = E>>;
+trait ParserExt<I: Clone, O, E>: chumsky::Parser<I, O, Error = E> + DynClone + 'static {}
+
+dyn_clone::clone_trait_object!(<I: Clone, O, E> ParserExt<I, O, E>);
+
+impl<T, I: Clone, O, E> ParserExt<I, O, E> for T where
+    T: chumsky::Parser<I, O, Error = E> + DynClone + 'static
+{
+}
+
+type BoxedParser<I, O, E = ParseError<'static>> = Box<dyn chumsky::Parser<I, O, Error = E>>;
+type BoxedParserCloned<I, O, E = ParseError<'static>> = Box<dyn ParserExt<I, O, E>>;
 
 #[inline]
 fn box_parser<I: Clone, O, E>(
     p: impl chumsky::Parser<I, O, Error = E> + 'static,
 ) -> BoxedParser<I, O, E> {
+    Box::new(p)
+}
+
+#[inline]
+fn box_parser_cloned<I: Clone, O, E>(
+    p: impl ParserExt<I, O, E> + 'static,
+) -> BoxedParserCloned<I, O, E> {
     Box::new(p)
 }
 
@@ -48,6 +65,7 @@ fn err_to_static<'a>(e: ParseError<'a>) -> ParseError<'static> {
         Token::Universe(x) => Token::Universe(x),
         Token::Pi => Token::Pi,
         Token::Ident(x) => Token::Ident(x),
+        Token::IdentOp(x) => Token::IdentOp(x),
         Token::Data => Token::Data,
         Token::Codata => Token::Codata,
         Token::Match => Token::Match,
@@ -82,14 +100,52 @@ fn err_to_static<'a>(e: ParseError<'a>) -> ParseError<'static> {
 
 const FORBIDDEN: &str = "(){}, \n\t\r";
 
+fn fail<I: Clone + PartialEq + 'static, O, E: chumsky::Error<I> + 'static>(
+) -> impl chumsky::Parser<I, O, Error = E> + Clone + 'static {
+    one_of(vec![]).map(|_| unreachable!())
+}
+
+#[derive(Debug)]
+struct OperatorsAndFunctions(Operators, Vec<Ident>);
+
+impl Display for OperatorsAndFunctions {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut ops = self.0 .0.iter().collect::<Vec<_>>();
+        ops.sort_by(|(a, _), (b, _)| a.cmp(b));
+        let mut ops = ops
+            .into_iter()
+            .map(|(a, b)| format!("{} ({})", a, b))
+            .join(", ");
+        if !ops.is_empty() {
+            ops = format!("operators: {}", ops);
+        }
+        let mut fns = self.1.iter().map(|x| x.to_string()).join(", ");
+        if !fns.is_empty() {
+            fns = format!("functions: {}", fns);
+        }
+        if ops.is_empty() {
+            write!(f, "{}", fns)
+        } else if fns.is_empty() {
+            write!(f, "{}", ops)
+        } else {
+            write!(f, "{}, {}", ops, fns)
+        }
+    }
+}
+
 pub struct Parser {
     file: SimpleFile<String, String>,
     scope: Vec<Ident>,
     should_refine: bool,
     operators: Operators,
+    debug: bool,
 }
 
 impl Parser {
+    pub fn debug(&mut self, flag: bool) {
+        self.debug = flag;
+    }
+
     fn parse_using<'inp, T: Display + Debug>(
         &self,
         parser: Parser!(T:),
@@ -112,6 +168,7 @@ impl Parser {
             .map(|id| id.text.clone())
             .collect::<HashSet<_>>()
             .into_iter()
+            .map(|t| (t, false))
             .collect::<Vec<_>>();
         let op_tokens = self
             .operators
@@ -122,24 +179,40 @@ impl Parser {
                     .0
                     .iter()
                     .filter_map(|p| match p {
-                        OperatorPattern::Tok(s) => Some(s.clone()),
+                        OperatorPattern::Tok(s) => Some((s.clone(), true)),
                         OperatorPattern::Expr => None,
                     })
-                    .chain(once(name.text.clone()))
+                    .chain(once((name.text.clone(), false)))
             })
             .collect::<Vec<_>>();
         additional_tokens.extend(op_tokens);
 
+        debug!(target: "parser", "parsing using operators: {}", self.operators);
         let (tokens, les) = lexer(additional_tokens, lexer_ignore_idents).parse_recovery(stream);
         let mut out = None;
         let mut err = None;
         let es = if let Some(tokens) = tokens {
-            // let toks = tokens.iter().map(|t| format!("{}", t.0)).join(" ");
-            debug!(target: "parser", "tokens: {tokens:#?}");
-            let (e, es) = parser.then_ignore(end()).parse_recovery(Stream::from_iter(
-                Loc::new(len, len + 1),
-                tokens.into_iter(),
-            ));
+            let tokens_formatted = tokens
+                .iter()
+                .map(|(t, _)| {
+                    let mut delim = "";
+                    if matches!(t, Token::Fn | Token::Data | Token::Hash) {
+                        delim = "\n";
+                    }
+                    format!("{delim}{t:?}")
+                })
+                .join(" ");
+            debug!(target: "parser", "tokens: {}", tokens_formatted);
+
+            let f = if self.debug {
+                chumsky::Parser::parse_recovery_verbose
+            } else {
+                chumsky::Parser::parse_recovery
+            };
+            let (e, es) = f(
+                &parser.then_ignore(end()),
+                Stream::from_iter(Loc::new(len, len + 1), tokens.into_iter()),
+            );
             out = e;
             err = es.first().cloned();
             es
@@ -235,7 +308,9 @@ impl Parser {
     }
 
     pub fn parse_decl<'inp>(&mut self, input: &'inp str) -> Result<Decl, ParseError<'inp>> {
-        self.operators = self.parse_using(self.operators_parser(), input, false)?;
+        let OperatorsAndFunctions(ops, _funcs) =
+            self.parse_using(self.operators_parser(), input, false)?;
+        self.operators.0.extend(ops.0);
         let mut decl = self.parse_using(self.decl(), input, false)?;
         if self.should_refine {
             let ident = decl.name();
@@ -247,7 +322,9 @@ impl Parser {
 
     pub fn parse_prog<'inp>(&mut self, input: &'inp str) -> Result<Prog, ParseError<'inp>> {
         debug!(target: "parser", "Parsing operators...");
-        self.operators = self.parse_using(self.operators_parser(), input, false)?;
+        let OperatorsAndFunctions(ops, _funcs) =
+            self.parse_using(self.operators_parser(), input, false)?;
+        self.operators.0.extend(ops.0);
         debug!(target: "parser", "Parsing prog...");
         let mut prog = self.parse_using(self.prog(), input, false)?;
         if self.should_refine {
@@ -287,8 +364,9 @@ impl Parser {
         Self {
             file,
             scope: vec![],
-            should_refine: true,
+            should_refine: false,
             operators: Operators(Default::default()),
+            debug: false,
         }
     }
 
@@ -311,68 +389,180 @@ impl Parser {
             let forall_params = forall_params(&expr);
             let param_parser = param(&expr, &prim_expr);
 
-            let mut funcs = self.operators.0.iter().collect::<Vec<_>>();
-            funcs.sort_by(|(n1, f1), (n2, f2)| {
-                let pattern_ord = f1.patterns.cmp(&f2.patterns);
+            let mut operators = self.operators.0.iter().collect::<Vec<_>>();
+            operators.sort_by(|(_n1, f1), (_n2, f2)| {
                 let prec_ord = f1.precedence.cmp(&f2.precedence).reverse();
-                let assoc_ord = f1.associativity.cmp(&f2.associativity);
+                let kind_ord = || f1.fixity().cmp(&f2.fixity());
+                let pattern_ord = || f1.patterns.cmp(&f2.patterns);
+                let assoc_ord = || f1.associativity.cmp(&f2.associativity);
 
-                let ord = prec_ord.then(pattern_ord).then(assoc_ord);
-                println!("Comparing {} and {}: {:?}. pat: {:?}, prec: {:?}, assoc: {:?}", n1, n2, ord, pattern_ord, prec_ord, assoc_ord);
-                ord
+                prec_ord
+                    .then_with(kind_ord)
+                    .then_with(pattern_ord)
+                    .then_with(assoc_ord)
             });
-            let vec: Vec<_> = funcs
+            let operators: Vec<_> = operators
                 .into_iter()
-                .map(|(k, v)| {
-                    debug!(target: "parser", "Prepared operator: {}, assoc: {:?}, prec: {}", k, v.associativity, v.precedence);
-                    (k.clone(), v.clone())
-                })
+                .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
 
-            // let mut postfix_ops = vec
-            //     .iter()
-            //     .filter(|(_, f)| f.patterns.is_postfix())
-            //     .filter_map(|(k, f)| match &f.patterns.0[1] {
-            //         OperatorPattern::Tok(s) => Some(s.clone()),
-            //         OperatorPattern::Expr => None,
-            //     })
-            //     .collect::<Vec<_>>();
-            // TODO: rewrite with an empty parser
-            let mut op_parser = None;
-            let mut postfix_op_parser = None;
+            let prim_expr_cl = prim_expr.clone();
+            let app = prim_expr
+                .clone()
+                .then_with(move |f| {
+                    let args = prim_expr_cl.clone().repeated().map(move |args| {
+                        if args.is_empty() {
+                            f.clone()
+                        } else {
+                            Expr::App(Box::new(f.clone()), Vec1::try_from_vec(args).unwrap())
+                        }
+                    });
 
-            for (ident, func) in vec {
-                let either = func.to_parser(&prim_expr, &expr);
-                match either {
-                    Either::Left(p) => {
-                        let map = p
-                            .map(move |es| {
-                                println!("found op: {}", ident);
-                                (ident.clone(), es)
-                            })
-                            .labelled("operator");
-                        if op_parser.is_none() {
-                            op_parser = Some(box_parser(map));
+                    box_parser(args)
+                })
+                .debug("app");
+
+            // a parser with the next higher precedence level
+            let mut tighter_parser: Option<BoxedParserCloned<_, Expr, _>> =
+                Some(box_parser_cloned(app.clone()));
+
+            let leveled_operators = operators.into_iter().group_by(|(_ident, op)| op.precedence);
+            for (_, op_lvl) in &leveled_operators {
+                let group = op_lvl.collect::<Vec<_>>();
+                let fixity_operators = group.into_iter().group_by(|(_ident, op)| op.fixity());
+                let mut fixity_to_operator = fixity_operators
+                    .into_iter()
+                    .map(|(kind, g)| (kind, g.collect::<Vec<_>>()))
+                    .collect::<HashMap<_, _>>();
+
+                let next_parser = tighter_parser.take().unwrap();
+
+                let make_kind_op_parser = |ops: Vec<(Ident, Operator)>| {
+                    ops.into_iter()
+                        .fold(box_parser_cloned(fail()), |acc, (f, op)| {
+                            let (p, _) = op.to_parser(&expr, &prim_expr, &next_parser);
+                            box_parser_cloned(acc.or(p.map(move |x| (f.clone(), x))))
+                        })
+                };
+
+                let closed_ops = fixity_to_operator
+                    .remove(&Fixity::Closed)
+                    .unwrap_or_default();
+                let prefix_ops = fixity_to_operator
+                    .remove(&Fixity::Prefix)
+                    .unwrap_or_default();
+                let postfix_ops = fixity_to_operator
+                    .remove(&Fixity::Postfix)
+                    .unwrap_or_default();
+                let infix_ops = fixity_to_operator
+                    .remove(&Fixity::Infix)
+                    .unwrap_or_default();
+
+                let lvl_op_sig = closed_ops
+                    .iter()
+                    .chain(postfix_ops.iter())
+                    .chain(prefix_ops.iter())
+                    .chain(infix_ops.iter())
+                    .map(|(ident, _)| ident.text.clone())
+                    .fold(String::new(), |acc, s| {
+                        if acc.is_empty() {
+                            s
                         } else {
-                            op_parser = Some(box_parser(op_parser.take().unwrap().or(map)));
+                            format!("{} | {}", acc, s)
                         }
-                    }
-                    Either::Right(p) => {
-                        let map = p
-                            .map(move |es| {
-                                println!("found postfix op: {}", ident);
-                                (ident.clone(), es)
-                            })
-                            .labelled("postfix operator");
-                        if postfix_op_parser.is_none() {
-                            postfix_op_parser = Some(box_parser(map));
+                    });
+
+                let closed_ops_parser = make_kind_op_parser(closed_ops);
+                let prefix_ops_parser = make_kind_op_parser(prefix_ops);
+                let postfix_ops_parser = make_kind_op_parser(postfix_ops);
+                let infix_ops_parser = make_kind_op_parser(infix_ops);
+
+                // lvl_op = closed | prefix* next (infix | postfix)*
+
+                // TODO: parse open and open left separately?
+                let infix_or_postfix = infix_ops_parser
+                    .labelled("open_ops_parser")
+                    .or(postfix_ops_parser.labelled("open_left_ops_parser"));
+                let infix = prefix_ops_parser
+                    .debug("open_right")
+                    .clone()
+                    .repeated()
+                    .then(
+                        next_parser.clone().then(
+                            infix_or_postfix
+                                .clone()
+                                .debug("open_left")
+                                .repeated()
+                                .labelled("open_rpt"),
+                        ),
+                    )
+                    .debug("open");
+
+                let lvl_op_parser = closed_ops_parser
+                    .labelled("closed_ops_parser")
+                    .debug("closed")
+                    .map(|(f, (es, _, _))| {
+                        if es.is_empty() {
+                            Expr::Var(f)
                         } else {
-                            postfix_op_parser =
-                                Some(box_parser(postfix_op_parser.take().unwrap().or(map)));
+                            Expr::App(Expr::Var(f).boxed(), Vec1::try_from_vec(es).unwrap())
                         }
-                    }
-                }
+                    })
+                    .or(infix.map(|(prefs, (e, postfs))| {
+                        // ! if C then A else * x => !_ (if_then_else_ C A (*_ x))
+                        let e = prefs.into_iter().rev().fold(e, |e, (f, (mut es, _, _))| {
+                            es.push(e);
+                            Expr::App(Expr::Var(f).boxed(), Vec1::try_from_vec(es).unwrap())
+                        });
+
+                        if postfs.is_empty() {
+                            return e;
+                        }
+                        let assoc = postfs.get(0).expect("one of the arrays is no-empty").1 .1;
+                        if assoc == Associativity::None {
+                            if postfs.len() > 2 {
+                                panic!("ambiguous associativity");
+                            }
+                        }
+
+                        // x + y ! + z      =  x [+ y] [!] [+ z]  =  (x + y) + z            =>  _+_ (_+_ x y) z
+                        // x + y + z        =  x [+ y] [+ z]      =  (x + y) + z            =>  _+_ (_+_ x y) z
+                        // x ^ y ^ z        =  x [^ y] [^ z]      =  x ^ (y ^ z)            =>  _^_ x (_^_ y z)
+                        // e + x / y + z !  =                     =  (e + (x / y)) + (z !)  =>  _+_ (_+_ e (_/_ x y)) (_! z)
+
+                        match assoc {
+                            // TODO: handle Associativity::None case?
+                            Associativity::Left | Associativity::None => {
+                                postfs.into_iter().fold(e, |e, (f, (mut es, _, _))| {
+                                    es.insert(0, e);
+                                    Expr::App(Expr::Var(f).boxed(), Vec1::try_from_vec(es).unwrap())
+                                })
+                            }
+                            Associativity::Right => {
+                                fn go(
+                                    e: Expr,
+                                    mut postfs: Vec<(Ident, OpParserWithAssoc)>,
+                                ) -> Expr {
+                                    let (f, (mut es, _, _)) = postfs.remove(0);
+                                    let mut args = Vec1::new(e);
+                                    if !es.is_empty() {
+                                        let mut e = es.remove(0);
+                                        if !postfs.is_empty() {
+                                            e = go(e, postfs);
+                                        }
+                                        args.push(e);
+                                    }
+                                    Expr::App(Expr::Var(f).boxed(), args)
+                                }
+                                go(e, postfs)
+                            }
+                        }
+                    }))
+                    .debug(lvl_op_sig);
+
+                tighter_parser = Some(box_parser_cloned(lvl_op_parser));
             }
+            let op_parser = tighter_parser.take().unwrap();
 
             let pi = (param_parser.clone().then_ignore(just(Token::RArrow)))
                 .repeated()
@@ -397,41 +587,8 @@ impl Parser {
                 .then(case.clone().repeated())
                 .then_ignore(just(Token::RBrace))
                 .debug("mat");
-            let prim_expr_cl = prim_expr.clone();
-            let op_parser = if let Some(op_parser) = op_parser {
-                box_parser(op_parser.map(|(name, es)| {
-                    Expr::app_many(
-                        Expr::Var(name),
-                        Vec1::try_from_vec(es.into_iter().collect()).unwrap(),
-                    )
-                }))
-            } else {
-                box_parser(one_of([]).map(|_| unreachable!()))
-            };
-            let postfix_op_parser = if let Some(postfix_op_parser) = postfix_op_parser {
-                box_parser(postfix_op_parser)
-            } else {
-                box_parser(one_of([]).map(|_| unreachable!()))
-            };
-            /*
-            let app = op_parser.debug("op_parser").or(prim_expr
-                .clone()
-                .then_with(move |f| {
-                    let args = prim_expr_cl.clone().repeated().map(move |args| {
-                        if args.is_empty() {
-                            f.clone()
-                        } else {
-                            Expr::App(Box::new(f.clone()), Vec1::try_from_vec(args).unwrap())
-                        }
-                    });
 
-                    box_parser(args)
-                })
-                .debug("app"));
-             */
-
-            let prefix = lam
-                .map(|(ps, body)| Expr::Lam(ps, body.boxed()))
+            lam.map(|(ps, body)| Expr::Lam(ps, body.boxed()))
                 .or(mat
                     .map(|(exprs, cases)| Expr::Match(Vec1::try_from_vec(exprs).unwrap(), cases)))
                 .or(pi.map(|(ps, ret)| {
@@ -439,46 +596,6 @@ impl Parser {
                     Expr::Pi(Vec1::try_from_vec(ps).unwrap(), ret.boxed())
                 }))
                 .or(op_parser)
-                .or(prim_expr.clone());
-
-            let app = prim_expr
-                .clone()
-                .then_with(move |f| {
-                    let args = prim_expr_cl.clone().repeated().map(move |args| {
-                        if args.is_empty() {
-                            f.clone()
-                        } else {
-                            Expr::App(Box::new(f.clone()), Vec1::try_from_vec(args).unwrap())
-                        }
-                    });
-
-                    box_parser(args)
-                })
-                .debug("app");
-
-            let operators = self.operators.0.clone();
-            prefix
-                .then(postfix_op_parser.repeated().at_least(1).or_not())
-                .map(move |(prefix_expr, maybe_postfix)| {
-                    if let Some(apps) = maybe_postfix {
-                        let apps = Vec1::try_from_vec(apps).unwrap();
-                        let mut expr = prefix_expr;
-                        // n + m + k
-                        // * (+ n m) k
-                        for (ident, mut elims) in apps {
-                            let op = operators.get(&ident).cloned().unwrap();
-                            elims.insert(0, expr);
-                            expr = Expr::app_many(
-                                Expr::Var(ident),
-                                Vec1::try_from_vec(elims).unwrap(),
-                            );
-                        }
-                        expr
-                    } else {
-                        prefix_expr
-                    }
-                })
-                .or(app)
         })
         .debug("expr")
     }
@@ -488,7 +605,7 @@ impl Parser {
         let prim_expr = prim_expr(&expr);
         let param_parser = param(&expr, &prim_expr);
         let params = params(&param_parser);
-        let ident = ident_parser();
+        let ident = ident_parser().or(ident_op_parser());
 
         let meta_attrs = meta_attr().repeated();
         let func = meta_attrs
@@ -682,15 +799,21 @@ impl Parser {
         Ok(())
     }
 
-    fn operators_parser(&self) -> Parser!(Operators) {
-        fn parse_op_attr(meta_attrs: &[MetaAttr]) -> (Option<Associativity>, Option<Precedence>) {
-            debug!(target: "parser", "parse_op_attr: {:?}", meta_attrs);
+    fn operators_parser(&self) -> Parser!(OperatorsAndFunctions) {
+        fn parse_op_attr(
+            meta_attrs: &[MetaAttr],
+        ) -> (bool, Option<Associativity>, Option<Precedence>) {
             let mut assoc = None;
             let mut prec = None;
+            let mut has_attr = false;
 
             for attr in meta_attrs {
                 match attr {
-                    MetaAttr::App(f, args) if &**f == "op" => {
+                    MetaAttr::Ident(ident) if &ident.text == "operator" => {
+                        has_attr = true;
+                    }
+                    MetaAttr::App(f, args) if &**f == "operator" => {
+                        has_attr = true;
                         for arg in args {
                             match arg {
                                 MetaAttr::Struct(fields) => {
@@ -720,59 +843,91 @@ impl Parser {
                     _ => {}
                 }
             }
-            (assoc, prec)
+            (has_attr, assoc, prec)
         }
         let expr = self.expr();
         let prim_expr = prim_expr(&expr);
         let param_parser = param(&expr, &prim_expr);
         let params = params(&param_parser);
-        let ident = ident_parser();
+        let ident = ident_parser().or(ident_op_parser());
 
         let meta_attrs = meta_attr().repeated();
+        let skip = take_until(
+            just(Token::Hash)
+                .or(just(Token::Fn))
+                .rewind()
+                .ignored()
+                .to(false)
+                .or(end().to(true)),
+        );
         let func = meta_attrs
             .clone()
             .then_ignore(just(Token::Fn))
             .then(
                 ident
+                    .clone()
                     .map_with_span(|name, span| (name, span))
                     .labelled("function name"),
             )
-            .then(params)
+            .then(params.clone())
             .map(|((attrs, (name, name_span)), params)| {
                 let params_num = params.len();
-                let (assoc, prec) = parse_op_attr(&attrs);
-                debug!(target: "parser", "op props: {} {:?} {:?}", name, assoc, prec);
-                let def = Operator::from_ident(
-                    assoc.unwrap_or(Associativity::None),
-                    prec.unwrap_or(10),
-                    &name,
-                    params_num,
-                );
-                ((name, name_span), def)
+                let (is_op, assoc, prec) = parse_op_attr(&attrs);
+                debug!(target: "parser", "operator properties: {} {:?} {:?}", name, assoc, prec);
+                let def = is_op
+                    .then(|| {
+                        Operator::from_ident(
+                            assoc.unwrap_or(Associativity::None),
+                            prec.unwrap_or(10),
+                            &name,
+                            params_num,
+                        )
+                    })
+                    .flatten();
+                (name, name_span, def)
             })
-            .then_ignore(take_until(
-                just(Token::Hash)
-                    .or(just(Token::Fn))
-                    .rewind()
-                    .ignored()
-                    .or(end()),
-            ))
+            .then_ignore(skip.clone())
             .labelled("function");
+        let data = meta_attrs
+            .clone()
+            .then_ignore(just(Token::Data))
+            .then(
+                ident
+                    .map_with_span(|name, span| (name, span))
+                    .labelled("data name"),
+            )
+            .then(params)
+            .map(|((_attrs, (name, name_span)), _params)| (name, name_span, None))
+            .then_ignore(skip.clone())
+            .labelled("data");
 
-        func.repeated()
-            .try_map(|fs, _| {
-                let mut funcs = HashMap::new();
-                for ((name, name_span), f) in fs {
-                    if funcs.insert(name.clone(), f).is_some() {
-                        return Err(Simple::custom(
-                            name_span.clone(),
-                            format!("Function '{}' already exists", name),
-                        ));
+        skip.then_with(move |(_, ended)| {
+            if ended {
+                box_parser(
+                    end().map(|_| OperatorsAndFunctions(Operators(Default::default()), Vec::new())),
+                )
+            } else {
+                box_parser(func.clone().or(data.clone()).repeated().try_map(|fs, _| {
+                    let mut operators = HashMap::new();
+                    let mut basic_funcs = Vec::new();
+                    for (name, name_span, f) in fs {
+                        let Some(f) = f else {
+                            debug!(target: "parser", "skipped operator: {}", name);
+                            basic_funcs.push(name);
+                            continue;
+                        };
+                        if operators.insert(name.clone(), f).is_some() {
+                            return Err(Simple::custom(
+                                name_span.clone(),
+                                format!("Function '{}' already exists", name),
+                            ));
+                        }
                     }
-                }
-                Ok(Operators(funcs))
-            })
-            .then_ignore(end())
+                    Ok(OperatorsAndFunctions(Operators(operators), basic_funcs))
+                }))
+            }
+        })
+        .then_ignore(end())
     }
 }
 
@@ -808,12 +963,16 @@ fn prim_expr(expr: &Parser!(Expr)) -> Parser!(Expr) {
 }
 
 pub fn lexer(
-    mut additional_tokens: Vec<String>,
+    mut additional_tokens: Vec<(String, bool)>,
     refine: bool,
 ) -> Parser!(char, Vec<(Token<'static>, Loc)>) {
-    additional_tokens.sort_by(|a, b| b.len().cmp(&a.len()));
+    additional_tokens.sort_by(|(a, _), (b, _)| b.len().cmp(&a.len()));
     debug!(target: "parser", "additional tokens {additional_tokens:?}, refining: {refine}");
-    let ident = none_of(FORBIDDEN)
+    let ident = filter(|c| is_ident_char(*c))
+        .repeated()
+        .at_least(1)
+        .collect::<String>();
+    let ident_op = filter(|c| is_ident_op_char(*c))
         .repeated()
         .at_least(1)
         .collect::<String>();
@@ -834,10 +993,6 @@ pub fn lexer(
         .map(Token::Universe)
         .or(meta.map(|s| Token::MetaIdent(s)))
         .or(str.map(Token::Str))
-        .or(just("forall").to(Token::Pi))
-        .or(just("data").padded().to(Token::Data))
-        .or(just("codata").to(Token::Codata))
-        .or(just("match").to(Token::Match))
         .or(just("@").to(Token::At))
         .or(just("#").to(Token::Hash))
         .or(just(":=").to(Token::Assignment))
@@ -845,9 +1000,6 @@ pub fn lexer(
         .or(just(",").to(Token::Comma))
         .or(just(".").to(Token::Dot))
         .or(just("=>").to(Token::DArrow))
-        .or(just("lam").to(Token::Lam))
-        .or(just("fn").to(Token::Fn))
-        .or(just("let").to(Token::Let))
         .or(just("->").to(Token::RArrow))
         .or(just("?").to(Token::Question))
         .or(just("{").to(Token::LBrace))
@@ -859,11 +1011,18 @@ pub fn lexer(
     let token = if additional_tokens.is_empty() {
         box_parser(base_token)
     } else {
-        let first = additional_tokens.remove(0);
-        let init = just(first).map(|s| Token::Ident(s));
+        let init = fail();
         let add_tokens_ref = additional_tokens
             .into_iter()
-            .map(|s| just(s).map(|s| Token::Ident(s)))
+            .map(|(s, is_op)| {
+                just(s).map(move |s| {
+                    if is_op {
+                        Token::IdentOp(s)
+                    } else {
+                        Token::Ident(s)
+                    }
+                })
+            })
             .fold(box_parser(init), |acc, x| {
                 let or = acc.or(x);
                 box_parser(or)
@@ -877,8 +1036,33 @@ pub fn lexer(
             box_parser(p)
         }
     };
+    let maybe_not_quite_ident = |s: String| {
+        let tok = match s.as_str() {
+            "_" => Token::Underscore,
+            "|" => Token::Pipe,
+            "!" => Token::Bang,
+            "lam" => Token::Lam,
+            "fn" => Token::Fn,
+            "let" => Token::Let,
+            "forall" => Token::Pi,
+            "data" => Token::Data,
+            "codata" => Token::Codata,
+            "match" => Token::Match,
+            _ => {
+                if s.chars().all(char::is_numeric) {
+                    Token::Nat(s)
+                } else {
+                    return Either::Right(s);
+                }
+            }
+        };
+        Either::Left(tok)
+    };
+    let ident_mapped = ident_op
+        .map(move |s| maybe_not_quite_ident(s).left_or_else(|s| Token::IdentOp(s)))
+        .or(ident.map(move |s| maybe_not_quite_ident(s).left_or_else(|s| Token::Ident(s))));
     let token = if !refine {
-        box_parser(token.or(ident.clone().map(Token::Ident)))
+        box_parser(token.or(ident_mapped.clone()))
     } else {
         box_parser(token)
     };
@@ -888,7 +1072,7 @@ pub fn lexer(
         .or(just("!").to(Token::Bang))
         .or(just("_").to(Token::Underscore));
     let token = if refine {
-        box_parser(token.or(ident.map(Token::Ident)))
+        box_parser(token.or(ident_mapped))
     } else {
         box_parser(token)
     };
@@ -908,6 +1092,12 @@ pub fn lexer(
 fn ident_parser() -> Parser!(Ident) {
     select! {
         Token::Ident(ident), loc => Ident::located(ident, loc)
+    }
+}
+
+fn ident_op_parser() -> Parser!(Ident) {
+    select! {
+        Token::IdentOp(ident), loc => Ident::located(ident, loc)
     }
 }
 
@@ -965,11 +1155,7 @@ fn param(expr: &Parser!(Expr), prim_expr: &Parser!(Expr)) -> Parser!(Vec<Param>)
 
         fn build_params(ps: Vec<Ident>, ty: Expr, plicit: Plicitness) -> Vec<Param> {
             ps.into_iter()
-                .map(|ident| {
-                    let p = Param::new(ident, ty.clone(), plicit);
-                    // debug!(target: "parser", "parsed explicit param: {p}");
-                    p
-                })
+                .map(|ident| Param::new(ident, ty.clone(), plicit))
                 .collect()
         }
 
@@ -983,7 +1169,6 @@ fn param(expr: &Parser!(Expr), prim_expr: &Parser!(Expr)) -> Parser!(Vec<Param>)
             .map(|(ps, ty)| build_params(ps, ty, Implicit)))
         .or(prim_expr.clone().map(|e| {
             let param = Param::from_type(e, Explicit);
-            // debug!(target: "parser", "parsed explicit param: {param}");
             vec![param]
         }))
         .labelled("param_parser");
@@ -1020,7 +1205,7 @@ fn case(expr: &Parser!(Expr), pattern: &Parser!(Pat)) -> Parser!(Case) {
             just(Token::DArrow)
                 .ignore_then(expr.clone())
                 .or_not()
-                .debug("=> ..."),
+                .debug("=> <expr>?"),
         )
         .map(|(pats, body)| Case::new(pats, body))
         .debug("case")
@@ -1085,7 +1270,6 @@ fn meta_attr() -> Parser!(MetaAttr) {
             })
             .debug("meta_attr_app");
 
-        // .delimited_by(just(Token::LParen), just(Token::RParen))
         meta_field
             .clone()
             .separated_by(just(Token::Comma))
@@ -1096,7 +1280,6 @@ fn meta_attr() -> Parser!(MetaAttr) {
                 .map(|field| MetaAttr::Struct(Vec1::new(field))))
             .or(meta_attr_app.clone())
             .debug("prim_meta_attr")
-        // .or(ident.map(MetaAttr::Ident))
     });
 
     just(Token::Hash)
@@ -1119,11 +1302,21 @@ impl Default for Parser {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Ord)]
 enum Associativity {
     Left,
     Right,
     None,
+}
+
+impl Display for Associativity {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Associativity::Left => write!(f, "left"),
+            Associativity::Right => write!(f, "right"),
+            Associativity::None => write!(f, "none"),
+        }
+    }
 }
 
 impl PartialOrd for Associativity {
@@ -1148,9 +1341,9 @@ enum OperatorPattern {
 }
 
 impl OperatorPattern {
-    pub(crate) fn as_token(&self) -> Token {
+    pub(crate) fn as_token(&self) -> String {
         match self {
-            OperatorPattern::Tok(s) => Token::Ident(s.clone()),
+            OperatorPattern::Tok(s) => s.clone(),
             OperatorPattern::Expr => unreachable!(),
         }
     }
@@ -1195,26 +1388,34 @@ impl OperatorPattern {
             _ => false,
         }
     }
+
+    pub fn is_token(&self) -> bool {
+        match self {
+            OperatorPattern::Tok(_) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct OperatorPatterns(Vec<OperatorPattern>);
 
+impl Display for OperatorPatterns {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.iter().join(" "))
+    }
+}
+
 impl OperatorPatterns {
-    pub fn is_unary(&self) -> bool {
-        self.0.len() == 2
-    }
-
-    pub fn is_binary(&self) -> bool {
-        self.0.len() == 3
-    }
-
-    pub fn is_prefix(&self) -> bool {
-        self.is_unary() && self.0[1].is_expr()
-    }
-
-    pub fn is_postfix(&self) -> bool {
-        self.is_unary() && self.0[0].is_expr()
+    pub fn fixity(&self) -> Fixity {
+        let is_first_expr = self.0.first().unwrap().is_expr();
+        let is_last_expr = self.0.last().unwrap().is_expr();
+        match (is_first_expr, is_last_expr) {
+            (false, false) => Fixity::Closed,
+            (true, true) => Fixity::Infix,
+            (true, false) => Fixity::Postfix,
+            (false, true) => Fixity::Prefix,
+        }
     }
 
     pub fn new(patterns: Vec<OperatorPattern>) -> Self {
@@ -1254,62 +1455,135 @@ impl Ord for OperatorPatterns {
 struct Operator {
     associativity: Associativity,
     precedence: Precedence,
+    fixity: Fixity,
     patterns: OperatorPatterns,
 }
 
+impl Display for Operator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {} {}",
+            self.associativity, self.precedence, self.patterns
+        )
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
+enum Fixity {
+    Closed,
+    Infix,
+    Postfix,
+    Prefix,
+}
+
+impl Ord for Fixity {
+    fn cmp(&self, other: &Self) -> Ordering {
+        use Fixity::*;
+        match (self, other) {
+            (Closed, Prefix) => Ordering::Less,
+            (Prefix, Closed) => Ordering::Greater,
+            (Prefix, _) => Ordering::Less,
+            (Infix, Postfix) => Ordering::Less,
+            (Postfix, Infix) => Ordering::Greater,
+            (Infix, _) => Ordering::Greater,
+            (Postfix, _) => Ordering::Greater,
+            (Closed, Closed) => Ordering::Equal,
+            (Closed, Infix) => Ordering::Less,
+            (Closed, Postfix) => Ordering::Less,
+        }
+    }
+}
+
+impl PartialOrd<Self> for Fixity {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+type OpParserWithAssoc = (Vec<Expr>, Associativity, Fixity);
+static mut N: usize = 0;
+
+fn is_ident_char(c: char) -> bool {
+    char::is_alphanumeric(c) || c == '_' || c == '\''
+}
+
+fn is_ident_op_char(c: char) -> bool {
+    c == '_' || (!is_ident_char(c) && !FORBIDDEN.contains(c))
+}
+
 impl Operator {
-    /// Left - prefix, Right - postfix
+    fn fixity(&self) -> Fixity {
+        self.fixity
+    }
+
+    pub fn first_token(&self) -> String {
+        self.patterns
+            .0
+            .iter()
+            .find(|p| p.is_token())
+            .unwrap()
+            .as_token()
+    }
+
     fn to_parser(
         &self,
         expr: &Parser!(Expr),
-        prim_expr: &Parser!(Expr),
-    ) -> Either<Parser!(Vec<Expr>:), Parser!(Vec<Expr>:)> {
-        let is_postfix = self.patterns.0.first().unwrap().is_expr();
+        _prim_expr: &Parser!(Expr),
+        higher_parser: &Parser!(Expr),
+    ) -> (Parser!(OpParserWithAssoc), Fixity) {
+        let kind = self.fixity();
 
-        let pats = if is_postfix {
-            &self.patterns.0[1..]
-        } else {
-            &self.patterns.0[..]
+        let pats = match kind {
+            Fixity::Closed => &self.patterns.0[..],
+            Fixity::Postfix | Fixity::Infix => &self.patterns.0[1..],
+            Fixity::Prefix => {
+                let l = self.patterns.0.len();
+                &self.patterns.0[..l - 1]
+            }
         };
+
         let mut lp = None;
-        for pat in pats {
+        let pat_len = pats.len();
+        for (i, pat) in pats.into_iter().enumerate() {
             match pat {
                 OperatorPattern::Tok(tok) => {
-                    let p = just(Token::Ident(tok.clone()))
+                    let p = just(Token::IdentOp(tok.clone()))
                         .ignored()
                         .map(|_| Vec::new());
                     if lp.is_none() {
-                        lp = Some(box_parser(p));
+                        lp = Some(box_parser_cloned(p));
                     } else {
-                        lp = Some(box_parser(lp.take().unwrap().then_ignore(p)));
+                        lp = Some(box_parser_cloned(lp.take().unwrap().then_ignore(p)));
                     }
                 }
                 OperatorPattern::Expr => {
-                    let p = if self.associativity == Associativity::Left {
-                        box_parser(expr.clone())
-                    } else {
-                        box_parser(prim_expr.clone())
+                    let p = {
+                        if i == 0 || i == pat_len - 1 {
+                            box_parser_cloned(dyn_clone::clone(higher_parser))
+                        } else {
+                            box_parser_cloned(dyn_clone::clone(expr))
+                        }
                     }
                     .map(|e| vec![e]);
                     if lp.is_none() {
-                        lp = Some(box_parser(p));
+                        lp = Some(box_parser_cloned(p));
                     } else {
-                        lp = Some(box_parser(lp.take().unwrap().then(p).map(|(a, b)| {
-                            let mut a = a;
-                            a.extend(b);
-                            a
-                        })));
+                        lp = Some(box_parser_cloned(lp.take().unwrap().then(p).map(
+                            |(a, b)| {
+                                let mut a = a;
+                                a.extend(b);
+                                a
+                            },
+                        )));
                     }
                 }
             }
         }
 
-        let lp = lp.unwrap();
-        if is_postfix {
-            Either::Right(lp)
-        } else {
-            Either::Left(lp)
-        }
+        let associativity = self.associativity;
+        let lp = lp.unwrap().map(move |e| (e, associativity, kind));
+        (lp, kind)
     }
 
     fn from_ident(
@@ -1317,7 +1591,7 @@ impl Operator {
         precedence: Precedence,
         ident: &str,
         params_num: usize,
-    ) -> Self {
+    ) -> Option<Self> {
         let mut patterns = Vec::new();
         let parts = ident.split('_');
         let mut expr_num = 0;
@@ -1335,32 +1609,34 @@ impl Operator {
                 expr_num += 1;
             }
         }
+        let pats_len = patterns.len();
+        if pats_len < 2 {
+            return None;
+        }
         if expr_num > params_num {
             panic!("Too many underscores in {}", ident);
         }
-        Self::new(associativity, precedence, patterns)
+        Some(Self::new(associativity, precedence, patterns))
     }
 
     fn new(
-        mut associativity: Associativity,
+        associativity: Associativity,
         precedence: Precedence,
         patterns: Vec<OperatorPattern>,
     ) -> Self {
         let patterns = OperatorPatterns::new(patterns);
+        let fixity = patterns.fixity();
         match associativity {
             Associativity::Left | Associativity::Right => {
-                assert!(patterns.is_binary());
+                assert_eq!(fixity, Fixity::Infix);
             }
-            Associativity::None => {
-                if patterns.is_binary() {
-                    associativity = Associativity::Left;
-                }
-            }
+            Associativity::None => {}
         }
         Self {
             associativity,
             precedence,
             patterns,
+            fixity,
         }
     }
 }
@@ -1398,25 +1674,34 @@ mod tests {
         let mut parser = Parser::default();
 
         let prog = r#"
-        #(op precedence := "25")
+        #(operator precedence := "25")
         fn _++ (a : Nat) : Nat := ?unimplemented
 
-        #(op precedence := "15")
+        #(operator precedence := "15" associativity := "left")
         fn _+_ (a b : Nat) : Nat := ?unimplemented
 
-        #(op precedence := "20" associativity := "left")
+        #(operator precedence := "20" associativity := "left")
         fn _*_ (a b : Nat) : Nat := ?unimplemented
 
-        #(op precedence := "25" associativity := "right")
+        #(operator precedence := "25" associativity := "right")
         fn _^_ (a b : Nat) : Nat := ?unimplemented
 
-        #(op precedence := "25")
-        fn !_ (a : Bool) : Bool := ?unimplemented
+        #(operator precedence := "0" associativity := "right")
+        fn _$_ (f : A -> B) (a : A) : B := ?unimplemented
 
-        fn if_then_else_ (cond : Bool) (then else : Unit) : Unit := ?unimplemented
+        #(operator precedence := "25")
+        fn !!_ (a : Bool) : Bool := ?unimplemented
 
-        fn |_| (a : Int) : Nat := ?unimplemented
+        #(operator)
+        fn if_then_else_ (cond : Bool) (a b : Unit) : Unit := ?unimplemented
+
+        #(operator)
+        fn _？_：_ (cond : Bool) (a b : Unit) : Unit := ?unimplemented
+
+        #(operator)
+        fn ||_|| (a : Int) : Nat := ?unimplemented
         "#;
+        parser.should_refine = false;
         let prog = parser.parse_prog(prog).unwrap();
         /*
         _++ | _^_ | !_
@@ -1492,13 +1777,13 @@ mod tests {
 
         // postfix
         assert_eq!(
-            parser.parse_expr("n ++").unwrap(),
+            parser.parse_expr("n++").unwrap(),
             Expr::app_many(Expr::var("_++"), vec![Expr::var("n")],)
         );
 
         // postfix multi
         assert_eq!(
-            parser.parse_expr("n ++ ++").unwrap(),
+            parser.parse_expr("n++++").unwrap(),
             Expr::app_many(
                 Expr::var("_++"),
                 vec![Expr::app_many(Expr::var("_++"), vec![Expr::var("n")],),]
@@ -1507,13 +1792,19 @@ mod tests {
 
         // infix
         assert_eq!(
-            parser.parse_expr("n + m").unwrap(),
+            parser.parse_expr("n+m").unwrap(),
+            Expr::app_many(Expr::var("_+_"), vec![Expr::var("n"), Expr::var("m")],)
+        );
+
+        // fully-qualified operator as function
+        assert_eq!(
+            parser.parse_expr("_+_ n m").unwrap(),
             Expr::app_many(Expr::var("_+_"), vec![Expr::var("n"), Expr::var("m")],)
         );
 
         // infix multi
         assert_eq!(
-            parser.parse_expr("n + m + k").unwrap(),
+            parser.parse_expr("n+m+k").unwrap(),
             Expr::app_many(
                 Expr::var("_+_"),
                 vec![
@@ -1523,18 +1814,30 @@ mod tests {
             )
         );
 
+        // infix lowest precedence
+        assert_eq!(
+            parser.parse_expr("n + m $ j * k").unwrap(),
+            Expr::app_many(
+                Expr::var("_$_"),
+                vec![
+                    Expr::app_many(Expr::var("_+_"), vec![Expr::var("n"), Expr::var("m")],),
+                    Expr::app_many(Expr::var("_*_"), vec![Expr::var("j"), Expr::var("k")],),
+                ]
+            )
+        );
+
         // prefix
         assert_eq!(
-            parser.parse_expr("! x").unwrap(),
-            Expr::app_many(Expr::var("!_"), vec![Expr::var("x")],)
+            parser.parse_expr("!!x").unwrap(),
+            Expr::app_many(Expr::var("!!_"), vec![Expr::var("x")],)
         );
 
         // prefix multi
         assert_eq!(
-            parser.parse_expr("! ! x").unwrap(),
+            parser.parse_expr("!!!!x").unwrap(),
             Expr::app_many(
-                Expr::var("!_"),
-                vec![Expr::app_many(Expr::var("!_"), vec![Expr::var("x")])]
+                Expr::var("!!_"),
+                vec![Expr::app_many(Expr::var("!!_"), vec![Expr::var("x")])]
             )
         );
 
@@ -1572,6 +1875,50 @@ mod tests {
             )
         );
 
+        // no-fix
+        assert_eq!(
+            parser.parse_expr("x ？y ：z").unwrap(),
+            Expr::app_many(
+                Expr::var("_？_：_"),
+                vec![Expr::var("x"), Expr::var("y"), Expr::var("z")]
+            )
+        );
+
+        // no-fix multi
+        assert_eq!(
+            parser.parse_expr("a ？b ？c ：d ：e ？f ：g").unwrap(),
+            Expr::app_many(
+                Expr::var("_？_：_"),
+                vec![
+                    Expr::app_many(
+                        Expr::var("_？_：_"),
+                        vec![
+                            Expr::var("a"),
+                            Expr::app_many(
+                                Expr::var("_？_：_"),
+                                vec![Expr::var("b"), Expr::var("c"), Expr::var("d")]
+                            ),
+                            Expr::var("e"),
+                        ]
+                    ),
+                    Expr::var("f"),
+                    Expr::var("g"),
+                ]
+            )
+        );
+
+        // closed
+        assert_eq!(
+            parser.parse_expr("||n + m||").unwrap(),
+            Expr::app_many(
+                Expr::var("||_||"),
+                vec![Expr::app_many(
+                    Expr::var("_+_"),
+                    vec![Expr::var("n"), Expr::var("m")],
+                )]
+            )
+        );
+
         // associativity
         assert_eq!(
             parser.parse_expr("n ^ m ^ k").unwrap(),
@@ -1595,7 +1942,24 @@ mod tests {
                 ]
             )
         );
-        // Left:  App(Var(Ident { text: "_*_", loc: _ }), [App(Var(Ident { text: "_+_", loc: _ }), [Var(Ident { text: "n", loc: _ }), Var(Ident { text: "m", loc: _ })]), Var(Ident { text: "k", loc: _ })])
+
+        // application precedence
+        assert_eq!(
+            parser.parse_expr("||f x x||").unwrap(),
+            Expr::app_many(
+                Expr::var("||_||"),
+                vec![Expr::app_many(
+                    Expr::var("f"),
+                    vec![Expr::var("x"), Expr::var("x")]
+                ),]
+            )
+        );
+
+        // application on top
+        assert_eq!(
+            parser.parse_expr("f x x").unwrap(),
+            Expr::app_many(Expr::var("f"), vec![Expr::var("x"), Expr::var("x")])
+        );
     }
 
     #[test]

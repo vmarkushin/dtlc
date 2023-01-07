@@ -2170,7 +2170,9 @@ mod tests {
 
     #[test]
     fn test_subst_in_case_tree_2() -> eyre::Result<()> {
+        let _ = env_logger::try_init();
         let mut p = Parser::default();
+        p.debug(true);
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         let des = desugar_prog(p.parse_prog(

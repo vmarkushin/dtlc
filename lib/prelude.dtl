@@ -17,11 +17,11 @@ data List (A : Type) : Type1
 data Σ (A : Type) (B : A -> Type) : Type1
     | ex (x : A) (B x)
 
-data Σ-l1 (A : Type1) (B : A -> Type1) : Type2
-    | ex-l1 (x : A) (B x)
+data Σ_l1 (A : Type1) (B : A -> Type1) : Type2
+    | ex_l1 (x : A) (B x)
 
-data Σ-l2 (A : Type2) (B : A -> Type2) : Type3
-    | ex-l2 (x : A) (B x)
+data Σ_l2 (A : Type2) (B : A -> Type2) : Type3
+    | ex_l2 (x : A) (B x)
 
 fn fst (A : Type) (B : A -> Type) (p : Σ A B) : A := match p {
     | (ex x _) => x
@@ -35,61 +35,63 @@ fn snd (A : Type) (B : A -> Type) (p : Σ A B) : B (fst A B p) := match p {
 data Pair (A : Type) (B : Type) : Type1
     | pair A B
 
-data Pair-l1 (A : Type1) (B : Type1) : Type2
-    | pair-l1 A B
+data Pair_l1 (A : Type1) (B : Type1) : Type2
+    | pair_l1 A B
 
 #(lang := "telescope")
 data Telescope : Type
 
 #(lang := "id")
 data Id {A : Type} (x : A) (y : A) : Type1
-fn = {A : Type} (x : A) (y : A) := Id (A, x, y,)
+-- #(operator associativity := "left" precedence := "100")
+fn eq {A : Type} (x : A) (y : A) := Id (A, x, y,)
 
 #(lang := "ap")
-fn ap {A : Telescope -> Type} (f : Telescope -> A) (ps : List Id) : Id (A, _, _,) := ?compiler-built-in
+fn ap {A : Telescope -> Type} (f : Telescope -> A) (ps : List Id) : Id (A, _, _,) := ?compiler_built_in
 
 fn refl (A : Type) (a : A) := ap a
 
-fn is-contr (A : Type) (x : A) : Type1 := Σ _ (lam (y : A) => = _ x y)
+fn is_contr (A : Type) (x : A) : Type1 := Σ _ (lam (y : A) => eq _ x y)
 
-fn 1-1-Corr (A : Type) (B : Type) :=
-    Σ-l2 _ (lam (R : (A -> B -> Type)) => Pair-l1
-        ((a : A) -> (is-contr _ (Σ _ (lam (b : B) => R a b))))
-        ((b : B) -> (is-contr _ (Σ _ (lam (a : A) => R a b)))))
+fn 1_1_Corr (A : Type) (B : Type) := ?tododo
+   --  Σ_l2 _ (lam (R : (A -> B -> Type)) => Pair-l1
+   --      ((a : A) -> (is_contr _ (Σ _ (lam (b : B) => R a b))))
+   --      ((b : B) -> (is_contr _ (Σ _ (lam (a : A) => R a b)))))
 
 #(lang := "corr-up")
-fn ↑ {A : Type} {B : Type} (R : 1-1-Corr A B) : Id (Type, A, B,) := ?todo_up
+fn ↑ {A : Type} {B : Type} (R : 1_1_Corr A B) : Id (Type, A, B,) := ?todo_up
 
 #(lang := "corr-down")
-fn ↓ {A : Type} {B : Type} (id : Id (Type, A, B,)) : 1-1-Corr A B := ?todo_down
+fn ↓ {A : Type} {B : Type} (id : Id (Type, A, B,)) : 1_1_Corr A B := ?todo_down
 
 -- #(lang := "nat-add")
-fn + (x : Nat) (y : Nat) : Nat := match y {
+#(operator associativity := "left")
+fn _+_ (x : Nat) (y : Nat) : Nat := match y {
     | zero => x
-    | (suc y) => suc (+ x y)
+    | (suc y) => suc (x + y)
 }
 
-fn pmap {A : Type} {B : Type} {x : A} {y : A} (f : A -> B) (p : = A x y) : = B (f x) (f y) := ?todo-pmap
+fn pmap {A : Type} {B : Type} {x : A} {y : A} (f : A -> B) (p : eq A x y) : eq B (f x) (f y) := ?todo_pmap
 
-fn trans {A : Type} {x : A} {y : A} {z : A} (p : = A x y) (q : = A y z) : = A x z := ?trans
+fn trans {A : Type} {x : A} {y : A} {z : A} (p : eq A x y) (q : eq A y z) : eq A x z := ?trans
 
-fn sym {A : Type} {x : A} {y : A} (p : = A x y) : = A y x := ?sym
+fn sym {A : Type} {x : A} {y : A} (p : eq A x y) : eq A y x := ?sym
 
-fn +-suc (x : Nat) (y : Nat) : = Nat (+ (suc x) y) (+ x (suc y)) := ?todo-suc
+fn plus_suc (x : Nat) (y : Nat) : eq Nat ((suc x) + y) (x + (suc y)) := ?todo_suc
 
-fn +-zero (x : Nat) : = Nat (+ x zero) (+ zero x)
+fn plus_zero (x : Nat) : eq Nat (x + zero) (zero + x)
     := match x {
       | zero => refl Nat zero
-      | (suc x) => pmap _ _ _ _ suc (+-zero x)
+      | (suc x) => pmap _ _ _ _ suc (plus_zero x)
     }
 
-fn +-comm (x : Nat) (y : Nat) : = Nat (+ x y) (+ y x)
+fn plus_comm (x : Nat) (y : Nat) : eq Nat (x + y) (y + x)
     := match y {
-      | zero => +-zero x
-      | (suc y) => trans _ _ _ _ (pmap _ _ _ _ suc (+-comm x y)) (sym _ _ _ (+-suc y x))
+      | zero => plus_zero x
+      | (suc y) => trans _ _ _ _ (pmap _ _ _ _ suc (plus_comm x y)) (sym _ _ _ (plus_suc y x))
     }
 
--- fn fun-ext {A : Type} {B : Type} (f : A -> B) (g : A -> B) ((x : A) -> (= _ (f x) (g x))) : = _ f g := ?todo-fun-ext
+-- fn fun-ext {A : Type} {B : Type} (f : A -> B) (g : A -> B) ((x : A) -> (eq _ (f x) (g x))) : eq _ f g := ?todo_fun_ext
 
 -- \func J
 --     {A : \Type} {a : A}
@@ -112,6 +114,6 @@ data D (DA : Type) (da : DA) : Type1
 
 -- fn J
 --     {A : Type} {x : A}
---     (B : (y : A) -> (= _ x y) -> Type)
+--     (B : (y : A) -> (eq _ x y) -> Type)
 --     (b : B x (refl A x))
---     (y : A) (p : = A x y) : B y p := ?todo-J
+--     (y : A) (p : eq A x y) : B y p := ?todo-J

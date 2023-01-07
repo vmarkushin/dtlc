@@ -31,11 +31,11 @@ impl TypeCheckState {
     pub fn reduce_blocked(&mut self, term: Blocked<Term>, normalize: bool) -> Result<Term> {
         match term {
             Blocked::Yes(_, t) => {
-                println!("blocked");
+                debug!("blocked");
                 Ok(t)
             }
             Blocked::No(_, t) => {
-                println!("not blocked");
+                debug!("not blocked");
                 self.reduce(t, normalize)
             }
         }
@@ -114,8 +114,12 @@ impl TypeCheckState {
             Term::Redex(f, id, elims) => match f {
                 Func::Index(def) => match self.def(def) {
                     // TODO: make a separate function for each data and constructor
-                    Decl::Data(_) => Ok(Term::inductive(def, elims_to_terms(elims)?).into()),
+                    Decl::Data(data) => {
+                        assert_eq!(data.params.len(), elims.len(), "wrong number of arguments");
+                        Ok(Term::inductive(def, elims_to_terms(elims)?).into())
+                    },
                     Decl::Cons(cons) => {
+                        assert_eq!(cons.params.len(), elims.len(), "wrong number of arguments");
                         let head = ConHead::new(id, cons.data_gi);
                         Ok(Term::Cons(head, elims_to_terms(elims)?).into())
                     }

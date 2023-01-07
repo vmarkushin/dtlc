@@ -13,6 +13,8 @@ pub enum Token<'input> {
     Universe(String),
     Pi,
     Ident(String),
+    /// Operator identifier.
+    IdentOp(String),
     Data,
     Codata,
     Match,
@@ -103,6 +105,7 @@ impl<'a> Display for Token<'a> {
         match self {
             Universe(n)         => write!(f, "Type{}", n),
             Ident(s)            => f.write_str(s),
+            IdentOp(s)          => f.write_str(s),
             Pi                  => f.write_str("forall"),
             Data                => f.write_str("data"),
             Codata              => f.write_str("codata"),

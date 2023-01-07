@@ -29,10 +29,10 @@ mod tests {
             env.check_prog(des.clone())?;
             env.trace_tc = true;
 
-            typeck!(p, des, env, "ap 4", "Id (Nat, 4, (+ 3 1),)");
+            typeck!(p, des, env, "ap 4", "Id (Nat, 4, 3 + 1)");
 
             let expr_str = "ap (lam A : Type => nil A) (ap Nat)";
-            let ty_str = "Id (lam A : Type => ((List A), (nil A), (nil A),)) (ap Nat)";
+            let ty_str = "Id (lam A : Type => (List A, nil A, nil A)) (ap Nat)";
             typeck!(p, des, env, expr_str, ty_str);
         };
         if let Err(e) = result {

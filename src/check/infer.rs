@@ -66,6 +66,7 @@ impl TypeCheckState {
                         unreachable!()
                     }
                 };
+                // assert_eq!(view.args.len(), info.params.len());
                 self.infer_decl(
                     view,
                     &head,
@@ -86,6 +87,7 @@ impl TypeCheckState {
                         unreachable!()
                     }
                 };
+                // assert_eq!(info.params.len(), view.args.len());
                 self.infer_decl(
                     view,
                     &head,
