@@ -8,6 +8,7 @@ mod redex;
 mod subst;
 mod term;
 
+use crate::check::unification::{Flavour, Occurrence};
 use crate::check::TypeCheckState;
 use crate::syntax;
 use crate::syntax::{Loc, DBI};
@@ -18,10 +19,11 @@ use itertools::Itertools;
 pub use pats::Simpl;
 pub use pretty::{display_application, pretty, pretty_list, Indentation, Pretty};
 pub use redex::{Subst, SubstWith};
-use std::fmt::{Display, Formatter};
+use std::collections::HashSet;
+use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
 pub use subst::{build_subst, PrimSubst, Substitution};
-pub use term::{Bind, Case, Closure, Elim, Func, Id, Lambda, Pat, Term, Val, ValData, Var};
+pub use term::{Bind, Case, Closure, Elim, Func, Id, Lambda, Pat, Term, Type, Val, ValData, Var};
 
 impl Term {
     pub fn at(self, loc: Loc) -> TermInfo {
@@ -50,35 +52,43 @@ impl TermInfo {
 pub type Let<T = Term> = syntax::Let<T>;
 
 /// Telescopes.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Tele(pub Vec<Bind>);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tele<T = Bind>(pub Vec<T>);
 
-impl Tele {
+impl<T> Default for Tele<T> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
+impl<T: Clone> Tele<T> {
     pub(crate) fn skipping(&self, n: usize) -> Self {
         Self(self.0.iter().skip(n).cloned().collect())
     }
+}
 
+impl<T> Tele<T> {
     pub(crate) fn len(&self) -> usize {
         self.0.len()
     }
 
-    pub fn into_ctx(self) -> Ctx {
+    pub fn into_ctx(self) -> Ctx<T> {
         Ctx(self.0)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Bind> {
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.0.iter()
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Bind> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.0.iter_mut()
     }
 
-    pub fn push(&mut self, b: Bind) {
+    pub fn push(&mut self, b: T) {
         self.0.insert(0, b);
     }
 
-    pub fn pop(&mut self) -> Option<Bind> {
+    pub fn pop(&mut self) -> Option<T> {
         if self.is_empty() {
             return None;
         }
@@ -92,9 +102,25 @@ impl Tele {
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    pub fn to_elims(self) -> Vec<Elim> {
+        self.0
+            .into_iter()
+            .enumerate()
+            .map(|(i, b)| Elim::app(Term::from_dbi(i)))
+            .collect()
+    }
+
+    pub fn vars(&self) -> Vec<Var> {
+        self.0
+            .iter()
+            .enumerate()
+            .map(|(i, _)| Var::Bound(i))
+            .collect()
+    }
 }
 
-impl Display for Tele {
+impl<T: Display> Display for Tele<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -121,9 +147,9 @@ impl SubstWith<'_> for Tele {
     }
 }
 
-impl IntoIterator for Tele {
-    type Item = Bind;
-    type IntoIter = <Vec<Bind> as IntoIterator>::IntoIter;
+impl<T> IntoIterator for Tele<T> {
+    type Item = T;
+    type IntoIter = <Vec<T> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -131,60 +157,104 @@ impl IntoIterator for Tele {
 }
 
 /// Contexts. Dual to telescopes.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Ctx(pub Vec<Bind>);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ctx<B = Bind>(pub Vec<B>);
 
-impl Ctx {
-    pub(crate) fn skipping(&self, n: usize) -> Self {
-        Self(self.0.iter().skip(n).cloned().collect())
+impl<B: Occurrence> Occurrence for Ctx<B> {
+    fn free(&self, flavour: Flavour) -> HashSet<Var> {
+        self.0.iter().flat_map(|b| b.free(flavour)).collect()
     }
+}
 
+impl<B> Default for Ctx<B> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
+pub trait Binder {
+    type Param: Display;
+    type Var: Into<usize> + Display + Copy;
+
+    fn lookup(&self, var: &Self::Var) -> Option<Bind<&Type>>;
+}
+
+impl Binder for Bind {
+    type Param = Term;
+    type Var = DBI;
+
+    fn lookup(&self, _var: &Self::Var) -> Option<Bind<&Type>> {
+        Some(Bind {
+            licit: self.licit,
+            name: self.name.clone(),
+            ty: &self.ty,
+            ident: self.ident.clone(),
+        })
+    }
+}
+
+impl<B: Binder + Debug> Ctx<B> {
     #[track_caller]
-    fn dbi_to_idx(&self, v: DBI) -> usize {
+    fn var_to_idx(&self, v: B::Var) -> usize {
+        let v: usize = v.into();
         debug_assert!(self.0.len() > v, "invalid DBI: {}", v);
         self.0.len() - v - 1
     }
 
     #[track_caller]
-    pub fn lookup(&self, v: DBI) -> &Bind {
-        self.0
-            .get(self.dbi_to_idx(v))
-            .unwrap_or_else(|| panic!("Invalid DBI: {}", v))
+    pub fn lookup(&self, v: B::Var) -> Bind<&Type> {
+        // self.0
+        //     .get(self.var_to_idx(v))
+        //     .unwrap_or_else(|| panic!("Invalid DBI: {}", v))
+        let x = self
+            .0
+            .get(self.var_to_idx(v))
+            .unwrap_or_else(|| panic!("Invalid DBI: {}", v));
+        x.lookup(&v)
+            .unwrap_or_else(|| panic!("Invalid binder: {:?}", x))
     }
 
-    pub fn remove(&mut self, v: DBI) -> Bind {
-        self.0.remove(self.dbi_to_idx(v))
+    pub fn remove(&mut self, v: B::Var) -> B {
+        self.0.remove(self.var_to_idx(v))
     }
 
     /// Splits the context into two contexts with a binder in between.
-    pub fn split(&mut self, v: DBI) -> (Bind, Ctx) {
-        let idx = self.dbi_to_idx(v);
+    pub fn split(&mut self, v: B::Var) -> (B, Ctx<B>) {
+        let idx = self.var_to_idx(v);
         let bind = self.0.remove(idx);
         let Γ2 = self.0.split_off(idx);
         (bind, Ctx(Γ2))
     }
+}
 
-    pub fn extend<I: IntoIterator<Item = Bind>>(&mut self, iter: I) {
+impl<B: Clone> Ctx<B> {
+    pub(crate) fn skipping(&self, n: usize) -> Self {
+        Self(self.0.iter().skip(n).cloned().collect())
+    }
+}
+
+impl<B> Ctx<B> {
+    pub fn extend<I: IntoIterator<Item = B>>(&mut self, iter: I) {
         self.0.extend(iter)
     }
 
-    pub fn into_tele(self) -> Tele {
-        Tele(self.0)
+    pub fn into_tele(self) -> Tele<B> {
+        Tele::<B>(self.0)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Bind> {
+    pub fn iter(&self) -> impl Iterator<Item = &B> {
         self.0.iter()
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Bind> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut B> {
         self.0.iter_mut()
     }
 
-    pub fn push(&mut self, b: Bind) {
+    pub fn push(&mut self, b: B) {
         self.0.push(b);
     }
 
-    pub fn pop(&mut self) -> Option<Bind> {
+    pub fn pop(&mut self) -> Option<B> {
         self.0.pop()
     }
 
@@ -205,16 +275,16 @@ impl Ctx {
     }
 }
 
-impl IntoIterator for Ctx {
-    type Item = Bind;
-    type IntoIter = <Vec<Bind> as IntoIterator>::IntoIter;
+impl<T> IntoIterator for Ctx<T> {
+    type Item = T;
+    type IntoIter = <Vec<T> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
 }
 
-impl Display for Ctx {
+impl<T: Display> Display for Ctx<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -224,7 +294,7 @@ impl Display for Ctx {
     }
 }
 
-impl SubstWith<'_> for Ctx {
+impl SubstWith<'_> for Ctx<Bind<Type>> {
     fn subst_with(self, mut subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Self {
         Ctx(self
             .0
@@ -259,6 +329,13 @@ impl LetList {
 
 pub trait Boxed {
     fn boxed(self) -> Box<Self>;
+
+    fn unboxed(self: Box<Self>) -> Self
+    where
+        Self: Sized,
+    {
+        *self
+    }
 }
 
 impl<T> Boxed for T {

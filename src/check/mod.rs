@@ -18,6 +18,7 @@ mod infer;
 mod meta;
 mod norm;
 mod state;
+pub mod unification;
 mod unify;
 
 #[cfg_attr(test, derive(PartialEq, Eq))]
@@ -71,6 +72,12 @@ pub enum Error {
     NotRefl(Box<Term>, Loc),
     #[error("Different telescope lengths: `{0}` and `{1}`")]
     DifferentTeleLen(usize, usize),
+    #[error("RigidRigidMismatch")]
+    RigidRigidMismatch,
+    #[error("SpineMismatch")]
+    SpineMismatch,
+    #[error("Occurrence")]
+    Occurrence,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

@@ -402,14 +402,18 @@ impl TypeCheckState {
 
         match (abs, against) {
             (Expr::Universe(info, lower), Term::Universe(upper)) => {
-                if upper > lower {
+                if self.type_in_type {
                     Ok(Term::universe(*lower).at(*info))
                 } else {
-                    Err(Error::DifferentUniverse(
-                        abs.loc(),
-                        Universe(lower.0 + 1),
-                        *upper,
-                    ))
+                    if upper > lower {
+                        Ok(Term::universe(*lower).at(*info))
+                    } else {
+                        Err(Error::DifferentUniverse(
+                            abs.loc(),
+                            Universe(lower.0 + 1),
+                            *upper,
+                        ))
+                    }
                 }
             }
             (Expr::Pi(info, bind, ret), Term::Universe(..)) => {

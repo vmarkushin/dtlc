@@ -242,6 +242,28 @@ impl<T> From<(UID, T)> for Bind<T> {
     }
 }
 
+impl<T> From<Bind<Box<T>>> for Bind<T> {
+    fn from(value: Bind<Box<T>>) -> Self {
+        Bind {
+            licit: value.licit,
+            name: value.name,
+            ty: *value.ty,
+            ident: value.ident,
+        }
+    }
+}
+
+impl<T> From<Bind<T>> for Bind<Box<T>> {
+    fn from(value: Bind<T>) -> Self {
+        Bind {
+            licit: value.licit,
+            name: value.name,
+            ty: value.ty.into(),
+            ident: value.ident,
+        }
+    }
+}
+
 impl Display for Bind<Term> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if self.licit == Plicitness::Implicit {
@@ -259,6 +281,15 @@ impl<T> Bind<T> {
             name,
             ty,
             ident: Ident::located(format!("{}", name), loc),
+        }
+    }
+
+    pub fn unnamed(ty: T) -> Self {
+        Self {
+            licit: Plicitness::Explicit,
+            name: 0,
+            ty,
+            ident: Ident::new(format!("_")),
         }
     }
 

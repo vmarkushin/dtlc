@@ -113,6 +113,16 @@ impl Display for Var {
                     write!(f, "#{}", i)
                 }
             }
+            Var::Twin(i, b) => {
+                if *b {
+                    write!(f, "@r{}", i)
+                } else {
+                    write!(f, "@l{}", i)
+                }
+            }
+            Var::Meta(m) => {
+                write!(f, "?{}", m)
+            }
         }
     }
 }
@@ -291,7 +301,7 @@ impl Display for Pretty<'_, Term> {
                     display_application(f, &cons.name, &args)
                 }
             }
-            Term::Meta(mi, args) => {
+            Term::Meta(mi, args) | Term::Var(Var::Meta(mi), args) => {
                 let args = args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
                 display_application(f, &format!("?{}", mi), &args)
             }
@@ -309,6 +319,13 @@ impl Display for Pretty<'_, Term> {
                         } else {
                             format!("#{}", uid)
                         }
+                    }
+                    v @ Var::Twin(..) => {
+                        let x = s.gamma2.lookup(*v);
+                        format!("{}", x.ident.text)
+                    }
+                    Var::Meta(_) => {
+                        unreachable!()
                     }
                 };
                 display_application(f, &var, &args)

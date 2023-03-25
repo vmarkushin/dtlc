@@ -1,8 +1,9 @@
 use crate::check::meta::MetaContext;
+use crate::check::unification::{Context, Param};
 use crate::syntax::core::{
-    Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, SubstWith, Substitution, Term, Var,
+    Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, SubstWith, Substitution, Term, Type, Var,
 };
-use crate::syntax::{LangItem, DBI, GI, UID};
+use crate::syntax::{LangItem, DBI, GI, MI, UID};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::mem::swap;
@@ -25,13 +26,17 @@ pub struct TypeCheckState {
     pub sigma: Sigma,
     /// Local typing context.
     pub gamma: Ctx,
+    pub gamma2: Ctx<Bind<Param>>,
     /// Let bindings.
     pub lets: LetList,
     /// Meta variable context, scoped. Always global.
     pub meta_ctx: Vec<MetaContext<Term>>,
+    pub meta_ctx2: Context,
     pub next_uid: UID,
+    pub next_mi: MI,
     pub lang_items: HashMap<LangItem, GI>,
     pub lang_items_back: HashMap<GI, LangItem>,
+    pub type_in_type: bool,
 }
 
 impl TypeCheckState {
@@ -48,8 +53,13 @@ impl TypeCheckState {
 
 impl TypeCheckState {
     #[track_caller]
-    pub(crate) fn lookup(&self, p0: DBI) -> &Bind {
+    pub(crate) fn lookup(&self, p0: DBI) -> Bind<&Type> {
         self.gamma.lookup(p0)
+    }
+
+    #[track_caller]
+    pub(crate) fn lookup2(&self, p0: Var) -> Bind<&Type> {
+        self.gamma2.lookup(p0)
     }
 }
 
@@ -89,6 +99,17 @@ impl TypeCheckState {
         swap(&mut self.gamma, &mut ctx);
         let res = f(self);
         swap(&mut self.gamma, &mut ctx);
+        res
+    }
+
+    pub fn under_ctx2<R, F: FnOnce(&mut Self) -> R>(
+        &mut self,
+        mut ctx: Ctx<Bind<Param>>,
+        f: F,
+    ) -> R {
+        swap(&mut self.gamma2, &mut ctx);
+        let res = f(self);
+        swap(&mut self.gamma2, &mut ctx);
         res
     }
 

@@ -240,6 +240,18 @@ impl Subst for Term {
     }
 }
 
+impl Subst for Elim {
+    fn subst(self, subst: Rc<Substitution>) -> Elim {
+        match self {
+            Elim::App(t) => {
+                let t = t.subst(subst.clone());
+                Elim::App(t.boxed())
+            }
+            Elim::Proj(p) => Elim::Proj(p),
+        }
+    }
+}
+
 impl SubstWith<'_> for Term {
     fn subst_with(self, subst: Rc<Substitution>, tcs: &'_ mut TypeCheckState) -> Term {
         match self {
@@ -257,8 +269,10 @@ impl SubstWith<'_> for Term {
             }
             Term::Universe(n) => Term::universe(n),
             Term::Data(info) => Term::data(info.subst_with(subst, tcs)),
-            Term::Meta(m, a) => Term::meta(m, a.subst_with(subst, tcs)),
-            Term::Var(Var::Bound(f), args) => subst
+            Term::Meta(m, a) | Term::Var(Var::Meta(m), a) => {
+                Term::meta(m, a.subst_with(subst, tcs))
+            }
+            Term::Var(Var::Bound(f), args) | Term::Var(Var::Twin(f, _), args) => subst
                 .lookup_with(f, tcs)
                 .apply_elim(args.subst_with(subst, tcs)),
             Term::Var(Var::Free(n), args) => {

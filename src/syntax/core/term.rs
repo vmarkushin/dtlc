@@ -1,7 +1,7 @@
 use crate::check::TypeCheckState;
 use crate::syntax::core::redex::Subst;
 use crate::syntax::core::subst::Substitution;
-use crate::syntax::core::{DeBruijn, SubstWith, Tele};
+use crate::syntax::core::{Boxed, DeBruijn, SubstWith, Tele};
 use crate::syntax::pattern;
 use crate::syntax::{ConHead, Ident, Universe, DBI, GI, MI, UID};
 use derive_more::From;
@@ -34,10 +34,23 @@ pub struct ValData {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Lambda(pub Bind<Box<Term>>, pub Closure);
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum Var {
     Bound(DBI),
+    Twin(DBI, bool),
     Free(UID),
+    Meta(MI),
+}
+
+impl From<Var> for usize {
+    fn from(value: Var) -> Self {
+        match value {
+            Var::Bound(dbi) => dbi.into(),
+            Var::Twin(dbi, _) => dbi.into(),
+            Var::Free(uid) => uid.into(),
+            Var::Meta(mi) => mi.into(),
+        }
+    }
 }
 
 /// Dependent identity type.
@@ -142,6 +155,7 @@ pub enum Term {
     Id(Id),
     /// A special case of `ap` that cannot be reduced further.
     Refl(Box<Term>),
+    /// Application (function elimination).
     Redex(Func, Ident, Vec<Elim>),
     /// Data elimination.
     Match(Box<Term>, Vec<Case>),
@@ -191,6 +205,92 @@ pub enum Term {
     ///
     /// One can think of `ap` as a higher-dimensional explicit substitution.
     Ap(Tele, Vec<Term>, Box<Term>),
+}
+
+pub type Type = Term;
+
+impl Term {
+    pub(crate) fn to_lam(&self) -> &Lambda {
+        match self {
+            Term::Lam(lam) => lam,
+            _ => panic!("Expected lambda, got {:?}", self),
+        }
+    }
+
+    /*
+    > toVar :: Tm -> Maybe Nom
+    > toVar v = case etaContract v of  N (V x _) B0  -> Just x
+    >                                  _             -> Nothing
+     */
+    pub(crate) fn to_var(self) -> Option<DBI> {
+        match self.eta_contract() {
+            Term::Var(Var::Bound(n) | Var::Twin(n, _), es) if es.is_empty() => Some(n),
+            _ => None,
+        }
+    }
+
+    /// Recursively η-contracts a term.
+    ///
+    /// (λx. t x) ≡ t
+    /// (fst a, snd a) ≡ a
+    pub(crate) fn eta_contract(self) -> Term {
+        match self {
+            Term::Lam(Lambda(x, n)) => {
+                let Closure::Plain(n) = n;
+                let n = n.unboxed();
+                match n {
+                    Term::Var(y, mut es)
+                        if !es.is_empty()
+                            && es.last().unwrap().is_app()
+                            && es.last().unwrap().clone().into_app() == Term::from_dbi(0) =>
+                    {
+                        es.pop();
+                        es = es.subst(Substitution::strengthen(1));
+                        return Term::Var(y, es);
+                    }
+                    Term::Cons(c, mut args)
+                        if !args.is_empty() && args.last().unwrap() == &Term::from_dbi(0) =>
+                    {
+                        let _z = args.pop().unwrap();
+                        args = args.subst(Substitution::strengthen(1));
+                        return Term::Cons(c, args);
+                    }
+                    Term::Data(ValData { def, mut args })
+                        if !args.is_empty() && args.last().unwrap() == &Term::from_dbi(0) =>
+                    {
+                        let _z = args.pop().unwrap();
+                        args = args.subst(Substitution::strengthen(1));
+                        return Term::Data(ValData { def, args });
+                    }
+                    Term::Meta(mi, mut es)
+                        if !es.is_empty()
+                            && es.last().unwrap().is_app()
+                            && es.last().unwrap().clone().into_app() == Term::from_dbi(0) =>
+                    {
+                        let _z = es.pop().unwrap();
+                        es = es.subst(Substitution::strengthen(1));
+                        return Term::Meta(mi, es);
+                    }
+                    Term::Redex(f, x, mut es)
+                        if !es.is_empty()
+                            && es.last().unwrap().is_app()
+                            && es.last().unwrap().clone().into_app() == Term::from_dbi(0) =>
+                    {
+                        let _z = es.pop().unwrap();
+                        es = es.subst(Substitution::strengthen(1));
+                        let is_empty = es.is_empty();
+                        let contracted = Term::Redex(f, x, es);
+                        if !is_empty {
+                            return contracted.eta_contract();
+                        }
+                        return contracted;
+                    }
+                    n => Term::Lam(Lambda(x, Closure::Plain(n.boxed()))),
+                }
+            }
+            t => t,
+        }
+    }
 }
 
 pub trait TryIntoPat<Ix, T> {
@@ -406,6 +506,21 @@ impl Term {
         Term::Lam(Lambda(p0, Closure::Plain(box p1)))
     }
 
+    pub fn lams<T: Into<Bind<Box<Term>>>>(ps: impl IntoIterator<Item = T>, body: Term) -> Term {
+        ps.into_iter()
+            .fold(body, |body, p| Term::lam(p.into(), body))
+        // Term::Lam(Lambda(p0, Closure::Plain(box body)))
+    }
+
+    pub fn pi(p0: Bind<Box<Term>>, p1: Term) -> Term {
+        Term::Pi(p0, Closure::Plain(box p1))
+    }
+
+    pub fn pis<T: Into<Bind<Box<Term>>>>(ps: impl IntoIterator<Item = T>, body: Term) -> Term {
+        ps.into_iter()
+            .fold(body, |body, p| Term::pi(p.into(), body))
+    }
+
     pub fn match_case(t: impl Into<Box<Term>>, cs: impl Into<Vec<Case>>) -> Self {
         Term::Match(t.into(), cs.into())
     }
@@ -479,6 +594,24 @@ impl Closure {
     pub fn instantiate_safe_with(self, arg: Term, tcs: &mut TypeCheckState) -> Result<Term, Term> {
         let Closure::Plain(body) = self;
         Ok(body.subst_with(Substitution::one(arg), tcs))
+    }
+
+    pub fn into_inner(self) -> Term {
+        match self {
+            Closure::Plain(t) => *t,
+        }
+    }
+
+    pub fn as_inner(&self) -> &Box<Term> {
+        match self {
+            Closure::Plain(t) => t,
+        }
+    }
+
+    pub fn as_inner_mut(&mut self) -> &mut Box<Term> {
+        match self {
+            Closure::Plain(t) => t,
+        }
     }
 }
 
@@ -566,6 +699,25 @@ impl Term {
         }
     }
 
+    /// Returns E\[H\] view.
+    pub fn head_elims_view(self) -> (Self, Vec<Elim>) {
+        match self {
+            Term::Var(v, es) => (Term::Var(v, vec![]), es),
+            Term::Redex(Func::Index(gi), i, es) => (Term::Redex(Func::Index(gi), i, vec![]), es),
+            Term::Redex(Func::Lam(lam), _, es) => (Term::Lam(lam), es),
+            Term::Cons(c, es) => (
+                Term::Cons(c, vec![]),
+                es.into_iter().map(Elim::from).collect(),
+            ),
+            Term::Data(ValData { def, args }) => (
+                Term::Data(ValData { def, args: vec![] }),
+                args.into_iter().map(Elim::from).collect(),
+            ),
+            // Term::Meta(m, es) => (Term::Meta(m, vec![]), es),
+            e => (e, vec![]),
+        }
+    }
+
     // pub fn pi(licit: Plicitness, name: UID, param_type: Term, body: Closure, loc: Loc) -> Self {
     //     Self::pi2(Bind::boxing(licit, name, param_type, loc), body)
     // }
@@ -590,6 +742,13 @@ impl Elim {
         match self {
             Elim::App(..) => false,
             Elim::Proj(..) => true,
+        }
+    }
+
+    pub fn is_app(&self) -> bool {
+        match self {
+            Elim::App(..) => true,
+            Elim::Proj(..) => false,
         }
     }
 
