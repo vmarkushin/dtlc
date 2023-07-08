@@ -139,7 +139,8 @@ impl TypeCheckState {
     /// Create a new valid but unsolved meta variable,
     /// used for generating fresh metas during elaboration.
     pub fn fresh_meta(&mut self) -> Term {
-        self.mut_meta_ctx().fresh_meta(|m| Term::meta(m, vec![]))
+        self.mut_meta_ctx()
+            .fresh_meta(|m| Term::meta_with(m, vec![]))
     }
 
     pub fn fresh_free_var(&mut self) -> Term {

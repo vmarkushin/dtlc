@@ -316,7 +316,7 @@ fn matched<T, H: BuildHasher>(mut map: HashMap<DBI, T, H>, max: usize) -> Vec<T>
 mod tests {
     use super::*;
 
-    use crate::syntax::core::{Case, Ctx, ValData};
+    use crate::syntax::core::{Bind, Case, Ctx, ValData};
     use crate::syntax::pattern::Pat;
     use crate::syntax::{ConHead, Ident};
 
@@ -495,33 +495,37 @@ mod tests {
                 ]),
             )],
         );
-        let Γ = Ctx(vec![
-            (2, Term::data(ValData::new(0, vec![]))),
-            (1, Term::data(ValData::new(1, vec![]))),
-            (0, Term::data(ValData::new(2, vec![]))),
-        ]
-        .into_iter()
-        .map(From::from)
-        .collect());
+        let Γ = Ctx::<Bind>(
+            vec![
+                (2, Term::data(ValData::new(0, vec![]))),
+                (1, Term::data(ValData::new(1, vec![]))),
+                (0, Term::data(ValData::new(2, vec![]))),
+            ]
+            .into_iter()
+            .map(From::from)
+            .collect(),
+        );
         debug!("Γ = {}", Γ);
         debug!("{}", t);
 
-        let Γ_new = Ctx(vec![
-            (2, Term::data(ValData::new(0, vec![]))),
-            (4, Term::data(ValData::new(3, vec![]))),
-            (3, Term::data(ValData::new(4, vec![]))),
-            (0, Term::data(ValData::new(2, vec![]))),
-        ]
-        .into_iter()
-        .map(From::from)
-        .collect());
+        let Γ_new = Ctx::<Bind>(
+            vec![
+                (2, Term::data(ValData::new(0, vec![]))),
+                (4, Term::data(ValData::new(3, vec![]))),
+                (3, Term::data(ValData::new(4, vec![]))),
+                (0, Term::data(ValData::new(2, vec![]))),
+            ]
+            .into_iter()
+            .map(From::from)
+            .collect(),
+        );
 
         debug!("Γ' = {}", Γ_new);
         let σ = build_subst(
             vec![
-                (0, Term::meta(0, vec![])),
+                (0, Term::meta_with(0, vec![])),
                 (1, Term::from_dbi(1)),
-                (2, Term::meta(2, vec![])),
+                (2, Term::meta_with(2, vec![])),
             ]
             .into_iter()
             .collect::<HashMap<_, _>>(),

@@ -302,6 +302,10 @@ impl<T> Bind<T> {
         }
     }
 
+    pub fn explicit(name: UID, ty: T, ident: Ident) -> Self {
+        Self::identified(Plicitness::Explicit, name, ty, ident)
+    }
+
     pub fn is_implicit(&self) -> bool {
         self.licit == Plicitness::Implicit
     }

@@ -78,6 +78,8 @@ pub enum Error {
     SpineMismatch,
     #[error("Occurrence")]
     Occurrence,
+    #[error("{0}")]
+    Other(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

@@ -35,6 +35,7 @@ pub struct ValData {
 pub struct Lambda(pub Bind<Box<Term>>, pub Closure);
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+#[cfg_attr(test, derive(PartialOrd, Ord))]
 pub enum Var {
     Bound(DBI),
     Twin(DBI, bool),
@@ -516,6 +517,10 @@ impl Term {
         Term::Pi(p0, Closure::Plain(box p1))
     }
 
+    pub fn arrow(p0: Term, p1: Term) -> Term {
+        Term::Pi(Bind::unnamed(p0.boxed()), Closure::Plain(box p1))
+    }
+
     pub fn pis<T: Into<Bind<Box<Term>>>>(ps: impl IntoIterator<Item = T>, body: Term) -> Term {
         ps.into_iter()
             .fold(body, |body, p| Term::pi(p.into(), body))
@@ -652,7 +657,11 @@ impl Term {
         Term::Data(info)
     }
 
-    pub fn meta(index: MI, params: Vec<Elim>) -> Self {
+    pub fn meta(index: MI) -> Self {
+        Term::Meta(index, vec![])
+    }
+
+    pub fn meta_with(index: MI, params: Vec<Elim>) -> Self {
         Term::Meta(index, params)
     }
 

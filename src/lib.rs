@@ -6,7 +6,7 @@
     incomplete_features
 )]
 #![feature(
-    box_syntax,
+    rustc_box,
     box_patterns,
     type_alias_impl_trait,
     cell_update,
@@ -19,6 +19,7 @@
 )]
 #![feature(let_chains)]
 #![feature(exclusive_range_pattern)]
+#![feature(once_cell)]
 
 #[macro_use]
 extern crate log;

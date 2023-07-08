@@ -1,14 +1,18 @@
 use crate::check::{Error, Result, TypeCheckState};
 use crate::syntax::core::{
     Bind, Binder, Boxed, Closure, Ctx, DeBruijn, Elim, Func, Lambda, PrimSubst, Subst, SubstWith,
-    Substitution, Tele, Term, Type, Var,
+    Substitution, Tele, Term, Type, ValData, Var,
 };
-use crate::syntax::{Plicitness, Universe, DBI, MI};
+use crate::syntax::{ConHead, Ident, Plicitness, Universe, DBI, MI};
+use eyre::{anyhow, bail};
 use itertools::Either;
 use itertools::Either::{Left, Right};
+use std::cell::LazyCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{LazyLock, Mutex};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decl {
@@ -370,8 +374,17 @@ impl MetaSubstitution for Term {
                 f.meta_subst(subst);
                 es.meta_subst(subst);
             }
+            Term::Data(val_data) => {
+                val_data.meta_subst(subst);
+            }
             t => unimplemented!("meta_subst: {:?}", t),
         }
+    }
+}
+
+impl MetaSubstitution for ValData {
+    fn meta_subst(&mut self, subst: &MetaSubst) {
+        self.args.meta_subst(subst);
     }
 }
 
@@ -472,6 +485,395 @@ impl MetaSubstitution for Entry {
     }
 }
 
+/*
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum OccurrenceKind {
+    #[default]
+    Any,
+    Rigid,
+    RigidStrong,
+    Flexible,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OccurrenceOf {
+    FreeVars,
+    // FreeMetas(MetaCtx),
+    Term(Term),
+}
+
+fn free_vars(term: &Term, kind: OccurrenceKind) -> Vec<Var> {
+    use OccurrenceKind::*;
+
+    fn go(term: &Term, depth: usize, vars: &mut Vec<Var>, kind: OccurrenceKind, in_flexible: bool) {
+        let should_add = match kind {
+            Any => true,
+            Rigid => !in_flexible,
+            RigidStrong => unimplemented!(),
+            Flexible => in_flexible,
+        };
+        let mut add = |v: Var| {
+            if should_add && !vars.contains(&v) {
+                vars.push(v);
+            }
+        };
+        match term {
+            Term::Var(var, es) => {
+                match var {
+                    Var::Bound(v) => {
+                        if *v >= depth {
+                            add(Var::Bound(*v - depth));
+                        }
+                    }
+                    Var::Free(f) => panic!("Unexpected free variable {f}"),
+                }
+                for arg in es {
+                    if let Elim::App(arg) = arg {
+                        go(arg, depth, vars, kind, in_flexible);
+                    }
+                }
+            }
+            Term::Meta(_, params) => {
+                if kind != Rigid {
+                    for param in params {
+                        if let Elim::App(param) = param {
+                            go(param, depth, vars, kind, true);
+                        }
+                    }
+                }
+            }
+            Term::Lam(Lambda(bind, Closure::Plain(b))) => {
+                go(&bind.ty, depth, vars, kind, in_flexible);
+                go(b, depth + 1, vars, kind, in_flexible);
+            }
+            Term::Pi(bind, Closure::Plain(b)) => {
+                go(&bind.ty, depth, vars, kind, in_flexible);
+                go(b, depth + 1, vars, kind, in_flexible);
+            }
+            Term::Universe(_) => {}
+            Term::Data(data) => {
+                data.args
+                    .iter()
+                    .for_each(|arg| go(arg, depth, vars, kind, in_flexible));
+            }
+            Term::Cons(_, args) => {
+                args.iter()
+                    .for_each(|arg| go(arg, depth, vars, kind, in_flexible));
+            }
+            Term::Id(_) => {
+                todo!()
+            }
+            Term::Refl(t) => {
+                go(t, depth, vars, kind, in_flexible);
+            }
+            Term::Ap(_, _, _) => {
+                todo!()
+            }
+            Term::Redex(_, _, _) => {
+                todo!()
+            }
+            Term::Match(t, cs) => {
+                go(t, depth, vars, kind, in_flexible);
+                for c in cs {
+                    go(
+                        &c.body,
+                        depth + c.pattern.vars().len(),
+                        vars,
+                        kind,
+                        in_flexible,
+                    );
+                }
+            }
+        }
+    }
+    let mut vars = Vec::new();
+    go(term, 0, &mut vars, kind, false);
+    vars
+}
+
+/// `Term::Var` is in spine-normal form, so in order to indicate a head, `TermOrVar::Var` is used.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TermOrVar<'a> {
+    Term(Cow<'a, Term>),
+    Var(Cow<'a, Var>),
+}
+
+impl<'a> Subst for TermOrVar<'a> {
+    fn subst(self, subst: Rc<Substitution>) -> Self {
+        match self {
+            TermOrVar::Term(t) => TermOrVar::Term(Cow::Owned((*t).clone().subst(subst))),
+            TermOrVar::Var(v) => {
+                let dbi = match &v {
+                    Cow::Borrowed(Var::Bound(v)) => v,
+                    Cow::Owned(Var::Bound(v)) => v,
+                    _ => {
+                        unreachable!()
+                    }
+                };
+                TermOrVar::Var(Cow::Owned(subst.lookup(*dbi).to_var()))
+            }
+        }
+    }
+}
+
+struct Occurrence<'a> {
+    at: DBI,
+    occ: TermOrVar<'a>,
+}
+
+impl<'a> Occurrence<'a> {
+    pub fn term(at: DBI, term: &'a Term) -> Self {
+        Self {
+            at,
+            occ: TermOrVar::Term(Cow::Borrowed(term)),
+        }
+    }
+
+    pub fn var(at: DBI, var: &'a Var) -> Self {
+        Self {
+            at,
+            occ: TermOrVar::Var(Cow::Borrowed(var)),
+        }
+    }
+}
+
+/*
+fn traverse_term_with_depth<'a, F: FnMut(DBI, &'a Term) -> bool>(term: &'a Term, f: F) {
+    fn go<F: FnMut(DBI, &'a Term) -> bool>(term: &Term, depth: usize, f: &mut F) {
+        match term {
+            Term::Var(var, es) => {
+                match var {
+                    Var::Bound(v) => {
+                        if *v >= depth {
+                            add(Var::Bound(*v - depth));
+                        }
+                    }
+                    Var::Free(_) => panic!("Unexpected free variable {f}"),
+                }
+                for arg in es {
+                    if let Elim::App(arg) = arg {
+                        go(arg, depth, f);
+                    }
+                }
+            }
+            Term::Meta(_, params) => {
+                go(param, depth, f);
+            }
+            Term::Lam(Lambda(bind, Closure::Plain(b))) => {
+                go(&bind.ty, depth, vars, kind, in_flexible);
+                go(b, depth + 1, vars, kind, in_flexible);
+            }
+            Term::Pi(bind, Closure::Plain(b)) => {
+                go(&bind.ty, depth, vars, kind, in_flexible);
+                go(b, depth + 1, vars, kind, in_flexible);
+            }
+            Term::Universe(_) => {}
+            Term::Data(data) => {
+                data.args
+                    .iter()
+                    .for_each(|arg| go(arg, depth, vars, kind, in_flexible));
+            }
+            Term::Cons(_, args) => {
+                args.iter()
+                    .for_each(|arg| go(arg, depth, vars, kind, in_flexible));
+            }
+            Term::Id(_) => {
+                todo!()
+            }
+            Term::Refl(t) => {
+                go(t, depth, vars, kind, in_flexible);
+            }
+            Term::Ap(_, _, _) => {
+                todo!()
+            }
+            Term::Redex(_, _, _) => {
+                todo!()
+            }
+            Term::Match(t, cs) => {
+                go(t, depth, vars, kind, in_flexible);
+                for c in cs {
+                    go(
+                        &c.body,
+                        depth + c.pattern.vars().len(),
+                        vars,
+                        kind,
+                        in_flexible,
+                    );
+                }
+            }
+        }
+    }
+}
+ */
+
+fn occurrence<'a>(term: &'a Term, of: TermOrVar<'_>, kind: OccurrenceKind) -> Vec<Occurrence<'a>> {
+    use OccurrenceKind::*;
+
+    fn go<'a>(
+        in_term: &'a Term,
+        of: TermOrVar<'_>,
+        depth: usize,
+        occs: &mut Vec<Occurrence<'a>>,
+        kind: OccurrenceKind,
+        in_flexible: bool,
+        in_fv_eval_ctx: bool,
+    ) {
+        let mut should_add = match kind {
+            Any => true,
+            Rigid => !in_flexible,
+            RigidStrong => !in_flexible && !in_fv_eval_ctx,
+            Flexible => in_flexible,
+        };
+        if should_add && &TermOrVar::Term(Cow::Borrowed(in_term)) == &of {
+            occs.push(Occurrence::term(depth, in_term));
+        }
+        match in_term {
+            Term::Var(var, es) => {
+                let is_free;
+                match var {
+                    Var::Bound(dbi) => {
+                        is_free = *dbi >= depth;
+                        if should_add && &TermOrVar::Var(Cow::Borrowed(var)) == &of {
+                            occs.push(Occurrence::var(depth, var));
+                        }
+                    }
+                    Var::Free(f) => panic!("Unexpected free variable {f}"),
+                }
+                if kind == RigidStrong && !in_flexible && !is_free {
+                    for arg in es {
+                        if let Elim::App(arg) = arg {
+                            go(arg, of.clone(), depth, occs, kind, in_flexible, is_free);
+                        }
+                    }
+                }
+            }
+            Term::Meta(_, params) => {
+                if kind != Rigid {
+                    for param in params {
+                        if let Elim::App(param) = param {
+                            go(param, of.clone(), depth, occs, kind, true, in_fv_eval_ctx);
+                        }
+                    }
+                }
+            }
+            Term::Lam(Lambda(bind, Closure::Plain(b))) => {
+                go(
+                    &bind.ty,
+                    of.clone(),
+                    depth,
+                    occs,
+                    kind,
+                    in_flexible,
+                    in_fv_eval_ctx,
+                );
+                go(
+                    b,
+                    of.subst(Substitution::raise(1)),
+                    depth + 1,
+                    occs,
+                    kind,
+                    in_flexible,
+                    in_fv_eval_ctx,
+                );
+            }
+            Term::Pi(bind, Closure::Plain(b)) => {
+                go(
+                    &bind.ty,
+                    of.clone(),
+                    depth,
+                    occs,
+                    kind,
+                    in_flexible,
+                    in_fv_eval_ctx,
+                );
+                go(
+                    b,
+                    of.subst(Substitution::raise(1)),
+                    depth + 1,
+                    occs,
+                    kind,
+                    in_flexible,
+                    in_fv_eval_ctx,
+                );
+            }
+            Term::Universe(_) => {}
+            Term::Data(data) => {
+                data.args.iter().for_each(|arg| {
+                    go(
+                        arg,
+                        of.clone(),
+                        depth,
+                        occs,
+                        kind,
+                        in_flexible,
+                        in_fv_eval_ctx,
+                    )
+                });
+            }
+            Term::Cons(_, args) => {
+                args.iter().for_each(|arg| {
+                    go(
+                        arg,
+                        of.clone(),
+                        depth,
+                        occs,
+                        kind,
+                        in_flexible,
+                        in_fv_eval_ctx,
+                    )
+                });
+            }
+            Term::Id(_) => {
+                todo!()
+            }
+            Term::Refl(t) => {
+                go(
+                    t,
+                    of.clone(),
+                    depth,
+                    occs,
+                    kind,
+                    in_flexible,
+                    in_fv_eval_ctx,
+                );
+            }
+            Term::Ap(_, _, _) => {
+                todo!()
+            }
+            Term::Redex(_, _, _) => {
+                todo!()
+            }
+            Term::Match(t, cs) => {
+                go(
+                    t,
+                    of.clone(),
+                    depth,
+                    occs,
+                    kind,
+                    in_flexible,
+                    in_fv_eval_ctx,
+                );
+                for c in cs {
+                    let len = c.pattern.vars().len();
+                    go(
+                        &c.body,
+                        of.clone().subst(Substitution::raise(len)),
+                        depth + len,
+                        occs,
+                        kind,
+                        in_flexible,
+                        in_fv_eval_ctx,
+                    );
+                }
+            }
+        }
+    }
+    let mut occs = Vec::new();
+    go(term, of, 0, &mut occs, kind, false, false);
+    occs
+}
+
+ */
 pub trait Occurrence {
     fn free(&self, flavour: Flavour) -> HashSet<Var>;
 
@@ -534,6 +936,7 @@ impl Occurrence for Term {
     fn free(&self, f: Flavour) -> HashSet<Var> {
         use Flavour::*;
         match self {
+            Term::Universe(_) => Default::default(),
             Term::Lam(lam) => lam.free(f),
             // TODO: cons, data, ...
             Term::Pi(a, b) => (a, b).free(f),
@@ -552,8 +955,26 @@ impl Occurrence for Term {
                 .union(&vec![Var::Meta(*x)].into_iter().collect())
                 .cloned()
                 .collect(),
+            Term::Data(val_data) => val_data.free(f),
+            Term::Cons(_, es) => es.free(f),
+            Term::Redex(ff, _, es) => &ff.free(f) | &es.free(f),
             t => panic!("[free] not implemented: {t:?}"),
         }
+    }
+}
+
+impl Occurrence for Func {
+    fn free(&self, flavour: Flavour) -> HashSet<Var> {
+        match self {
+            Func::Index(_) => Default::default(),
+            Func::Lam(lam) => lam.free(flavour),
+        }
+    }
+}
+
+impl Occurrence for ValData {
+    fn free(&self, flavour: Flavour) -> HashSet<Var> {
+        self.args.free(flavour)
     }
 }
 
@@ -673,10 +1094,6 @@ fn occur_check(is_strong_rigid: bool, x: MI, t: &Term) -> bool {
     }
 }
 
-fn believe<T>() -> T {
-    unimplemented!()
-}
-
 type Id = u32;
 
 impl TypeCheckState {
@@ -696,8 +1113,13 @@ impl TypeCheckState {
     > unify q                                         = rigidRigid q
 
      */
-    pub fn unify(&mut self, id: Id, equation: Equation) -> Result<()> {
+    pub fn unify(&mut self, id: Id, mut equation: Equation) -> Result<()> {
+        trace!(target: "unify", "unify: {:?}", equation);
+        equation.tm1 = self.simplify(equation.tm1)?;
+        equation.tm2 = self.simplify(equation.tm2)?;
+        trace!(target: "unify", "unify (simp): {:?}", equation);
         let Equation { ty1, tm1, ty2, tm2 } = equation.clone();
+
         match (ty1, ty2) {
             (Term::Pi(a1, b1), Term::Pi(a2, b2)) => {
                 let a1 = *a1.clone().ty;
@@ -713,38 +1135,41 @@ impl TypeCheckState {
                 );
                 self.active(id, p)
             }
-            (Term::Meta(m1, xs), Term::Meta(m2, ys)) if m1 == m2 => {
-                if !self.try_prune(id, equation.clone())? {
-                    if !self.try_prune(id, equation.clone().sym())? {
-                        return self.flex_flex_same(id, equation);
+            _ => match (tm1, tm2) {
+                (Term::Meta(m1, xs), Term::Meta(m2, ys)) if m1 == m2 => {
+                    if !self.try_prune(id, equation.clone())? {
+                        if !self.try_prune(id, equation.clone().sym())? {
+                            return self.flex_flex_same(id, equation);
+                        }
                     }
+                    Ok(())
                 }
-                Ok(())
-            }
-            (Term::Meta(m1, xs), Term::Meta(m2, ys)) => {
-                if !self.try_prune(id, equation.clone())? {
-                    if !self.try_prune(id, equation.clone().sym())? {
-                        return self.flex_flex(vec![], id, equation);
+                (Term::Meta(m1, xs), Term::Meta(m2, ys)) => {
+                    if !self.try_prune(id, equation.clone())? {
+                        if !self.try_prune(id, equation.clone().sym())? {
+                            return self.flex_flex(vec![], id, equation);
+                        }
                     }
+                    Ok(())
                 }
-                Ok(())
-            }
-            (Term::Meta(m1, xs), _) => {
-                if !self.try_prune(id, equation.clone())? {
-                    self.flex_term(vec![], id, equation)?;
+                (Term::Meta(m1, xs), _) => {
+                    if !self.try_prune(id, equation.clone())? {
+                        self.flex_term(vec![], id, equation)?;
+                    }
+                    Ok(())
                 }
-                Ok(())
-            }
-            (_, Term::Meta(m2, ys)) => {
-                if !self.try_prune(id, equation.clone().sym())? {
-                    self.flex_term(vec![], id, equation)?;
+                (_, Term::Meta(m2, ys)) => {
+                    if !self.try_prune(id, equation.clone().sym())? {
+                        self.flex_term(vec![], id, equation)?;
+                    }
+                    Ok(())
                 }
-                Ok(())
-            }
-            _ => {
-                self.rigid_rigid(equation.clone())?;
-                Ok(())
-            }
+                (t, u) => {
+                    trace!(target: "unify", "rigid_rigid: mismatch {t}, {u}");
+                    self.rigid_rigid(equation.clone())?;
+                    Ok(())
+                }
+            },
         }
     }
 
@@ -769,6 +1194,8 @@ impl TypeCheckState {
 
     */
     fn rigid_rigid(&mut self, equation: Equation) -> Result<()> {
+        trace!(target: "unify", "rigid_rigid: {equation:?}");
+        let id = 0; // TODO
         let Equation { ty1, tm1, ty2, tm2 } = equation.clone();
         match (tm1.clone(), tm2.clone()) {
             (Term::Pi(a1, b1), Term::Pi(a2, b2)) => {
@@ -779,7 +1206,7 @@ impl TypeCheckState {
                     Term::universe(Universe(0)),
                 )];
                 self.active(
-                    believe(),
+                    0,
                     Problem::Unify(Equation::new(
                         *a1.clone().ty,
                         Term::universe(Universe(0)),
@@ -788,7 +1215,7 @@ impl TypeCheckState {
                     )),
                 )?;
                 self.active(
-                    believe(),
+                    id,
                     Problem::All(
                         Bind::unnamed(Param::Twins(*a1.clone().ty, *a2.clone().ty)),
                         Box::new(Problem::Unify(Equation::new(
@@ -801,15 +1228,15 @@ impl TypeCheckState {
                 )?;
                 Ok(())
             }
-            (Term::Var(x, xs), Term::Var(y, ys)) if x == y => {
-                self.match_spine(x, &xs, y, &ys)?;
+            (Term::Var(Var::Bound(x), xs), Term::Var(Var::Bound(y), ys)) if x == y => {
+                self.match_spine(Var::Bound(x), &xs, Var::Bound(y), &ys)?;
                 Ok(())
             }
             _ => {
                 if equation.orthogonal() {
                     Err(Error::RigidRigidMismatch)
                 } else {
-                    self.block(believe(), Problem::Unify(equation))
+                    self.block(id, Problem::Unify(equation))
                 }
             }
         }
@@ -830,6 +1257,7 @@ impl TypeCheckState {
 
     */
     fn match_spine(&mut self, x: Var, es1: &[Elim], y: Var, es2: &[Elim]) -> Result<(Type, Type)> {
+        let id = 0; // TODO
         match (es1, es2) {
             ([], []) => {
                 if DBI::from(x) == DBI::from(y) {
@@ -847,7 +1275,7 @@ impl TypeCheckState {
                 let a = *a1.clone();
                 let b = *a2.clone();
                 self.active(
-                    believe(),
+                    id,
                     Problem::Unify(Equation::new(
                         a.clone(),
                         *xx.clone().ty,
@@ -926,8 +1354,6 @@ impl TypeCheckState {
     >     case intersect _Tel e e' of
     >         Just _Tel' | fvs _T `isSubsetOf` vars _Tel'  -> instantiate (alpha, _Pis _Tel' _T, \ beta -> lams' _Tel (beta $*$ _Tel))
     >         _                                            -> block (Unify q)
-
-
      */
     fn flex_flex_same(&mut self, id: Id, equation: Equation) -> Result<()> {
         let Equation {
@@ -977,8 +1403,6 @@ impl TypeCheckState {
     >       | gamma `elem` fmvs (_Gam, _Xi, q)   -> flexFlex (e : _Xi) q
     >     _                                      -> do  pushR (Right e)
     >                                                   flexFlex _Xi q
-
-
      */
     fn flex_flex(&mut self, mut entries: Vec<Entry>, id: Id, equation: Equation) -> Result<()> {
         let Equation {
@@ -1294,6 +1718,7 @@ impl TypeCheckState {
 
      */
     fn prune_tm(&mut self, vs: HashSet<Var>, t: Term) -> Result<Vec<Instantiation>> {
+        trace!(target: "unify", "prune_tm {vs:?} {t:?}");
         match t.clone() {
             Term::Universe(_) => Ok(Vec::new()),
             Term::Pi(a, b) => {
@@ -1313,8 +1738,19 @@ impl TypeCheckState {
                 if vs.contains(&z) {
                     self.prune_elims(vs.clone(), es)
                 } else {
-                    panic!("pruning error")
+                    panic!("pruning error {vs:?} not contains {z:?}");
                 }
+            }
+            Term::Redex(f, _, es) => {
+                let mut u = match f {
+                    Func::Lam(lam) => {
+                        let body = lam.1;
+                        self.prune_under(vs.clone(), body)?
+                    }
+                    Func::Index(_) => vec![],
+                };
+                u.extend(self.prune_elims(vs.clone(), es)?);
+                Ok(u)
             }
             t => {
                 unimplemented!("prune_tm: {:?}", t)
@@ -1343,6 +1779,14 @@ impl TypeCheckState {
                 self.push_r(Right(e))?;
                 self.instantiate((mi, ty, f))
             }
+        }
+    }
+
+    fn infer_(&self, var: &Var) -> Result<Type> {
+        match var {
+            Var::Bound(..) | Var::Twin(..) => Ok(self.lookup2(*var).ty.clone()),
+            Var::Meta(mi) => self.lookup_meta_ctx(*mi),
+            v => unimplemented!("infer_: {:?}", v),
         }
     }
 
@@ -1378,7 +1822,7 @@ impl TypeCheckState {
     ) -> Result<(Var, Vec<Elim>, Type)> {
         match (v, es, v2, es2) {
             (v, es, v2, es2) if v == v2 && es.is_empty() && es2.is_empty() => {
-                Ok((v.clone(), es, self.lookup2(v.clone()).ty.clone()))
+                Ok((v.clone(), es, self.infer_(v)?))
             }
             (v, mut es, v2, mut es2) if !es.is_empty() && !es2.is_empty() => {
                 let Elim::App(s) = es.pop().unwrap() else {
@@ -1395,9 +1839,18 @@ impl TypeCheckState {
                 es3.push(Elim::app(u));
                 Ok((v3, es3, v_.into_inner()))
             }
+            #[cfg(not(test))]
             (v, es, v2, es2) => {
                 unimplemented!("equalise_n: {:?} {:?} {:?} {:?}", v, es, v2, es2)
             }
+            // > equaliseN h e h' e' = fail $ "Neutral terms " ++ pp h ++ " . " ++ pp e
+            // >                               ++ " and " ++ pp h' ++ " . " ++ pp e'
+            // >                               ++ " not equal!"
+            #[cfg(test)]
+            (v, es, v2, es2) => Err(Error::Other(format!(
+                "Neutral terms {:?} . {:?} and {:?} . {:?} not equal!",
+                v, es, v2, es2
+            ))),
         }
     }
 
@@ -1429,6 +1882,8 @@ impl TypeCheckState {
     >     return (N h'' e'')
      */
     fn equalise(&mut self, ty: &Type, s: &Term, t: &Term) -> Result<Term> {
+        let s = &self.simplify(s.clone())?;
+        let t = &self.simplify(t.clone())?;
         match (ty, s, t) {
             (Term::Universe(_), Term::Universe(_), Term::Universe(_)) => {
                 Ok(Term::Universe(Universe(0)))
@@ -1461,6 +1916,20 @@ impl TypeCheckState {
                 &Term::Var(Var::Meta(*v), es.clone()),
                 &Term::Var(Var::Meta(*v2), es2.clone()),
             ),
+            (ty, Term::Data(data_a), Term::Data(data_b)) => {
+                if data_a.def == data_b.def && data_a.args.len() == data_b.args.len() {
+                    for (a, b) in data_a.args.iter().zip(data_b.args.iter()) {
+                        // TODO: choose the right type
+                        self.equalise(&Term::meta(9999999), a, b)?;
+                    }
+                    Ok(Term::Data(data_a.clone()))
+                } else {
+                    Err(Error::Other(format!(
+                        "equalise: data constructors {:?} and {:?} not equal",
+                        data_a, data_b
+                    )))
+                }
+            }
             (ty, t, u) => {
                 unimplemented!("equalise {:?} {:?} {:?}", ty, t, u);
             }
@@ -1509,7 +1978,10 @@ impl TypeCheckState {
     fn equal(&mut self, ty: &Term, s: &Term, t: &Term) -> Result<bool> {
         match self.equalise(ty, s, t) {
             Ok(_) => Ok(true),
-            Err(_) => Ok(false),
+            Err(e) => {
+                trace!(target: "unify", "equal: not equal: {e:?}");
+                Ok(false)
+            }
         }
     }
 
@@ -1526,7 +1998,10 @@ impl TypeCheckState {
     fn is_reflexive(&mut self, eq: &Equation) -> Result<bool, Error> {
         match self.equalise(&Term::universe(Universe(0)), &eq.ty1, &eq.ty2) {
             Ok(u) => self.equal(&u, &eq.tm1, &eq.tm2),
-            Err(_) => Ok(false),
+            Err(e) => {
+                trace!(target: "unify", "is_reflexive: not reflexive: {e:?}");
+                Ok(false)
+            }
         }
     }
 
@@ -1548,6 +2023,7 @@ impl TypeCheckState {
 
      */
     fn solver(&mut self, id: Id, p: Problem) -> Result<(), Error> {
+        trace!(target: "unify", "solving {:?} {:?}", id, p);
         match p {
             Problem::Unify(q) => {
                 if self.is_reflexive(&q)? {
@@ -1635,10 +2111,9 @@ impl TypeCheckState {
     >                                           return True)
     >
     > lower _Phi alpha _T = return False
-
-
      */
     fn lower(&mut self, tele: Tele, mi: MI, term: Term) -> Result<bool, Error> {
+        trace!(target: "unify", "lowering {:?} : {:?} in {:?}", mi, term, tele);
         match term {
             Term::Pi(a, b) => {
                 let m = self.split_sig(Tele::default(), *a.ty.clone())?;
@@ -1713,7 +2188,6 @@ impl TypeCheckState {
     >     e'                        ->  do  pushL e'
     >                                       ambulando theta
 
-
      */
     fn ambulando(&mut self, subst: MetaSubst) -> Result<(), Error> {
         let Ok(x) = self.pop_r() else {
@@ -1753,8 +2227,6 @@ impl TypeCheckState {
     >          s'  | p == p'    = s
     >              | otherwise  = Active
     > update theta e = substs theta e
-
-
      */
     fn update(&mut self, subst: MetaSubst, mut e: Entry) -> Entry {
         match e {
@@ -1787,11 +2259,17 @@ impl TypeCheckState {
     }
 
     fn pop_l(&mut self) -> Result<Entry> {
-        self.meta_ctx2.0.pop().ok_or_else(|| panic!())
+        self.meta_ctx2
+            .0
+            .pop()
+            .ok_or_else(|| Error::Other("pop_l: out of context".to_string()))
     }
 
     fn pop_r(&mut self) -> Result<Either<MetaSubst, Entry>> {
-        self.meta_ctx2.1.pop().ok_or_else(|| panic!())
+        self.meta_ctx2
+            .1
+            .pop()
+            .ok_or_else(|| Error::Other("pop_r: out of context".to_string()))
     }
 
     fn postpone(&mut self, status: Status, problem: Problem) -> Result<()> {
@@ -1804,6 +2282,7 @@ impl TypeCheckState {
     }
 
     fn block(&mut self, _id: Id, problem: Problem) -> Result<()> {
+        trace!(target: "unify", "block: {:?}\n{}", problem, std::backtrace::Backtrace::capture().to_string());
         self.postpone(Status::Blocked, problem)
     }
 
@@ -1881,4 +2360,681 @@ fn to_vars(params: Vec<Elim>) -> Option<Vec<Var>> {
 // a ∈ b
 fn is_subset_of(a: HashSet<Var>, b: HashSet<Var>) -> bool {
     a.iter().all(|x| b.contains(x))
+}
+
+/*
+> anyBlocked :: ContextL -> Bool
+> anyBlocked = any isBlocked
+>   where
+>     isBlocked (Q Blocked _)  = True
+>     isBlocked (Q Active p)   = error "active problem left"
+>     isBlocked (E _ _)        = False
+ */
+fn any_blocked(mctx: &Ctx<Entry>) -> bool {
+    mctx.iter().any(|e| match e {
+        Entry::Q(Status::Blocked, _) => true,
+        Entry::Q(Status::Active, _) => panic!("active problem left"),
+        Entry::E(_, _, _) => false,
+    })
+}
+
+/*
+> mcxToSubs :: Bwd Entry -> Subs
+> mcxToSubs = foldMap f
+>   where
+>     f (E alpha (_, DEFN t))  = [(alpha, t)]
+>     f _                      = []
+ */
+fn mcx_to_subs(mctx: &Ctx<Entry>) -> MetaSubst {
+    mctx.iter()
+        .filter_map(|e| match e {
+            Entry::E(alpha, _, Decl::Defn(t)) => Some((*alpha, t.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+impl TypeCheckState {
+    /*
+    > bindInScope_ ::  Alpha t => Param -> Bind Nom t ->
+    >                           (Nom -> t -> Contextual ()) ->
+    >                           Contextual ()
+    > bindInScope_ p b f =  do  (x, b') <- unbind b
+    >                           inScope x p (f x b')
+     */
+    fn bind_in_scope_<T>(
+        &mut self,
+        p: Bind<Param>,
+        b: T,
+        f: impl FnOnce(&mut Self, T) -> Result<(), Error>,
+    ) -> Result<()> {
+        self.gamma2.push(p.clone());
+        let res = f(self, b);
+        self.gamma2.pop();
+        res
+    }
+
+    /*
+    > checkHolds :: [Problem] -> Contextual ()
+    > checkHolds ps = do
+    >     mcx <- getL
+    >     if anyBlocked mcx
+    >         then return ()
+    >         else do
+    >             theta <- mcxToSubs <$> getL
+    >             traverse checkHold $ substs theta ps
+    >             return ()
+    >   where
+    >     checkHold (All (P _T) b) = bindInScope_ (P _T) b (const checkHold)
+    >     checkHold (All (Twins _S _T) b) = do
+    >         b <- equal TYPE _S _T
+    >         if b then throwError "checkHolds: equal twins hanging around"
+    >              else throwError "checkHolds: unequal twins"
+    >     checkHold (Unify q) = do
+    >         b <- isReflexive q
+    >         if b then return ()
+    >              else throwError $ "checkHolds: not reflexive: " ++ pp q
+     */
+    fn check_hold(&mut self, prob: Problem) -> Result<(), Error> {
+        match prob {
+            Problem::All(param, b) => match &param.ty {
+                Param::P(_) => self.bind_in_scope_(param, *b, |tcs, t| tcs.check_hold(t)),
+                Param::Twins(s, t) => {
+                    let b = self.equal(&Type::universe(Universe(0)), s, t)?;
+                    if b {
+                        Err(Error::Other(
+                            "checkHolds: equal twins hanging around".into(),
+                        ))
+                    } else {
+                        Err(Error::Other("checkHolds: unequal twins".into()))
+                    }
+                }
+            },
+            Problem::Unify(q) => {
+                if self.is_reflexive(&q)? {
+                    return Ok(());
+                } else {
+                    return Err(Error::Other("checkHolds: not reflexive".into()));
+                }
+            }
+        }
+    }
+
+    fn check_holds(&mut self, ps: Vec<Problem>) -> Result<()> {
+        let mut mcx = self.meta_ctx2.0.clone();
+        if any_blocked(&mcx) {
+            return Ok(());
+        }
+        for mut p in ps {
+            let theta = mcx_to_subs(&mcx);
+            p.meta_subst(&theta);
+            self.check_hold(p)?;
+        }
+        Ok(())
+    }
+
+    /*
+    > check :: Type -> Tm -> Contextual ()
+    > check _T t = equalise _T t t >> return ()
+     */
+    fn check_(&mut self, ty: &Type, tm: &Term) -> Result<()> {
+        self.equalise(ty, tm, tm)?;
+        Ok(())
+    }
+
+    /*
+        > checkProb :: Problem -> Contextual ()
+        > checkProb (Unify (EQN _S s _T t)) = do
+        >    check TYPE _S  >> check _S s
+        >    check TYPE _T  >> check _T t
+        > checkProb (All p b) = do
+        >     checkParam p
+        >     bindInScope_ p b (const checkProb)
+    */
+    fn check_prob(&mut self, prob: Problem) -> Result<(), Error> {
+        match prob {
+            Problem::Unify(Equation { tm1, ty1, tm2, ty2 }) => {
+                self.check_(&Type::universe(Universe(0)), &tm1)?;
+                self.check_(&ty1, &tm1)?;
+                self.check_(&Type::universe(Universe(0)), &tm2)?;
+                self.check_(&ty2, &tm2)?;
+                Ok(())
+            }
+            Problem::All(param, b) => {
+                self.check_param(param.ty.clone())?;
+                self.bind_in_scope_(param, *b, |tcs, t| tcs.check_prob(t))
+            }
+        }
+    }
+
+    /*
+        > checkParam :: Param -> Contextual ()
+        > checkParam (P _S)         = check TYPE _S
+        > checkParam (Twins _S _T)  = check TYPE _S >> check TYPE _T
+    */
+    fn check_param(&mut self, param: Param) -> Result<()> {
+        match param {
+            Param::P(ty) => self.check_(&Type::universe(Universe(0)), &ty),
+            Param::Twins(s, t) => {
+                self.check_(&Type::universe(Universe(0)), &s)?;
+                self.check_(&Type::universe(Universe(0)), &t)
+            }
+        }
+    }
+
+    /*
+    > (<?) :: Occurs t => Nom -> t -> Bool
+    > x <? t = x `member` (fmvs t `union` fvs t)
+     */
+    fn check_dependency<T: Occurrence>(x: MI, t: &T) -> bool {
+        t.fmvs().contains(&x) || t.fvs().contains(&Var::Meta(x))
+    }
+
+    /*
+    >     validateCx :: ContextL -> Contextual ()
+    >     validateCx B0 = return ()
+    >     validateCx _Del'@(_Del :< E x _) | x <? _Del = throwError $ "validate: dependency error: " ++ show x ++ " occurs before its declaration"
+    >     validateCx (_Del :< E _ (_T, HOLE))      = do  putL _Del
+    >                                                    check TYPE _T
+    >                                                    validateCx _Del
+    >     validateCx (_Del :< E _ (_T, DEFN v))  = do  putL _Del
+    >                                                  check TYPE _T
+    >                                                  check _T v
+    >                                                  validateCx _Del
+    >     validateCx (_Del :< Q Blocked p)       = do  putL _Del
+    >                                                  checkProb p
+    >                                                  validateCx _Del
+    >     validateCx (_Del :< Q Active p)       = throwError $ "validate: found active problem " ++ pp p
+     */
+    fn validate_cx(&mut self, mut ctx: Ctx<Entry>) -> Result<(), Error> {
+        if ctx.is_empty() {
+            return Ok(());
+        }
+        let e = ctx.pop().unwrap();
+        match e {
+            Entry::E(x, ..) if Self::check_dependency(x, &ctx) => Err(Error::Other(format!(
+                "validate: dependency error: {} occurs before its declaration",
+                x
+            ))),
+            Entry::E(_, ty, Decl::Hole) => {
+                self.meta_ctx2.0 = ctx.clone();
+                self.check_(&Type::universe(Universe(0)), &ty)?;
+                self.validate_cx(ctx)
+            }
+            Entry::E(_, ty, Decl::Defn(v)) => {
+                self.meta_ctx2.0 = ctx.clone();
+                self.check_(&Type::universe(Universe(0)), &ty)?;
+                self.check_(&ty, &v)?;
+                self.validate_cx(ctx)
+            }
+            Entry::Q(Status::Blocked, p) => {
+                self.meta_ctx2.0 = ctx.clone();
+                self.check_prob(p)?;
+                self.validate_cx(ctx)
+            }
+            Entry::Q(Status::Active, p) => Err(Error::Other(format!(
+                "validate: found active problem {}",
+                p
+            ))),
+        }
+    }
+
+    /*
+    > validate :: Contextual ()
+    > validate = local (const B0) $ do
+    >     _Del' <- getR
+    >     unless (null _Del') $ error "validate: not at far right"
+    >     _Del <- getL
+    >     validateCx _Del `catchError` (error . (++ ("\nwhen validating\n" ++ pp (_Del, _Del'))))
+    >     putL _Del
+     */
+    fn validate(&mut self) -> Result<()> {
+        let ctx_r = self.meta_ctx2.1.clone();
+        if !ctx_r.is_empty() {
+            return Err(Error::Other(format!("validate: not at far right")));
+        }
+        let ctx_l = self.meta_ctx2.0.clone();
+        self.validate_cx(ctx_l.clone()).map_err(|e| {
+            Error::Other(format!("{}\nwhen validating\n({}, {:?})", e, ctx_l, ctx_r))
+        })?;
+        self.meta_ctx2.0 = ctx_l;
+        Ok(())
+    }
+}
+
+/*
+> data TestType = Succeed | Stuck | Fail
+
+> initialise :: Contextual ()
+> initialise = (fresh (s2n "init") :: Contextual (Name Tm)) >> return ()
+
+> test :: TestType -> [Entry] -> IO ()
+> test tt ezs = do
+>     putStrLn $ "\n\nInitial context:\n" ++ pp ezs
+>     let r = runContextual (bwd ezs) B0 $
+>                 (initialise >> many goLeft >> ambulando [] >> validate >> checkHolds (probs ezs))
+>     case (r, tt) of
+>         (Left err,  Fail)  -> putStrLn $ "OKAY: expected failure:\n" ++ err
+>         (Left err,  _)     -> putStrLn $ "FAIL: unexpected failure:\n" ++ err
+>         (Right x,   Fail)  -> putStrLn $ "FAIL: unexpected success:\n" ++ showX x
+>         (Right x,   Succeed) | succeeded x  -> putStrLn $ "OKAY: succeeded:\n" ++ showX x
+>                              | otherwise    -> putStrLn $ "FAIL: did not succeed:\n" ++ showX x
+>         (Right x,   Stuck)   | succeeded x  -> putStrLn $ "FAIL: did not get stuck:\n" ++ showX x
+>                              | otherwise    -> putStrLn $ "OKAY: stuck:\n" ++ showX x
+>   where
+>     showX ((), (cxL, [])) = "Final context:\n" ++ pp cxL
+>     succeeded ((), (cxL, [])) = not (anyBlocked cxL)
+>     probs = foldMap foo
+>     foo (E _ _) = []
+>     foo (Q _ p) = [p]
+ */
+enum TestType {
+    Succeed,
+    Stuck,
+    Fail,
+}
+
+fn initialise() -> Result<()> {
+    // fresh(s2n("init"))?;
+    Ok(())
+}
+
+fn test(tt: TestType, ezs: Vec<Entry>) -> eyre::Result<()> {
+    println!(
+        r#"
+
+Initial context:
+
+    {:?}"#,
+        ezs
+    );
+    let mut tcs = TypeCheckState::default();
+    let probs = ezs.iter().fold(Vec::new(), |mut acc, e| match e {
+        Entry::E(..) => acc,
+        Entry::Q(_, p) => {
+            acc.push(p.clone());
+            acc
+        }
+    });
+    tcs.meta_ctx2.0 = Ctx(ezs);
+    tcs.next_mi = META_ID.load(Ordering::Relaxed);
+    tcs.gamma.clear();
+    tcs.gamma2.clear();
+    let r: Result<Context, Error> = try {
+        loop {
+            if tcs.go_left().is_err() {
+                break;
+            }
+        }
+        tcs.ambulando(Default::default())?;
+        tcs.validate()?;
+        tcs.check_holds(probs)?;
+        tcs.meta_ctx2
+    };
+
+    let show_x = |(cx_l, cx_r): &(_, Tele<_>)| {
+        assert!(cx_r.is_empty(), "show_x: cx_r is not empty");
+        format!("Final context: {}", cx_l)
+    };
+    let succeeded = |(cx_l, cx_r): &(_, Tele<_>)| {
+        assert!(cx_r.is_empty(), "succeeded: cx_r is not empty");
+        !any_blocked(&cx_l)
+    };
+
+    match (&r, tt) {
+        (Err(err), TestType::Fail) => println!(
+            "OKAY: expected failure:
+
+    {}",
+            err
+        ),
+        (Err(err), _) => bail!(
+            "FAIL: unexpected failure:
+
+    {}",
+            err
+        ),
+        (Ok(x), TestType::Fail) => bail!(
+            "FAIL: unexpected success:
+
+    {}",
+            show_x(&x)
+        ),
+        (Ok(x), TestType::Succeed) if succeeded(&x) => println!(
+            "OKAY: succeeded:
+
+    {}",
+            show_x(&x)
+        ),
+        (Ok(x), TestType::Succeed) => bail!(
+            "FAIL: did not succeed:
+
+    {}",
+            show_x(&x)
+        ),
+        (Ok(x), TestType::Stuck) if succeeded(&x) => bail!(
+            "FAIL: did not get stuck:
+
+    {}",
+            show_x(&x)
+        ),
+        (Ok(x), TestType::Stuck) => println!(
+            "OKAY: stuck:
+
+    {}",
+            show_x(&x)
+        ),
+    }
+    Ok(())
+}
+
+/*
+> runTestSolved, runTestStuck, runTestFailed, patternUnify :: IO ()
+> runTestSolved = mapM_ (test Succeed) tests
+> runTestStuck  = mapM_ (test Stuck) stucks
+> runTestFailed = mapM_ (test Fail) fails
+> patternUnify = runTestSolved >> runTestStuck >> runTestFailed
+ */
+
+struct Metas(LazyLock<Mutex<(HashMap<String, MI>, HashMap<MI, String>)>>);
+impl Metas {
+    fn fresh(&self, s: &str) -> MI {
+        let mut lock = self.0.lock().unwrap();
+        let (name2mi, mi2name) = &mut *lock;
+        let mi = META_ID.fetch_add(1, Ordering::Relaxed);
+        name2mi.insert(s.to_string(), mi);
+        mi2name.insert(mi, s.to_string());
+        mi
+    }
+
+    fn s2n(&self, s: &str) -> MI {
+        let lock = self.0.lock().unwrap();
+        let (name2mi, _) = &*lock;
+        *name2mi.get(s).unwrap()
+    }
+
+    fn n2s(&self, mi: MI) -> String {
+        let lock = self.0.lock().unwrap();
+        let (_, mi2name) = &*lock;
+        mi2name.get(&mi).unwrap().to_string()
+    }
+}
+
+static META_ID: AtomicUsize = AtomicUsize::new(0);
+static METAS: Metas = Metas(LazyLock::new(|| {
+    Mutex::new((HashMap::new(), HashMap::new()))
+}));
+
+#[test]
+fn test_all() -> eyre::Result<()> {
+    let _ = env_logger::try_init();
+    /*
+    > lifted :: Nom -> Type -> [Entry] -> [Entry]
+    > lifted x _T es = lift [] es
+
+    >      lift :: Subs -> [Entry] -> [Entry]
+    >      lift g (E a (_A, d) : as)  = E a (_Pi x _T (substs g _A), d) :
+    >                                          lift ((a, meta a $$ var x) : g) as
+    >      lift g (Q s p : as)        = Q s (allProb x _T (substs g p)) : lift g as
+    >      lift _ [] = []
+
+    > gal :: String -> Type -> Entry
+    > gal x _T = E (s2n x) (_T, HOLE)
+
+    > eq :: String -> Type -> Tm -> Type -> Tm -> Entry
+    > eq x _S s _T t = Q Active $ Unify $ EQN _S s _T t
+
+    > boy :: String -> Type -> [Entry] -> [Entry]
+    > boy = lifted . s2n
+    */
+
+    let lift = |x: Var, ty: Type, mut g: MetaSubst, mut es: Vec<Entry>| {
+        for e in es.iter_mut() {
+            match e {
+                Entry::E(mi, t, d) => {
+                    let i = *mi;
+                    let mut tt = t.clone();
+                    tt.meta_subst(&g);
+                    let t = Type::Pi(Bind::unnamed(ty.clone().boxed()), Closure::plain(tt));
+                    *e = Entry::E(i, t, d.clone());
+                    g.insert(
+                        i,
+                        Term::meta_with(i, vec![Elim::App(Term::from_dbi(0).boxed())]),
+                    );
+                }
+                Entry::Q(s, p) => {
+                    p.meta_subst(&g);
+                    let p = Problem::alls(vec![Bind::unnamed(Param::P(ty.clone()))], p.clone());
+                    *e = Entry::Q(*s, p);
+                }
+            }
+        }
+        es
+    };
+
+    let lifted = |x: Var, t: Type, es: Vec<Entry>| lift(x, t, MetaSubst::new(), es);
+
+    let gal = |x: &str, t: Type| Entry::E(METAS.fresh(x), t, Decl::Hole);
+    let eq = |x: &str, s: Type, s_: Term, t: Type, t_: Term| {
+        Entry::Q(Status::Active, Problem::Unify(Equation::new(s_, s, t_, t)))
+    };
+    let boy = |x: &str, t: Type, es: Vec<Entry>| lifted(Var::Bound(0), t, es);
+
+    let bool_ty = Type::Data(ValData::new(0, vec![]));
+
+    let tests = vec![
+        /*
+        >           ( gal "A" SET
+        >           : gal "B" SET
+        >           : eq "p" SET (mv "A") SET (mv "B")
+        >           : [])
+                 */
+        // vec![
+        //     gal("A", Type::Universe(Universe(0))),
+        //     gal("B", Type::Universe(Universe(0))),
+        //     eq(
+        //         "p",
+        //         Type::Universe(Universe(0)),
+        //         Term::meta(METAS.s2n("A")),
+        //         Type::Universe(Universe(0)),
+        //         Term::meta(METAS.s2n("B")),
+        //     ),
+        // ],
+        /*
+        >         , ( gal "A" BOOL
+        >           : gal "B" (BOOL --> BOOL)
+        >           : boy "x" BOOL
+        >             ( eq "p" BOOL (mv "A") BOOL (mv "B" $$ vv "x")
+        >             : [])
+        >           )
+                 */
+        // vec![
+        //     gal("A", bool_ty.clone()),
+        //     gal("B", Type::arrow(bool_ty.clone(), bool_ty.clone())),
+        // ]
+        // .into_iter()
+        // .chain(boy(
+        //     "x",
+        //     bool_ty.clone(),
+        //     vec![eq(
+        //         "p",
+        //         bool_ty.clone(),
+        //         Term::meta(METAS.s2n("A")),
+        //         bool_ty.clone(),
+        //         Term::meta(METAS.s2n("B")).apply(vec![Term::from_dbi(0)]),
+        //     )],
+        // ))
+        // .collect::<Vec<_>>(),
+        /*
+        >           -- test 2: restrict B to second argument
+        >         , ( gal "A" SET
+        >           : gal "B" (mv "A" --> mv "A" --> BOOL)
+        >           : eq "p" (mv "A" --> mv "A" --> BOOL)
+        >                        (lam (s2n "x") (lam (s2n "y") (mv "B" $$$ [vv "y", vv "x"])))
+        >                    (mv "A" --> mv "A" --> BOOL)
+        >                        (lam (s2n "x") (lam (s2n "y") (mv "B" $$$ [vv "x", vv "x"])))
+        >           : [])
+         */
+        vec![
+            gal("A", Type::Universe(Universe(0))),
+            gal(
+                "B",
+                Type::arrow(
+                    Type::meta(METAS.s2n("A")),
+                    Type::arrow(Type::meta(METAS.s2n("A")), bool_ty.clone()),
+                ),
+            ),
+            eq(
+                "p",
+                Type::arrow(
+                    Type::meta(METAS.s2n("A")),
+                    Type::arrow(Type::meta(METAS.s2n("A")), bool_ty.clone()),
+                ),
+                Term::lam(
+                    Bind::explicit(1, Type::meta(METAS.s2n("A")).boxed(), Ident::new("x")),
+                    Term::lam(
+                        Bind::explicit(0, Type::meta(METAS.s2n("A")).boxed(), Ident::new("y")),
+                        Term::meta(METAS.s2n("B"))
+                            .apply(vec![Term::from_dbi(0), Term::from_dbi(1)]),
+                    ),
+                ),
+                Type::arrow(
+                    Type::meta(METAS.s2n("A")),
+                    Type::arrow(Type::meta(METAS.s2n("A")), bool_ty.clone()),
+                ),
+                Term::lam(
+                    Bind::explicit(1, Type::meta(METAS.s2n("A")).boxed(), Ident::new("x")),
+                    Term::lam(
+                        Bind::explicit(0, Type::meta(METAS.s2n("A")).boxed(), Ident::new("y")),
+                        Term::meta(METAS.s2n("B"))
+                            .apply(vec![Term::from_dbi(1), Term::from_dbi(1)]),
+                    ),
+                ),
+            ),
+        ],
+    ];
+    let stucks = vec![];
+    let fails = vec![];
+    for t in tests {
+        test(TestType::Succeed, t)?;
+    }
+    for t in stucks {
+        test(TestType::Stuck, t)?;
+    }
+    for t in fails {
+        test(TestType::Fail, t)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::syntax::core::ValData;
+    use crate::syntax::desugar::desugar_prog;
+    use crate::syntax::parser::Parser;
+    use crate::syntax::{ConHead, Loc, Plicitness};
+    use crate::{assert_err, assert_term_eq, pct, pe, typeck};
+
+    #[test]
+    fn free_vars_test() {
+        // c (u[y1]) (x1 x2) (λz. z x3 v[y2, w[y3]])
+        // ctx: z_ty y3 y2 y1 x3 x2 x1
+        let x1 = Term::from_dbi(0);
+        let x2 = Term::from_dbi(1);
+        let x3 = Term::from_dbi(2);
+        let y1 = Term::from_dbi(3);
+        let y2 = Term::from_dbi(4);
+        let y3 = Term::from_dbi(5);
+        let z_ty = Term::from_dbi(6);
+
+        let subst = Substitution::raise(1);
+        let term = Term::cons(
+            ConHead::new("c", 0),
+            vec![
+                Term::meta_with(0, vec![Elim::App(y1.clone().boxed())]),
+                x1.clone().apply(vec![x2.clone()]),
+                Term::lam(
+                    Bind::new(
+                        Plicitness::Explicit,
+                        0,
+                        z_ty.clone().boxed(),
+                        Loc::default(),
+                    ),
+                    Term::from_dbi(0).apply(vec![
+                        x3.clone().subst(subst.clone()),
+                        Term::meta_with(
+                            1,
+                            vec![
+                                Elim::App(y2.clone().subst(subst.clone()).boxed()),
+                                Elim::App(
+                                    Term::meta_with(
+                                        2,
+                                        vec![Elim::App(y3.clone().subst(subst).boxed())],
+                                    )
+                                    .boxed(),
+                                ),
+                            ],
+                        ),
+                    ]),
+                ),
+            ],
+        );
+        let mut fv = term
+            .fvs()
+            .into_iter()
+            .map(|x| match x {
+                Var::Bound(x) => x,
+                Var::Twin(x, _) => x,
+                _ => unimplemented!(),
+            })
+            .collect::<Vec<_>>();
+        fv.sort();
+        // let fv = free_vars(&term, OccurrenceKind::Any);
+        assert_eq!(
+            fv,
+            vec![
+                y1.to_var().unwrap(),
+                x1.to_var().unwrap(),
+                x2.to_var().unwrap(),
+                z_ty.to_var().unwrap(),
+                x3.to_var().unwrap(),
+                y2.to_var().unwrap(),
+                y3.to_var().unwrap(),
+            ]
+        );
+        // let fv_rigid = free_vars(&term, OccurrenceKind::Rigid);
+        // assert_eq!(
+        //     fv_rigid,
+        //     vec![x1.to_var(), x2.to_var(), z_ty.to_var(), x3.to_var()]
+        // );
+        // let fv_flexible = free_vars(&term, OccurrenceKind::Flexible);
+        // assert_eq!(fv_flexible, vec![y1.to_var(), y2.to_var(), y3.to_var()]);
+    }
+
+    #[test]
+    fn test_check_basic() -> eyre::Result<()> {
+        let _ = env_logger::try_init();
+        let mut p = Parser::default();
+        let mut des = desugar_prog(p.parse_prog(
+            r#"
+            data Unit : Type
+                | tt
+
+            data Option (A : Type) : Type1
+                | none
+                | some A
+        "#,
+        )?)?;
+        let mut env = TypeCheckState::default();
+        env.check_prog(des.clone())?;
+        env.trace_tc = true;
+        env.indentation_size(2);
+
+        let ty = pct!(p, des, env, "Option _");
+        env.check(&pe!(p, des, "some tt"), &ty)?;
+        // let ty = pct!(p, des, env, "T -> T");
+        // env.check(&pe!(p, des, "lam (y : Option _) => some tt"), &ty)?;
+        Ok(())
+    }
 }

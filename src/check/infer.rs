@@ -253,7 +253,7 @@ impl TypeCheckState {
                 Ok((lb.val.at(loc.loc), lb.bind.ty))
             }
             Meta(ident, mi) => {
-                let ty = Term::meta(*mi, vec![]);
+                let ty = Term::meta_with(*mi, vec![]);
                 let tyty = self.fresh_meta();
                 Ok((ty.at(ident.loc), tyty))
             }

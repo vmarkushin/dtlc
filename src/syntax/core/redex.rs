@@ -25,7 +25,7 @@ impl Term {
             }
             Term::Meta(m, mut a) => {
                 a.append(&mut args);
-                Term::meta(m, a)
+                Term::meta_with(m, a)
             }
             Term::Lam(lam) => Term::Redex(Func::Lam(lam), Ident::new("<λ>"), args),
             Term::Cons(c, mut a) => {
@@ -270,7 +270,7 @@ impl SubstWith<'_> for Term {
             Term::Universe(n) => Term::universe(n),
             Term::Data(info) => Term::data(info.subst_with(subst, tcs)),
             Term::Meta(m, a) | Term::Var(Var::Meta(m), a) => {
-                Term::meta(m, a.subst_with(subst, tcs))
+                Term::meta_with(m, a.subst_with(subst, tcs))
             }
             Term::Var(Var::Bound(f), args) | Term::Var(Var::Twin(f, _), args) => subst
                 .lookup_with(f, tcs)
