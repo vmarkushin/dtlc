@@ -6,7 +6,7 @@
     incomplete_features
 )]
 #![feature(
-    rustc_box,
+    lazy_cell,
     box_patterns,
     type_alias_impl_trait,
     cell_update,
@@ -15,11 +15,10 @@
     closure_lifetime_binder,
     specialization,
     adt_const_params,
-    trait_alias
+    trait_alias,
+    let_chains,
+    exclusive_range_pattern
 )]
-#![feature(let_chains)]
-#![feature(exclusive_range_pattern)]
-#![feature(once_cell)]
 
 #[macro_use]
 extern crate log;

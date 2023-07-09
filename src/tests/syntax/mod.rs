@@ -1,7 +1,7 @@
 mod subst;
 
 use crate::syntax::core::PrimSubst::IdS;
-use crate::syntax::core::{DeBruijn, PrimSubst, Subst};
+use crate::syntax::core::{Boxed, DeBruijn, PrimSubst, Subst};
 use crate::syntax::DBI;
 use quickcheck::{Arbitrary, Gen, TestResult, Testable};
 use std::fmt::Display;
@@ -99,7 +99,7 @@ impl Tm {
 
 pub fn var(ty: Ty, idx: usize) -> Tm {
     use Tm::*;
-    Ann(box Var(idx), ty)
+    Ann(Var(idx).boxed(), ty)
 }
 
 type Sub = PrimSubst<Tm>;
@@ -123,14 +123,14 @@ impl Subst<Tm, Tm> for Tm {
         use Tm::*;
         match self {
             Var(idx) => subst.lookup(idx),
-            Ann(tm, ty) => Ann(box tm.subst(subst.clone()), ty),
+            Ann(tm, ty) => Ann(tm.subst(subst.clone()).boxed(), ty),
             Con(ty, tms) => Con(
                 ty,
                 tms.iter()
                     .map(|tm| tm.clone().subst(subst.clone()))
                     .collect(),
             ),
-            Lam(ty, tm) => Lam(ty, box tm.subst(subst.clone().lift_by(1))),
+            Lam(ty, tm) => Lam(ty, tm.subst(subst.clone().lift_by(1)).boxed()),
         }
     }
 }
@@ -146,7 +146,7 @@ impl Arbitrary for Ty {
             let mut xs = Vec::<Ty>::new();
             xs.push(gen_base_ty(g));
             if n > 0 {
-                xs.push(Ty::Arr(box (gen_base_ty(g), arb(g, n / 2))));
+                xs.push(Ty::Arr((gen_base_ty(g), arb(g, n / 2)).boxed()));
             }
             g.choose(&xs).unwrap().clone()
         }
@@ -159,8 +159,8 @@ impl Arbitrary for Ty {
             Arr(inn) => {
                 let (s, t) = &**inn;
                 let mut xs = vec![s.clone(), t.clone()];
-                xs.extend(s.shrink().map(|x| Arr(box (x, t.clone()))));
-                xs.extend(t.shrink().map(|x| Arr(box (s.clone(), x))));
+                xs.extend(s.shrink().map(|x| Arr((x, t.clone()).boxed())));
+                xs.extend(t.shrink().map(|x| Arr((s.clone(), x).boxed())));
                 Box::new(xs.into_iter())
             }
             _ => return Box::new(std::iter::empty()),
@@ -201,7 +201,10 @@ pub fn gen_tm(g: &mut Gen, c: Cx, t: Ty) -> Tm {
         match n {
             0 => {
                 let s = gen_base_ty(g);
-                Tm::Lam(s.clone(), box var_or_lam(g, Cx::Ext(box c.clone(), s)))
+                Tm::Lam(
+                    s.clone(),
+                    var_or_lam(g, Cx::Ext(c.clone().boxed(), s)).boxed(),
+                )
             }
             x => {
                 let i = x - 1;
@@ -231,7 +234,7 @@ pub fn gen_tm(g: &mut Gen, c: Cx, t: Ty) -> Tm {
                 let (s, t) = &*inn;
                 Tm::Lam(
                     s.clone(),
-                    box gen_tm(g, c.clone().ext(s.clone()), t.clone()),
+                    gen_tm(g, c.clone().ext(s.clone()), t.clone()).boxed(),
                 )
             } else {
                 unreachable!()
@@ -265,7 +268,7 @@ impl Arbitrary for Tm {
 pub fn gen_sub(g: &mut Gen, delta: Cx) -> (Cx, Sub) {
     let mut xs = Vec::new();
     let dc = delta.clone();
-    xs.push((box move || (dc.clone(), IdS)) as Box<dyn FnOnce() -> (_, _)>);
+    xs.push((Box::new(move || (dc.clone(), IdS))) as Box<dyn FnOnce() -> (_, _)>);
     /*
     if delta == Cx::Nil {
         let c = Cx::arbitrary(g);
@@ -284,7 +287,7 @@ pub fn gen_sub(g: &mut Gen, delta: Cx) -> (Cx, Sub) {
     };
     if let Cx::Ext(cx, t) = delta.clone() {
         let gen = Gen::new(g.size());
-        xs.push((box move || gen_cons(*cx, t, gen)) as Box<dyn FnOnce() -> (_, _)>)
+        xs.push((Box::new(move || gen_cons(*cx, t, gen))) as Box<dyn FnOnce() -> (_, _)>)
     }
     let gen_wk = |mut g: Gen, delta| {
         let n = usize::arbitrary(&mut g) % 3;
@@ -294,7 +297,7 @@ pub fn gen_sub(g: &mut Gen, delta: Cx) -> (Cx, Sub) {
     };
     let gen = Gen::new(g.size());
     let dc = delta.clone();
-    xs.push((box move || gen_wk(gen, dc)) as Box<dyn FnOnce() -> (_, _)>);
+    xs.push((Box::new(move || gen_wk(gen, dc))) as Box<dyn FnOnce() -> (_, _)>);
 
     let gen_lift = |mut g: Gen, delta: Cx| {
         // n <- choose (1, min 3 $ cxLen delta)
@@ -308,7 +311,7 @@ pub fn gen_sub(g: &mut Gen, delta: Cx) -> (Cx, Sub) {
     };
     if delta.len() > 0 {
         let gen = Gen::new(g.size());
-        xs.push((box move || gen_lift(gen, delta.clone())) as Box<dyn FnOnce() -> (_, _)>);
+        xs.push((Box::new(move || gen_lift(gen, delta.clone()))) as Box<dyn FnOnce() -> (_, _)>);
     }
     let n = usize::arbitrary(g) % xs.len();
     xs.remove(n)()

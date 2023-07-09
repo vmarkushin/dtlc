@@ -132,11 +132,11 @@ impl TypeCheckState {
                     let mut term = lam.1;
                     for elim in elims {
                         term = Closure::Plain(
-                            box term
+                            term
                                 .instantiate_safe_with(elim.into_app(), self)
                                 .unwrap()
                                 .tele_view()
-                                .1,
+                                .1.boxed(),
                         );
                     }
                     let Closure::Plain(term) = term;

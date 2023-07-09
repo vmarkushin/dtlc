@@ -2,7 +2,7 @@ use crate::check::meta::HasMeta;
 use crate::check::{Error, Result, TypeCheckState};
 use crate::syntax::abs::{Expr, Pat as PatA};
 use crate::syntax::core::{
-    Case, DataInfo, DeBruijn, Decl, Pat, SubstWith, Substitution, Term, Var,
+    Boxed, Case, DataInfo, DeBruijn, Decl, Pat, SubstWith, Substitution, Term, Var,
 };
 use crate::syntax::{ConHead, DBI, UID};
 use itertools::{EitherOrBoth, Itertools};
@@ -203,8 +203,8 @@ impl CaseTree {
                             body: c.expect("empty body in elaborated case tree").into_term(),
                         }
                     })
-                    .collect();
-                Term::Match(box i, cases)
+                    .collect::<Vec<_>>();
+                Term::match_case(i, cases)
             }
         }
     }
@@ -374,7 +374,7 @@ impl LshProblem {
 
     fn split_empty(clause_1: &Clause, ct: &Constraint, x: DBI) -> Result<CaseTree> {
         if !ct.pat.is_abusrd() {
-            return Err(Error::ExpectedAbsurd(box ct.pat.clone()));
+            return Err(Error::ExpectedAbsurd(ct.pat.clone().boxed()));
         }
         if clause_1.rhs.is_some() {
             return Err(Error::UnexpectedRhs);
@@ -727,7 +727,7 @@ mod tests {
                         vec![Pat::from_dbi(0)],
                     ),
                     body: Match(
-                        box Term::from_dbi(1),
+                        Term::from_dbi(1).boxed(),
                         vec![
                             Case {
                                 pattern: ConsPat(
@@ -779,8 +779,8 @@ mod tests {
                                             loc: Loc::default(),
                                         },
                                         vec![
-                                            Elim::App(box Term::from_dbi(1)),
-                                            Elim::App(box Term::from_dbi(0)),
+                                            Elim::App(Term::from_dbi(1).boxed()),
+                                            Elim::App(Term::from_dbi(0).boxed()),
                                         ],
                                     )],
                                 ),
@@ -1156,8 +1156,8 @@ mod tests {
                                 loc: Loc::default(),
                             },
                             vec![
-                                Elim::App(box Term::from_dbi(1)),
-                                Elim::App(box Term::from_dbi(0)),
+                                Elim::App(Term::from_dbi(1).boxed()),
+                                Elim::App(Term::from_dbi(0).boxed()),
                             ],
                         )],
                     ),
@@ -1218,8 +1218,8 @@ mod tests {
                                 loc: Loc::default(),
                             },
                             vec![
-                                Elim::App(box Term::from_dbi(1)),
-                                Elim::App(box Term::from_dbi(0)),
+                                Elim::App(Term::from_dbi(1).boxed()),
+                                Elim::App(Term::from_dbi(0).boxed()),
                             ],
                         )],
                     ),
@@ -1350,8 +1350,8 @@ mod tests {
                                 loc: Loc::default(),
                             },
                             vec![
-                                Elim::App(box Term::from_dbi(1)),
-                                Elim::App(box Term::from_dbi(0)),
+                                Elim::App(Term::from_dbi(1).boxed()),
+                                Elim::App(Term::from_dbi(0).boxed()),
                             ],
                         )],
                     ),
@@ -1725,8 +1725,8 @@ mod tests {
                                 loc: Loc::default(),
                             },
                             vec![
-                                Elim::App(box Term::from_dbi(1)),
-                                Elim::App(box Term::from_dbi(0)),
+                                Elim::App(Term::from_dbi(1).boxed()),
+                                Elim::App(Term::from_dbi(0).boxed()),
                             ],
                         )],
                     ),
@@ -1837,8 +1837,8 @@ mod tests {
                                 loc: Loc::default(),
                             },
                             vec![
-                                Elim::App(box Term::from_dbi(1)),
-                                Elim::App(box Term::from_dbi(0)),
+                                Elim::App(Term::from_dbi(1).boxed()),
+                                Elim::App(Term::from_dbi(0).boxed()),
                             ],
                         )],
                     ),

@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display, Formatter};
 
-use crate::syntax::core::pretty_list;
+use crate::syntax::core::{pretty_list, Boxed};
 use crate::syntax::surf::{Expr, MetaAttr, Param, Type};
 use crate::syntax::{Ident, Universe};
 use derive_more::From;
@@ -44,7 +44,7 @@ impl Params {
         if params.is_empty() {
             body
         } else {
-            Expr::Lam(Vec1::try_from_vec(params).unwrap(), box body)
+            Expr::Lam(Vec1::try_from_vec(params).unwrap(), body.boxed())
         }
         // params.into_iter().rev().fold(body, |acc, p| {
         //     let name = p.name.unwrap_or_else(|| "_".into());
@@ -98,7 +98,7 @@ impl Params {
         if params.is_empty() {
             term
         } else {
-            Expr::Pi(Vec1::try_from_vec(params).unwrap(), box term)
+            Expr::Pi(Vec1::try_from_vec(params).unwrap(), term.boxed())
         }
 
         // let mut n = 0;

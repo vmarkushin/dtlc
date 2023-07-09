@@ -504,7 +504,7 @@ impl Term {
     }
 
     pub(crate) fn lam(p0: Bind<Box<Term>>, p1: Term) -> Term {
-        Term::Lam(Lambda(p0, Closure::Plain(box p1)))
+        Term::Lam(Lambda(p0, Closure::Plain(p1.boxed())))
     }
 
     pub fn lams<T: Into<Bind<Box<Term>>>>(ps: impl IntoIterator<Item = T>, body: Term) -> Term {
@@ -514,11 +514,11 @@ impl Term {
     }
 
     pub fn pi(p0: Bind<Box<Term>>, p1: Term) -> Term {
-        Term::Pi(p0, Closure::Plain(box p1))
+        Term::Pi(p0, Closure::Plain(p1.boxed()))
     }
 
     pub fn arrow(p0: Term, p1: Term) -> Term {
-        Term::Pi(Bind::unnamed(p0.boxed()), Closure::Plain(box p1))
+        Term::Pi(Bind::unnamed(p0.boxed()), Closure::Plain(p1.boxed()))
     }
 
     pub fn pis<T: Into<Bind<Box<Term>>>>(ps: impl IntoIterator<Item = T>, body: Term) -> Term {
@@ -531,7 +531,7 @@ impl Term {
     }
 
     pub fn match_elim(x: DBI, cs: impl Into<Vec<Case>>) -> Self {
-        Self::match_case(box Term::from_dbi(x), cs)
+        Self::match_case(Term::from_dbi(x), cs)
     }
 
     pub fn is_meta(&self) -> bool {

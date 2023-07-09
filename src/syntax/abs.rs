@@ -1,5 +1,5 @@
 use crate::syntax;
-use crate::syntax::core::display_application;
+use crate::syntax::core::{display_application, Boxed};
 use crate::syntax::surf::Literal;
 use crate::syntax::{pattern, Ident, Loc, Plicitness, Universe, GI, MI, UID};
 use itertools::Itertools;
@@ -287,7 +287,7 @@ pub enum Expr {
 impl Expr {
     pub(crate) fn lam_tele(tele: Tele, body: Expr) -> Expr {
         tele.into_iter()
-            .rfold(body, |expr, param| Self::lam(param.boxed(), box expr))
+            .rfold(body, |expr, param| Self::lam(param.boxed(), expr.boxed()))
     }
 }
 

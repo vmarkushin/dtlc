@@ -2,7 +2,7 @@ use crate::check::meta::MetaSol;
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
 use crate::ensure;
-use crate::syntax::core::{Bind, Tele};
+use crate::syntax::core::{Bind, Boxed, Tele};
 use crate::syntax::core::{
     Case, Closure, Elim, FoldVal, Func, Lambda, Pat, SubstWith, Substitution, Term, ValData,
 };
@@ -113,7 +113,7 @@ impl Unify for Pat {
             (Pat::Wildcard, Pat::Wildcard) => Ok(()),
             (Pat::Wildcard, Pat::Var(..)) => Ok(()),
             (Pat::Var(..), Pat::Wildcard) => Ok(()),
-            (a, b) => Err(Error::DifferentPat(box a.clone(), box b.clone())),
+            (a, b) => Err(Error::DifferentPat(a.clone().boxed(), b.clone().boxed())),
         }
     }
 }
@@ -170,7 +170,7 @@ impl Unify for Elim {
         match (left, right) {
             (Proj(a), Proj(b)) if a == b => Ok(()),
             (App(a), App(b)) => Unify::unify(tcs, a, b),
-            (a, b) => Err(Error::DifferentElim(box a.clone(), box b.clone())),
+            (a, b) => Err(Error::DifferentElim(a.clone().boxed(), b.clone().boxed())),
         }
     }
 }
@@ -350,7 +350,7 @@ impl TypeCheckState {
             (a, b) => {
                 debug!("Got different terms when unifying {} {}", a, b);
 
-                Err(Error::DifferentTerm(box a.clone(), box b.clone()))
+                Err(Error::DifferentTerm(a.clone().boxed(), b.clone().boxed()))
             }
         }
     }

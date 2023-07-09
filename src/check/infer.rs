@@ -40,10 +40,14 @@ impl TypeCheckState {
                 let bind_ch = self.gamma.pop().expect("Γ is empty");
                 let pi_ty = match (bind_ty_ty, body_ty) {
                     (Term::Universe(a), Term::Universe(b)) => Term::Universe(a.max(b)),
-                    (a, b) => return Err(Error::InvalidPi(box a, box b)),
+                    (a, b) => return Err(Error::InvalidPi(a.boxed(), b.boxed())),
                 };
                 return Ok((
-                    Term::Pi(bind_ch.map_term(|x| box x), Closure::Plain(box body_ch.ast)).at(*loc),
+                    Term::Pi(
+                        bind_ch.map_term(|x| x.boxed()),
+                        Closure::Plain(body_ch.ast.boxed()),
+                    )
+                    .at(*loc),
                     pi_ty.into(),
                 ));
             }
@@ -527,8 +531,8 @@ mod tests {
         assert_err!(
             env.check(&pe!(p, des, "(ff : T -> T) -> (x : T) -> x"), &ty),
             Error::InvalidPi(
-                box Term::Universe(Universe(0)),
-                box Term::Data(ValData::new(0, vec![]))
+                Term::Universe(Universe(0)).boxed(),
+                Term::Data(ValData::new(0, vec![])).boxed()
             )
         );
 

@@ -299,7 +299,7 @@ impl SubstWith<'_> for Term {
                 match &x_inst {
                     Term::Var(Var::Bound(y), es) if es.is_empty() => {
                         let cs = Self::subst_in_match_with_var(&subst, tcs, &x, *y, cs);
-                        Term::Match(box x_inst, cs)
+                        Term::Match(x_inst.boxed(), cs)
                     }
                     _ => {
                         let cs = match &*x {
@@ -309,7 +309,7 @@ impl SubstWith<'_> for Term {
                             _ => Self::subst_non_var_in_cases_instead_of_non_var(subst, tcs, cs),
                         };
 
-                        Term::Match(box x_inst, cs)
+                        Term::Match(x_inst.boxed(), cs)
                     }
                 }
             }

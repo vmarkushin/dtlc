@@ -1,4 +1,4 @@
-use crate::syntax::core::pretty_list;
+use crate::syntax::core::{pretty_list, Boxed};
 use crate::syntax::pattern;
 use crate::syntax::surf::lit::Literal;
 use crate::syntax::surf::Param;
@@ -29,7 +29,7 @@ impl Expr {
     #[allow(unused)]
     pub(crate) fn into_tele(self) -> (Vec<Param>, Box<Expr>) {
         let mut params = vec![];
-        let mut expr = box self;
+        let mut expr = self.boxed();
         loop {
             expr = match *expr {
                 Expr::Lam(ps, e) => {
@@ -41,7 +41,7 @@ impl Expr {
                     e
                 }
                 e => {
-                    expr = box e;
+                    expr = e.boxed();
                     break;
                 }
             };

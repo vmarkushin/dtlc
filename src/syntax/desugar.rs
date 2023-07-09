@@ -323,7 +323,7 @@ impl DesugarState {
                     Left(id) => Ok(id),
                     Right((f, args)) => match self.maybe_desugar_ap(f, args)? {
                         Left(id) => Ok(id),
-                        Right((f, args)) => Ok(ExprA::App(box f, args)),
+                        Right((f, args)) => Ok(ExprA::App(f.boxed(), args)),
                     },
                 }
                 // Ok(ExprA::App(box f, args))
@@ -600,16 +600,17 @@ fn foo (p : Nat) := match p {
                             Bind {
                                 licit: Explicit,
                                 name: 0,
-                                ty: box Some(Data(
+                                ty: Some(Data(
                                     Ident {
                                         loc: Loc::new(50, 53),
                                         text: "Nat".to_owned()
                                     },
                                     0
-                                )),
+                                ))
+                                .boxed(),
                                 ident: Ident::new("p",)
                             },
-                            box Match(abs::Match::new(
+                            Match(abs::Match::new(
                                 vec1![Var(
                                     Ident {
                                         text: "p".to_owned(),
@@ -632,43 +633,47 @@ fn foo (p : Nat) := match p {
                                             vec![]
                                         )],
                                         body: Some(App(
-                                            box ExprA::Lam(
+                                            ExprA::Lam(
                                                 Loc::new(89, 111),
                                                 Bind {
                                                     licit: Explicit,
                                                     name: 1,
-                                                    ty: box Some(ExprA::Pi(
+                                                    ty: Some(ExprA::Pi(
                                                         Loc::new(93, 103),
                                                         Bind {
                                                             licit: Explicit,
                                                             name: 1,
-                                                            ty: box Some(Data(
+                                                            ty: Some(Data(
                                                                 Ident {
                                                                     loc: Loc::new(93, 96),
                                                                     text: "Nat".to_owned()
                                                                 },
                                                                 0
-                                                            )),
+                                                            ))
+                                                            .boxed(),
                                                             ident: Ident::new("1")
                                                         },
-                                                        box Data(
+                                                        Data(
                                                             Ident {
                                                                 loc: Loc::default(),
                                                                 text: "Nat".to_owned()
                                                             },
                                                             0
                                                         )
-                                                    )),
+                                                        .boxed()
+                                                    ))
+                                                    .boxed(),
                                                     ident: Ident::new("f")
                                                 },
-                                                box ExprA::App(
-                                                    box ExprA::Var(
+                                                ExprA::App(
+                                                    ExprA::Var(
                                                         Ident {
                                                             loc: Loc::default(),
                                                             text: "f".to_owned()
                                                         },
                                                         1
-                                                    ),
+                                                    )
+                                                    .boxed(),
                                                     Vec1::new(ExprA::Var(
                                                         Ident {
                                                             loc: Loc::default(),
@@ -677,28 +682,32 @@ fn foo (p : Nat) := match p {
                                                         0
                                                     ))
                                                 )
-                                            ),
+                                                .boxed()
+                                            )
+                                            .boxed(),
                                             Vec1::new(ExprA::Lam(
                                                 Loc::default(),
                                                 Bind {
                                                     licit: Explicit,
                                                     name: 1,
-                                                    ty: box Some(Data(
+                                                    ty: Some(Data(
                                                         Ident {
                                                             loc: Loc::default(),
                                                             text: "Nat".to_owned()
                                                         },
                                                         0
-                                                    )),
+                                                    ))
+                                                    .boxed(),
                                                     ident: Ident::new("n")
                                                 },
-                                                box ExprA::Var(
+                                                ExprA::Var(
                                                     Ident {
                                                         loc: Loc::default(),
                                                         text: "n".to_owned()
                                                     },
                                                     1
                                                 )
+                                                .boxed()
                                             ))
                                         ))
                                     },
@@ -725,16 +734,17 @@ fn foo (p : Nat) := match p {
                                     }
                                 ]
                             ))
+                            .boxed()
                         )),
                         Some(Pi(
                             Loc::new(50, 44),
                             Bind::identified(
                                 Explicit,
                                 0,
-                                box Some(Data(Ident::new("Nat",), 0)),
+                                Some(Data(Ident::new("Nat",), 0)).boxed(),
                                 Ident::new("p",)
                             ),
-                            box Meta(Ident::new("hole0",), 0)
+                            Meta(Ident::new("hole0",), 0).boxed()
                         )),
                     )),
                 )
