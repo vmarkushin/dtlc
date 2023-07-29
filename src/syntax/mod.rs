@@ -13,6 +13,7 @@ pub mod desugar;
 pub mod parser;
 pub mod pattern;
 pub mod surf;
+pub mod tele_len;
 pub mod token;
 
 /// Plicitness (plɪsɪtnəs), noun - the quality of being explicit or implicit (Oxford dictionary (no)).
@@ -265,6 +266,16 @@ impl<T> From<Bind<T>> for Bind<Box<T>> {
 }
 
 impl Display for Bind<Term> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if self.licit == Plicitness::Implicit {
+            write!(f, "{{{}:{}}}", self.ident, self.ty)
+        } else {
+            write!(f, "{}:{}", self.ident, self.ty)
+        }
+    }
+}
+
+impl Display for Bind<Box<Term>> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if self.licit == Plicitness::Implicit {
             write!(f, "{{{}:{}}}", self.ident, self.ty)

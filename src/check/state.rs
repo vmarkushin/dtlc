@@ -7,6 +7,8 @@ use crate::syntax::{LangItem, DBI, GI, MI, UID};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::mem::swap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 /// Typing context.
 pub type Sigma = Vec<Decl>;
@@ -32,7 +34,7 @@ pub struct TypeCheckState {
     /// Meta variable context, scoped. Always global.
     pub meta_ctx: Vec<MetaContext<Term>>,
     pub meta_ctx2: Context,
-    pub next_uid: UID,
+    pub next_uid: Arc<AtomicUsize>,
     pub next_mi: MI,
     pub lang_items: HashMap<LangItem, GI>,
     pub lang_items_back: HashMap<GI, LangItem>,
@@ -107,6 +109,7 @@ impl TypeCheckState {
         mut ctx: Ctx<Bind<Param>>,
         f: F,
     ) -> R {
+        info!(target: "additional", "under new ctx: {}", ctx);
         swap(&mut self.gamma2, &mut ctx);
         let res = f(self);
         swap(&mut self.gamma2, &mut ctx);
@@ -144,8 +147,10 @@ impl TypeCheckState {
     }
 
     pub fn fresh_free_var(&mut self) -> Term {
-        let t = Term::Var(Var::Free(self.next_uid), vec![]);
-        self.next_uid += 1;
+        let t = Term::Var(
+            Var::Free(self.next_uid.fetch_add(1, Ordering::Relaxed)),
+            vec![],
+        );
         t
     }
 
@@ -195,5 +200,12 @@ impl TypeCheckState {
 
     pub fn lang_item(&self, item: LangItem) -> Option<GI> {
         self.lang_items.get(&item).copied()
+    }
+}
+
+impl<T> Bind<T> {
+    pub fn unbind(mut self, tcs: &mut TypeCheckState) -> Bind<T> {
+        self.name = tcs.next_uid.fetch_add(1, Ordering::Relaxed);
+        self
     }
 }

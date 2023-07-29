@@ -1,5 +1,6 @@
 use crate::check::block::{Blocked, NotBlocked};
 use crate::check::state::TypeCheckState;
+use crate::check::unification::{Equation, Param, Problem};
 use crate::check::{Error, Result};
 use crate::syntax::core::{
     build_subst, Boxed, Case, Closure, Decl, Elim, Func, Simpl, SubstWith, Substitution, Term,
@@ -34,7 +35,28 @@ impl TypeCheckState {
         }
     }
 
-    /// Normalize a term.
+    pub fn simplify_problem(&mut self, prob: Problem) -> Result<Problem> {
+        match prob {
+            Problem::Unify(Equation { tm1, ty1, tm2, ty2 }) => {
+                let tm1 = self.simplify(tm1)?;
+                let ty1 = self.simplify(ty1)?;
+                let tm2 = self.simplify(tm2)?;
+                let ty2 = self.simplify(ty2)?;
+                Ok(Problem::Unify(Equation { tm1, ty1, tm2, ty2 }))
+            }
+            Problem::All(mut param, prob) => {
+                let ty = match param.ty {
+                    Param::P(term) => Param::P(self.simplify(term)?),
+                    Param::Twins(t1, t2) => Param::Twins(self.simplify(t1)?, self.simplify(t2)?),
+                };
+                param.ty = ty;
+                let prob = self.simplify_problem(*prob)?;
+                Ok(Problem::All(param, prob.boxed()))
+            }
+        }
+    }
+
+    /// Normalize a term to WHNF.
     pub fn simplify(&mut self, term: Term) -> Result<Term> {
         let term_out = self.simplify_impl(term.clone())?;
         debug!(
@@ -47,6 +69,7 @@ impl TypeCheckState {
     }
 
     pub fn simplify_impl(&mut self, term: Term) -> Result<Term> {
+        debug!("simplifying term: {}", &term);
         if matches!(term, Term::Match(..)) {
             trace!("simplifying match: {}", &term);
         }
@@ -130,17 +153,36 @@ impl TypeCheckState {
                 },
                 Func::Lam(lam) => {
                     let mut term = lam.1;
-                    for elim in elims {
+                    debug!("[Func::Lam] term  = {}", term);
+                    let mut elims = elims;
+                    if let Some(elim) = elims.get(0).cloned() {
+                        elims.remove(0);
                         term = Closure::Plain(
                             term
                                 .instantiate_safe_with(elim.into_app(), self)
                                 .unwrap()
-                                .tele_view()
-                                .1.boxed(),
+                                .boxed(),
                         );
+                        debug!("[Func::Lam] term' = {}", term);
                     }
+                    // for elim in elims {
+                    //     term = Closure::Plain(
+                    //         term
+                    //             .instantiate_safe_with(elim.into_app(), self)
+                    //             .unwrap().boxed()
+                    //             // .tele_view_n(0)
+                    //             // .1.boxed(),
+                    //     );
+                    //     debug!("[Func::Lam] term' = {}", term);
+                    // }
                     let Closure::Plain(term) = term;
-                    self.simplify(*term)
+                    let term2 = *term;
+                    let term = if elims.is_empty() {
+                        term2
+                    } else {
+                        term2.apply_elim(elims)
+                    };
+                    self.simplify(term)
                 }
             },
             Term::Match(x, mut cs) => {
@@ -232,5 +274,83 @@ impl TypeCheckState {
         let term = body.subst_with(subst, self).apply_elim(rest);
         let s = Simpl::Yes;
         Ok((s, Blocked::No(NotBlocked::NotBlocked, term)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::check::unification::Occurrence;
+    use crate::syntax::core::DeBruijn;
+    use crate::syntax::desugar::desugar_prog;
+    use crate::syntax::parser::Parser;
+    use crate::syntax::tele_len::TeleLen;
+    use crate::syntax::Bind;
+
+    #[test]
+    fn test_simplification() -> eyre::Result<()> {
+        let _ = env_logger::try_init();
+        let mut env = TypeCheckState::default();
+        env.indentation_size(2);
+        let term = Term::lams(
+            [Bind::unnamed(Term::meta(0)), Bind::unnamed(Term::meta(0))],
+            Term::meta(1).apply(vec![
+                Term::lam(
+                    Bind::unnamed(Term::meta(0).boxed()),
+                    Term::meta(1).apply(vec![Term::from_dbi(1), Term::from_dbi(2)]),
+                ),
+                Term::from_dbi(0),
+                Term::from_dbi(1),
+            ]),
+        );
+        let ctx_len = term.lam_len() - 1;
+        let term = term.apply(vec![Term::from_dbi(ctx_len)]);
+        println!("term = {}", term);
+        let simp = env.simplify(term)?;
+        println!("term' = {}", simp);
+        let ctx_len = simp.lam_len() - 1;
+        let simp = env.simplify(simp.apply(vec![Term::from_dbi(ctx_len)]))?;
+        println!("term'' = {}", simp);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplification2() -> eyre::Result<()> {
+        // (((\?0. (\?0. ?(1 @1 @1))))( @1)
+        let _ = env_logger::try_init();
+        let mut env = TypeCheckState::default();
+        env.indentation_size(2);
+        let term = Term::lams(
+            [Bind::unnamed(Term::meta(0)), Bind::unnamed(Term::meta(0))],
+            Term::meta(1).apply(vec![Term::from_dbi(1), Term::from_dbi(1)]),
+        )
+        .apply(vec![Term::from_dbi(1)]);
+        // let ctx_len = term.lam_len() - 1;
+        let fvs = term.fvs();
+        println!("term = {}", term);
+        let simp = env.simplify(term)?;
+        let fvs2 = simp.fvs();
+        println!("term' = {}", simp);
+        assert_eq!(fvs, fvs2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplification3() -> eyre::Result<()> {
+        // ((\?0. (\?0. ?(2 @0))))( @1 @1)
+        let _ = env_logger::try_init();
+        let mut env = TypeCheckState::default();
+        env.indentation_size(2);
+        let term = Term::lams(
+            [Bind::unnamed(Term::meta(0)), Bind::unnamed(Term::meta(0))],
+            Term::meta(2).apply(vec![Term::from_dbi(0)]),
+        )
+        .apply(vec![Term::from_dbi(1), Term::from_dbi(1)]);
+        let fvs = term.fvs();
+        println!("term = {}", term);
+        let simp = env.simplify(term)?;
+        println!("term' = {}", simp);
+        // assert_eq!(fvs, fvs2);
+        Ok(())
     }
 }

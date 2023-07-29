@@ -2,7 +2,7 @@ use crate::check::TypeCheckState;
 use crate::syntax::core::dbi::DeBruijn;
 use crate::syntax::core::redex::Subst;
 use crate::syntax::core::{SubstWith, Term};
-use crate::syntax::{dbi_nat, dbi_pred, DBI};
+use crate::syntax::{dbi_nat, dbi_pred, DBI, UID};
 use itertools::Either;
 use std::collections::HashMap;
 use std::fmt::Display;

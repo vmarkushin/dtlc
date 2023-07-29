@@ -7,6 +7,7 @@ use crate::syntax::pattern::Pat;
 use crate::syntax::{Bind, Ident, DBI, GI};
 use itertools::Itertools;
 use std::rc::Rc;
+use std::sync::atomic::Ordering;
 
 impl Term {
     /// Use `Term` instead of `Self` to emphasize that it's not `Elim`.
@@ -118,7 +119,7 @@ impl Term {
                     variables are replaced with the corresponding pattern variables and variables
                     are shifted).
                      */
-                    let fresh_uid = tcs.next_uid;
+                    let fresh_uid = tcs.next_uid.load(Ordering::Relaxed);
                     let popped_body = case.body.clone().pop_out(tcs, x, Some(x_max));
                     trace!("Popped body: {}", &popped_body);
                     let popped_body_new = popped_body.subst_with(subst.clone(), tcs);
@@ -159,7 +160,7 @@ impl Term {
                     debug_assert_eq!(x_min, x);
                     let x_max = *pat_vars.first().unwrap();
 
-                    let fresh_uid = tcs.next_uid;
+                    let fresh_uid = tcs.next_uid.load(Ordering::Relaxed);
                     let popped_body = case.body.clone().pop_out(tcs, x, Some(x_max));
                     trace!("Popped body: {}", &popped_body);
                     let popped_body_new = popped_body.subst_with(subst.clone(), tcs);
@@ -197,7 +198,7 @@ impl Term {
                     let x_min = *pat_vars.last().unwrap();
                     let x_max = *pat_vars.first().unwrap();
 
-                    let fresh_uid = tcs.next_uid;
+                    let fresh_uid = tcs.next_uid.load(Ordering::Relaxed);
                     let popped_body = case.body.clone().pop_out_non_var(tcs, x_min, x_max);
                     trace!("Popped body: {}", &popped_body);
                     let popped_body_new = popped_body.subst_with(subst.clone(), tcs);
@@ -575,7 +576,7 @@ mod tests {
         let x_max = 3;
 
         let mut tcs = TypeCheckState::default();
-        let fresh_uid = tcs.next_uid;
+        let fresh_uid = tcs.next_uid.load(Ordering::Relaxed);
         assert_eq!(
             term.pop_out(&mut tcs, x, Some(x_max)),
             Term::fun_app(

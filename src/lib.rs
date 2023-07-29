@@ -19,6 +19,7 @@
     let_chains,
     exclusive_range_pattern
 )]
+#![feature(type_name_of_val)]
 
 #[macro_use]
 extern crate log;

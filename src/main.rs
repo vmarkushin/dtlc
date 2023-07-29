@@ -1,6 +1,56 @@
-#![feature(box_syntax, box_patterns, type_alias_impl_trait)]
+#![feature(box_patterns, type_alias_impl_trait, try_trait_v2)]
 
 use dtlc::repl;
+use std::convert::Infallible;
+use std::ops::FromResidual;
+
+struct OptionResult<T, E>(Option<Result<T, E>>);
+
+impl<T, E> FromResidual<Option<Infallible>> for OptionResult<T, E> {
+    fn from_residual(residual: Option<Infallible>) -> Self {
+        Self(residual.map(|x| match x {}))
+    }
+}
+
+impl<T, E> FromResidual<Result<Infallible, E>> for OptionResult<T, E> {
+    fn from_residual(residual: Result<Infallible, E>) -> Self {
+        Self(Some(residual.map(|x| match x {})))
+    }
+}
+
+struct ResultOption<T, E>(Result<Option<T>, E>);
+
+impl<T, E> FromResidual<Option<Infallible>> for ResultOption<T, E> {
+    fn from_residual(residual: Option<Infallible>) -> Self {
+        Self(Ok(residual.map(|x| match x {})))
+    }
+}
+
+impl<T, E> FromResidual<Result<Infallible, E>> for ResultOption<T, E> {
+    fn from_residual(residual: Result<Infallible, E>) -> Self {
+        Self(residual.map(|x| match x {}))
+    }
+}
+
+fn foo() -> Option<String> {
+    Some(String::default())
+}
+
+fn bar() -> Result<(), String> {
+    // Ok(())
+    Err("nope".to_string())
+}
+
+fn any_try() -> ResultOption<(), String> {
+    let _ = foo()?;
+    let _ = bar()?;
+    ResultOption(Ok(Some(())))
+}
+
+#[test]
+fn tst() {
+    dbg!(any_try().0);
+}
 
 fn main() {
     env_logger::init();

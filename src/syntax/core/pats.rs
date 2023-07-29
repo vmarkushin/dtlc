@@ -219,13 +219,14 @@ mod tests {
     use crate::check::TypeCheckState;
     use crate::syntax::core::{DeBruijn, Pat, Subst, Term, Var};
     use crate::syntax::ConHead;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn test_pop_term() {
         let con_head = ConHead::new("cons", 0);
         let term = Term::cons(con_head.clone(), [2, 0].map(Term::from_dbi).to_vec());
         let mut tcs = TypeCheckState::default();
-        let fresh_uid = tcs.next_uid;
+        let fresh_uid = tcs.next_uid.load(Ordering::Relaxed);
         let term_new = term.clone().pop_out_non_var(&mut tcs, 0, 0);
         assert_eq!(
             term_new,

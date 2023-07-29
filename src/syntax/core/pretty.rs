@@ -91,10 +91,11 @@ impl Display for Lambda {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Plicitness::*;
         match self {
-            Lambda(Bind { licit, ty, .. }, clos) => match licit {
-                Explicit => write!(f, "(\\{}. {})", ty, clos),
-                Implicit => write!(f, "({{\\{}}}. {})", ty, clos),
-            },
+            Lambda(bind, clos) => write!(f, "(\\{bind}. {})", clos),
+            // Lambda(Bind { licit, ty, .. }, clos) => match licit {
+            //     Explicit => write!(f, "(\\{}. {})", ty, clos),
+            //     Implicit => write!(f, "({{\\{}}}. {})", ty, clos),
+            // },
         }
     }
 }

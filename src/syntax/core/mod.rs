@@ -161,8 +161,10 @@ impl<T> IntoIterator for Tele<T> {
 pub struct Ctx<B = Bind>(pub Vec<B>);
 
 impl<B: Occurrence> Occurrence for Ctx<B> {
-    fn free(&self, flavour: Flavour) -> HashSet<Var> {
-        self.0.iter().flat_map(|b| b.free(flavour)).collect()
+    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+        self.0
+            .iter()
+            .for_each(|b| b.go(depth, vars, kind, in_flexible));
     }
 }
 

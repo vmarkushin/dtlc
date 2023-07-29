@@ -9,6 +9,8 @@ use itertools::Either;
 use itertools::Either::*;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::iter;
+use std::sync::atomic::Ordering;
 
 pub type Pat<Ix = DBI, T = Term> = pattern::Pat<Ix, T>;
 
@@ -33,6 +35,20 @@ pub struct ValData {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Lambda(pub Bind<Box<Term>>, pub Closure);
+
+impl Lambda {
+    pub fn unbind(self, tcs: &mut TypeCheckState) -> (Bind<Box<Term>>, Term) {
+        let mut bind = self.0;
+        bind.name = tcs.next_uid.fetch_add(1, Ordering::Relaxed);
+        let term = self.1.unbind(bind.name, tcs);
+        (bind, term)
+    }
+
+    pub fn bind(binder: Bind<Box<Term>>, mut body: Term) -> Self {
+        body.bound_free_vars(&iter::once((binder.name, 0)).collect(), 0);
+        Self(binder, Closure::Plain(body.boxed()))
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 #[cfg_attr(test, derive(PartialOrd, Ord))]
@@ -289,6 +305,7 @@ impl Term {
                     n => Term::Lam(Lambda(x, Closure::Plain(n.boxed()))),
                 }
             }
+            Term::Meta(mi, es) => Term::Var(Var::Meta(mi), es),
             t => t,
         }
     }
@@ -581,6 +598,13 @@ pub enum Closure {
 }
 
 impl Closure {
+    pub(crate) fn unbind(self, uid: UID, tcs: &mut TypeCheckState) -> Term {
+        let inner = self.into_inner();
+        inner.subst_with(Substitution::one(Term::free_var(uid)), tcs)
+    }
+}
+
+impl Closure {
     pub fn instantiate(self, arg: Term) -> Term {
         self.instantiate_safe(arg)
             .unwrap_or_else(|e| panic!("Cannot split on `{}`.", e))
@@ -770,5 +794,90 @@ impl Elim {
             Elim::App(term) => Ok(*term),
             Elim::Proj(field) => Err(field),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::check::TypeCheckState;
+
+    #[test]
+    fn test_binding() -> eyre::Result<()> {
+        let _ = env_logger::try_init();
+        let mut env = TypeCheckState::default();
+        env.indentation_size(2);
+        let term = Term::lams(
+            [Bind::unnamed(Term::meta(0)), Bind::unnamed(Term::meta(1))],
+            Term::meta(2).apply(vec![Term::from_dbi(0), Term::from_dbi(1)]),
+        );
+        println!("{}", term);
+        let Term::Lam(lam) = term else { unreachable!() };
+        let (x, Term::Lam(lam2)) = lam.unbind(&mut env) else { unreachable!() };
+        let (y, body) = lam2.unbind(&mut env);
+        println!(
+            "x = {}, y = {}, body = {body}",
+            x.clone().unboxed(),
+            y.clone().unboxed()
+        );
+        let bound_term = Term::Lam(Lambda::bind(y, Term::Lam(Lambda::bind(x, body))));
+        println!("bound term = {}", bound_term);
+        assert_eq!(
+            bound_term,
+            Term::lams(
+                [
+                    Bind::explicit(0, Term::meta(1), Ident::new("_")),
+                    Bind::explicit(1, Term::meta(0), Ident::new("_")),
+                ],
+                Term::meta(2).apply(vec![Term::from_dbi(1), Term::from_dbi(0)]),
+            )
+        );
+        Ok(())
+    }
+
+    /*
+    Lambda reduction:
+    (\x -> x x)(\x \y -> x x y y) =>
+      1    1 1   2  3    2 2 3 3
+
+    (\x \y -> x x y y) (\x \y -> x x y y) =>
+      2  3    2 2 3 3    2  3    2 2 3 3
+
+    (\y -> (\x \y -> x x y y) (\x \y -> x x y y) y y)
+      3      2  3    2 2 3 3    2  3    2 2 3 3  3 3
+
+    (\y -> (\x \y -> x x y y) ((\x \y -> x x y y) y y)) 1 ==>
+    (\y -> (\x \y -> x x y y) (\y -> y' y' y y)) 1 ==>
+
+    (\y -> (\x \y -> x x y y) (\x \y -> x x y y) y y) 1 ==>
+    (\x \y -> x x y y) (\x \y -> x x y y) 1 1)
+
+     */
+    #[test]
+    fn test_bind_free_vars_after_reduction() -> eyre::Result<()> {
+        let _ = env_logger::try_init();
+        let mut env = TypeCheckState::default();
+        env.indentation_size(2);
+        let lam1 = Term::lams(
+            [Bind::explicit(0, Term::meta(0), Ident::new("a"))],
+            Term::free_var(0).apply(vec![Term::free_var(0)]),
+        );
+        let lam2 = Term::lams(
+            [
+                Bind::explicit(1, Term::meta(0), Ident::new("b")),
+                Bind::explicit(0, Term::meta(0), Ident::new("a")),
+            ],
+            Term::free_var(0).apply(vec![
+                Term::free_var(0),
+                Term::free_var(1),
+                Term::free_var(1),
+            ]),
+        );
+        let term = lam1.apply(vec![lam2]);
+        println!("{}", term);
+        let new_term = env.simplify(term)?;
+        println!("{}", new_term);
+
+        Ok(())
     }
 }
