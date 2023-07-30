@@ -1,7 +1,7 @@
 use crate::check::{Error, Result, TypeCheckState};
 use crate::syntax::core::{
-    Bind, Binder, Boxed, Closure, Ctx, DeBruijn, Elim, Func, Lambda, PrimSubst, Subst, SubstWith,
-    Substitution, Tele, Term, Type, ValData, Var,
+    Bind, Binder, BoundFreeVars, Boxed, Closure, Ctx, DeBruijn, Elim, Func, Lambda, Name,
+    PrimSubst, Subst, SubstWith, Substitution, Tele, Term, Twin, Type, ValData, Var,
 };
 use crate::syntax::tele_len::TeleLen;
 use crate::syntax::{ConHead, Ident, Plicitness, Universe, DBI, MI, UID};
@@ -9,9 +9,9 @@ use derive_more::{Deref, DerefMut};
 use eyre::{anyhow, bail};
 use itertools::Either::{Left, Right};
 use itertools::{Either, Itertools};
-use std::cell::LazyCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
+use std::iter;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -24,7 +24,7 @@ pub enum Decl {
 }
 
 impl Occurrence for Decl {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         match self {
             Decl::Hole => (),
             Decl::Defn(t) => t.go(depth, vars, kind, in_flexible),
@@ -65,7 +65,7 @@ impl Display for Param {
 }
 
 impl Occurrence for Param {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         match self {
             Param::P(ty) => ty.go(depth, vars, kind, in_flexible),
             Param::Twins(ty1, ty2) => (ty1, ty2).go(depth, vars, kind, in_flexible),
@@ -87,51 +87,57 @@ type Params = Ctx<Bind<Param>>;
 
 impl Binder for Bind<Param> {
     type Param = Param;
-    type Var = Var;
+    type Var = Name;
+    // type Var = Var;
 
-    fn lookup(&self, var: &Self::Var) -> Option<Bind<&Type>> {
-        match (self, var) {
-            (
-                Bind {
-                    licit,
-                    name,
-                    ty: Param::Twins(ty_l, ty_r),
-                    ident,
-                },
-                Var::Twin(_, f),
-            ) => {
-                if *f {
-                    Some(Bind {
-                        licit: *licit,
-                        name: name.clone(),
-                        ty: ty_r,
-                        ident: ident.clone(),
-                    })
-                } else {
-                    Some(Bind {
-                        licit: *licit,
-                        name: name.clone(),
-                        ty: ty_l,
-                        ident: ident.clone(),
-                    })
-                }
-            }
-            (
-                Bind {
-                    licit,
-                    name,
-                    ty: Param::P(ty),
-                    ident,
-                },
-                Var::Bound(_),
-            ) => Some(Bind {
-                licit: *licit,
-                name: name.clone(),
-                ty,
-                ident: ident.clone(),
-            }),
-            _ => None,
-        }
+    fn lookup(&self, var: &Self::Var) -> Option<Bind<&Self::Param>> {
+        // match (self, var) {
+        //     (
+        //         Bind {
+        //             licit,
+        //             name,
+        //             ty: Param::Twins(ty_l, ty_r),
+        //             ident,
+        //         },
+        //         Var::Twin(_, f),
+        //     ) => {
+        //         if *f {
+        //             Some(Bind {
+        //                 licit: *licit,
+        //                 name: name.clone(),
+        //                 ty: ty_r,
+        //                 ident: ident.clone(),
+        //             })
+        //         } else {
+        //             Some(Bind {
+        //                 licit: *licit,
+        //                 name: name.clone(),
+        //                 ty: ty_l,
+        //                 ident: ident.clone(),
+        //             })
+        //         }
+        //     }
+        //     (
+        //         Bind {
+        //             licit,
+        //             name,
+        //             ty: Param::P(ty),
+        //             ident,
+        //         },
+        //         Var::Single(_),
+        //     ) => Some(Bind {
+        //         licit: *licit,
+        //         name: name.clone(),
+        //         ty,
+        //         ident: ident.clone(),
+        //     }),
+        //     _ => None,
+        // }
+        todo!()
+    }
+
+    fn to_name(&self) -> Name {
+        self.to_name()
     }
 }
 
@@ -194,7 +200,7 @@ impl Equation {
 }
 
 impl Occurrence for Equation {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         let Self { ty1, tm1, ty2, tm2 } = self;
         (ty1, tm1, ty2, tm2).go(depth, vars, kind, in_flexible)
     }
@@ -246,14 +252,14 @@ impl SubstWith<'_> for Problem {
             Problem::All(bind, p) => {
                 let bind = bind.subst_with(subst.clone(), tcs);
                 let p = p.subst_with(subst.lift_by(1), tcs);
-                Problem::All(bind, Box::new(p))
+                Problem::all(bind, p)
             }
         }
     }
 }
 
 impl Occurrence for Problem {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         match self {
             Problem::Unify(eq) => eq.go(depth, vars, kind, in_flexible),
             Problem::All(param, prob) => {
@@ -267,7 +273,8 @@ impl Occurrence for Problem {
 impl Problem {
     pub fn all(param: Bind<Param>, prob: Problem) -> Self {
         info!(target: "additional", "Problem::All 2");
-        Self::All(param, Box::new(prob))
+        let problem = Problem::bind(&param, prob);
+        Self::All(param, Box::new(problem))
     }
 
     pub fn alls(params: Vec<Bind<Param>>, prob: Problem) -> Self {
@@ -279,6 +286,17 @@ impl Problem {
 
     pub fn unbind(self, uid: UID, tcs: &mut TypeCheckState) -> Problem {
         self.subst_with(Substitution::one(Term::free_var(uid)), tcs)
+    }
+
+    pub fn bind(binder: &Bind<Param>, mut prob: Self) -> Self {
+        prob.bound_free_vars(&iter::once((binder.name, 0)).collect(), 0);
+        prob
+    }
+}
+
+impl BoundFreeVars for Problem {
+    fn bound_free_vars(&mut self, vars: &HashMap<UID, DBI>, depth: usize) {
+        todo!()
     }
 }
 
@@ -325,7 +343,7 @@ pub enum Entry {
 }
 
 impl Occurrence for Entry {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         match self {
             Entry::E(_, ty, decl) => (ty, decl).go(depth, vars, kind, in_flexible),
             Entry::Q(_, prob) => prob.go(depth, vars, kind, in_flexible),
@@ -553,7 +571,7 @@ impl<'a> Subst for TermOrVar<'a> {
                         unreachable!()
                     }
                 };
-                TermOrVar::Var(Cow::Owned(subst.lookup(*dbi).to_var()))
+                TermOrVar::Var(Cow::Owned(subst.lookup(*dbi).to_name()))
             }
         }
     }
@@ -591,7 +609,7 @@ fn traverse_term_with_depth<'a, F: FnMut(DBI, &'a Term) -> bool>(term: &'a Term,
                             add(Var::Bound(*v - depth));
                         }
                     }
-                    Var::Free(_) => panic!("Unexpected free variable {f}"),
+                    Var::Single(Name::Free(_)) => panic!("Unexpected free variable {f}"),
                 }
                 for arg in es {
                     if let Elim::App(arg) = arg {
@@ -680,7 +698,7 @@ fn occurrence<'a>(term: &'a Term, of: TermOrVar<'_>, kind: OccurrenceKind) -> Ve
                             occs.push(Occurrence::var(depth, var));
                         }
                     }
-                    Var::Free(f) => panic!("Unexpected free variable {f}"),
+                    Var::Single(Name::Free(f)) => panic!("Unexpected free variable {f}"),
                 }
                 if kind == RigidStrong && !in_flexible && !is_free {
                     for arg in es {
@@ -819,19 +837,19 @@ fn occurrence<'a>(term: &'a Term, of: TermOrVar<'_>, kind: OccurrenceKind) -> Ve
  */
 
 pub trait Occurrence {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool);
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool);
 
-    fn free(&self, flavour: Flavour) -> HashSet<Var> {
+    fn free(&self, flavour: Flavour) -> HashSet<Name> {
         let mut vars = HashSet::new();
         self.go(0, &mut vars, flavour, false);
         vars
     }
 
-    fn fvs(&self) -> HashSet<Var> {
+    fn fvs(&self) -> HashSet<Name> {
         self.free(Flavour::Vars)
     }
 
-    fn fvrigs(&self) -> HashSet<Var> {
+    fn fvrigs(&self) -> HashSet<Name> {
         self.free(Flavour::RigVars)
     }
 
@@ -839,7 +857,7 @@ pub trait Occurrence {
         self.free(Flavour::Metas)
             .into_iter()
             .map(|v| match v {
-                Var::Meta(x) => x,
+                Name::Free(x) => x,
                 _ => unreachable!(),
             })
             .collect()
@@ -851,7 +869,7 @@ where
     T1: Occurrence,
     T2: Occurrence,
 {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         let (t1, t2) = self;
         t1.go(depth, vars, kind, in_flexible);
         t2.go(depth, vars, kind, in_flexible);
@@ -864,7 +882,7 @@ where
     T2: Occurrence,
     T3: Occurrence,
 {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         let (t1, t2, t3) = self;
         t1.go(depth, vars, kind, in_flexible);
         t2.go(depth, vars, kind, in_flexible);
@@ -879,7 +897,7 @@ where
     T3: Occurrence,
     T4: Occurrence,
 {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         let (t1, t2, t3, t4) = self;
         t1.go(depth, vars, kind, in_flexible);
         t2.go(depth, vars, kind, in_flexible);
@@ -912,7 +930,7 @@ fn free_vars(term: &Term, kind: OccurrenceKind) -> Vec<Var> {
                             add(Var::Bound(*v - depth));
                         }
                     }
-                    Var::Free(f) => panic!("Unexpected free variable {f}"),
+                    Var::Single(Name::Free(f)) => panic!("Unexpected free variable {f}"),
                 }
                 for arg in es {
                     if let Elim::App(arg) = arg {
@@ -980,14 +998,14 @@ fn free_vars(term: &Term, kind: OccurrenceKind) -> Vec<Var> {
  */
 
 impl Occurrence for Term {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, f: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, f: Flavour, in_flexible: bool) {
         use Flavour::*;
         let should_add = match f {
             Vars => true,
             RigVars => !in_flexible,
             Metas => true,
         };
-        let mut add = |v: Var| {
+        let mut add = |v: Name| {
             if should_add {
                 vars.insert(v);
             }
@@ -1002,18 +1020,28 @@ impl Occurrence for Term {
                 a.go(depth, vars, f, in_flexible);
                 b.go(depth + 1, vars, f, in_flexible);
             }
-            Term::Var(var, es) if matches!(var, Var::Twin(..) | Var::Bound(..)) => {
+            Term::Var(var, es) if matches!(var, Var::Twin(..) | Var::Single(..)) => {
                 match var {
-                    Var::Bound(v) => {
-                        if *v >= depth {
-                            add(Var::Bound(*v - depth));
+                    Var::Single(v) => match v {
+                        Name::Free(i) => {
+                            add(v.clone());
                         }
-                    }
-                    Var::Twin(v, u) => {
-                        if *v >= depth {
-                            add(Var::Twin(*v - depth, *u));
+                        Name::Bound(v) => {
+                            if *v >= depth {
+                                add(Name::Bound(*v - depth));
+                            }
                         }
-                    }
+                    },
+                    Var::Twin(v, u) => match v {
+                        Name::Free(_) => {
+                            add(v.clone());
+                        }
+                        Name::Bound(v) => {
+                            if *v >= depth {
+                                add(Name::Bound(*v - depth));
+                            }
+                        }
+                    },
                     _ => unreachable!(),
                 }
                 for arg in es {
@@ -1036,7 +1064,8 @@ impl Occurrence for Term {
                 es.go(depth, vars, f, true);
             }
             Term::Meta(x, es) if f == Metas => {
-                add(Var::Meta(*x));
+                add(Name::Free(*x));
+                // add(Var::Meta(*x));
                 es.go(depth, vars, f, true);
             }
             Term::Data(val_data) => {
@@ -1070,7 +1099,7 @@ impl Occurrence for Term {
 }
 
 impl Occurrence for Func {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         match self {
             Func::Index(_) => Default::default(),
             Func::Lam(lam) => {
@@ -1081,7 +1110,7 @@ impl Occurrence for Func {
 }
 
 impl Occurrence for ValData {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         self.args.go(depth, vars, kind, in_flexible);
     }
 }
@@ -1095,17 +1124,48 @@ impl Occurrence for ValData {
 >     free Metas      (V _ _)    = Set.empty
  */
 impl Occurrence for Var {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, flavour: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, flavour: Flavour, in_flexible: bool) {
         use Flavour::*;
+        let should_add = match flavour {
+            Vars => true,
+            RigVars => !in_flexible,
+            Metas => true,
+        };
+        let mut add = |v: Name| {
+            if should_add {
+                vars.insert(v);
+            }
+        };
         match (flavour, self) {
             (Vars, Var::Meta(_)) => (),
             (RigVars, Var::Meta(_)) => (),
             (Metas, Var::Meta(alpha)) => {
-                vars.insert(Var::Meta(*alpha));
+                vars.insert(Name::Free(*alpha));
+                // vars.insert(Var::Meta(*alpha));
             }
-            (Vars | RigVars, x) if matches!(x, Var::Bound(..) | Var::Twin(..)) => {
-                vars.insert(x.clone());
-            }
+            (Vars | RigVars, x) if matches!(x, Var::Single(..) | Var::Twin(..)) => match x {
+                Var::Single(v) => match v {
+                    Name::Free(i) => {
+                        add(v.clone());
+                    }
+                    Name::Bound(v) => {
+                        if *v >= depth {
+                            add(Name::Bound(*v - depth));
+                        }
+                    }
+                },
+                Var::Twin(v, u) => match v {
+                    Name::Free(_) => {
+                        add(v.clone());
+                    }
+                    Name::Bound(v) => {
+                        if *v >= depth {
+                            add(Name::Bound(*v - depth));
+                        }
+                    }
+                },
+                _ => unreachable!(),
+            },
             (Metas, _) => (),
             _ => (),
         }
@@ -1113,20 +1173,20 @@ impl Occurrence for Var {
 }
 
 impl Occurrence for Lambda {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         let Lambda(bind, b) = self;
         (bind, b).go(depth, vars, kind, in_flexible);
     }
 }
 
 impl Occurrence for Closure {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         self.as_inner().go(depth + 1, vars, kind, in_flexible);
     }
 }
 
 impl Occurrence for Elim {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         match self {
             Elim::App(t) => {
                 t.go(depth, vars, kind, in_flexible);
@@ -1137,33 +1197,33 @@ impl Occurrence for Elim {
 }
 
 impl<T: Occurrence> Occurrence for Box<T> {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         self.as_ref().go(depth, vars, kind, in_flexible);
     }
 }
 
 impl<T: Occurrence> Occurrence for Vec<T> {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         self.iter()
             .for_each(|t| t.go(depth, vars, kind, in_flexible));
     }
 }
 
 impl<T: Occurrence> Occurrence for HashSet<T> {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         self.iter()
             .for_each(|t| t.go(depth, vars, kind, in_flexible));
     }
 }
 
 impl<T: Occurrence> Occurrence for Bind<T> {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         self.ty.go(depth, vars, kind, in_flexible);
     }
 }
 
 impl<T: Occurrence> Occurrence for &T {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         (*self).go(depth, vars, kind, in_flexible)
     }
 }
@@ -1188,11 +1248,13 @@ fn occur_check(tcs: &mut TypeCheckState, is_strong_rigid: bool, x: MI, t: &Term)
             // let t = b.1.as_inner();
             occur_check(tcs, is_strong_rigid, x, &t)
         }
+        Term::Var(Var::Meta(y), es) | Term::Meta(y, es) => {
+            x == *y && (is_strong_rigid || !to_names(es.clone()).is_some())
+        }
         Term::Var(_, es) => es.iter().any(|e| match e {
             Elim::App(t) => occur_check(tcs, false, x, t),
             _ => false,
         }),
-        Term::Meta(y, es) => x == *y && (is_strong_rigid || !to_vars(es.clone()).is_some()),
         // Term::Cons(c) => ..., // TODO: cons, data, ...
         Term::Pi(t1, t2) => {
             let t1 = t1.clone().unbind(tcs);
@@ -1236,17 +1298,21 @@ impl TypeCheckState {
             (Term::Pi(a1, b1), Term::Pi(a2, b2)) => {
                 let a1 = *a1.clone().ty;
                 let a2 = *a2.clone().ty;
-                let ctx_len_1 = tm1.lam_len() - 1;
-                let ctx_len_2 = tm2.lam_len() - 1;
+                // let ctx_len_1 = tm1.lam_len() - 1;
+                // let ctx_len_2 = tm2.lam_len() - 1;
+                let x = self.fresh_name();
+                let uid = x.uid();
                 info!(target: "additional", "Problem::All 1");
-                let p = Problem::All(
-                    Bind::unnamed(Param::Twins(a1, a2)),
-                    Box::new(Problem::Unify(Equation::new(
-                        tm1.apply(vec![Term::from_dbi(ctx_len_1)]),
-                        b1.into_inner(),
-                        tm2.apply(vec![Term::from_dbi(ctx_len_2)]),
-                        b2.into_inner(),
-                    ))),
+                let twin_l = Term::Var(Var::twin_free(uid, Twin::Left), vec![]);
+                let twin_r = Term::Var(Var::twin_free(uid, Twin::Right), vec![]);
+                let p = Problem::all(
+                    Bind::explicit(uid, Param::Twins(a1, a2), Ident::new("x")),
+                    Problem::Unify(Equation::new(
+                        tm1.apply(vec![twin_l.clone()]),
+                        b1.instantiate_with(twin_l, self),
+                        tm2.apply(vec![twin_r.clone()]),
+                        b2.instantiate_with(twin_r, self),
+                    )),
                 );
                 self.active(id, p)
             }
@@ -1305,8 +1371,6 @@ impl TypeCheckState {
     >
     > rigidRigid q  | orthogonal q  = throwError "Rigid-rigid mismatch"
     >               | otherwise     = block $ Unify q
-
-
     */
     fn rigid_rigid(&mut self, equation: Equation) -> Result<()> {
         trace!(target: "unify", "rigid_rigid: {equation:?}");
@@ -1334,20 +1398,26 @@ impl TypeCheckState {
                 info!(target: "additional", "Problem::All 3");
                 self.active(
                     id,
-                    Problem::All(
+                    Problem::all(
                         Bind::unnamed(Param::Twins(*a1.clone().ty, *a2.clone().ty)),
-                        Box::new(Problem::Unify(Equation::new(
+                        Problem::Unify(Equation::new(
                             tm1.apply(vec![Term::from_dbi(ctx_len_1)]),
                             b1.into_inner(),
                             tm2.apply(vec![Term::from_dbi(ctx_len_2)]),
                             b2.into_inner(),
-                        ))),
+                        )),
                     ),
                 )?;
                 Ok(())
             }
-            (Term::Var(Var::Bound(x), xs), Term::Var(Var::Bound(y), ys)) if x == y => {
-                self.match_spine(Var::Bound(x), &xs, Var::Bound(y), &ys)?;
+            (Term::Var(Var::Single(x), xs), Term::Var(Var::Single(y), ys)) if x == y => {
+                self.match_spine(x, None, &xs, y, None, &ys)?;
+                Ok(())
+            }
+            (Term::Var(Var::Twin(x, twin_x), xs), Term::Var(Var::Twin(y, twin_y), ys))
+                if x == y =>
+            {
+                self.match_spine(x, Some(twin_x), &xs, y, Some(twin_y), &ys)?;
                 Ok(())
             }
             _ => {
@@ -1374,20 +1444,28 @@ impl TypeCheckState {
     > matchSpine _ _ _ _ _ _ = throwError "spine mismatch"
 
     */
-    fn match_spine(&mut self, x: Var, es1: &[Elim], y: Var, es2: &[Elim]) -> Result<(Type, Type)> {
+    fn match_spine(
+        &mut self,
+        x: Name,
+        w: Option<Twin>,
+        es1: &[Elim],
+        y: Name,
+        z: Option<Twin>,
+        es2: &[Elim],
+    ) -> Result<(Type, Type)> {
         let id = 0; // TODO
         match (es1, es2) {
             ([], []) => {
                 if DBI::from(x) == DBI::from(y) {
-                    let ty1 = self.lookup2(x).ty.clone();
-                    let ty2 = self.lookup2(y).ty.clone();
+                    let ty1 = self.lookup_var(x, w).ty.clone();
+                    let ty2 = self.lookup_var(y, z).ty.clone();
                     return Ok((ty1, ty2));
                 } else {
                     return Err(Error::RigidRigidMismatch);
                 }
             }
             ([es1 @ .., Elim::App(a1)], [es2 @ .., Elim::App(a2)]) => {
-                let (Term::Pi(xx, t), Term::Pi(yy, u)) = self.match_spine(x, es1, y, es2)? else {
+                let (Term::Pi(xx, t), Term::Pi(yy, u)) = self.match_spine(x, w, es1, y, z, es2)? else {
                     return Err(Error::SpineMismatch);
                 };
                 let a = *a1.clone();
@@ -1485,7 +1563,7 @@ impl TypeCheckState {
         assert_eq!(mi_a, mi_b);
         let (tel, ty) = self.lookup_meta_ctx(mi_a)?.tele_view();
         match self.intersect(tel.clone(), &es, &es_) {
-            Some(tel_) if is_subset_of(ty.fvs(), tel_.vars().into_iter().collect()) => self
+            Some(tel_) if is_subset_of(ty.fvs(), tel_.names().into_iter().collect()) => self
                 .instantiate((
                     mi_a,
                     Term::pis(tel_, ty),
@@ -1494,9 +1572,9 @@ impl TypeCheckState {
                         Term::lams(
                             tel.clone(),
                             mi_b.apply(
-                                tel.vars()
+                                tel.names()
                                     .into_iter()
-                                    .map(|x| Term::Var(x, vec![]))
+                                    .map(|x| Term::Var(Var::Single(x), vec![]))
                                     .collect(),
                             ),
                         )
@@ -1582,7 +1660,7 @@ impl TypeCheckState {
         > linearOn _  B0       = True
         > linearOn t  (as:<a)  = not (a `elem` fvs t && a `elem` as) && linearOn t as
          */
-        fn is_linear_on(t: &Term, vars: &[Var]) -> bool {
+        fn is_linear_on(t: &Term, vars: &[Name]) -> bool {
             let fvs = t.fvs();
             for fv in fvs {
                 let mut occurred = false;
@@ -1602,12 +1680,12 @@ impl TypeCheckState {
             return Err(Error::Occurrence);
         }
 
-        if let Some(xs) = to_vars(es.to_vec()) {
+        if let Some(xs) = to_names(es.to_vec()) {
             let fmvs = t.fmvs();
             if !fmvs.contains(&mi) && is_linear_on(t, &xs) {
                 let mut binds = vec![];
                 for x in xs.iter().rev() {
-                    binds.push(self.lookup2(*x).map_term(|x| x.clone().boxed()));
+                    binds.push(self.lookup_var(*x, None).map_term(|x| x.clone().boxed()));
                 }
                 let lam = Term::lams(binds, t.clone());
                 let b = self
@@ -1667,8 +1745,8 @@ impl TypeCheckState {
         match (bind, es1, es2) {
             (Some(bind), [es1 @ .., Elim::App(a1)], [es2 @ .., Elim::App(a2)]) => {
                 let mut tele = self.intersect(tele, es1, es2)?;
-                let x = a1.clone().to_var();
-                let y = a2.clone().to_var();
+                let x = a1.clone().to_name();
+                let y = a2.clone().to_name();
                 if x == y {
                     tele.0.push(bind);
                 }
@@ -1712,13 +1790,13 @@ impl TypeCheckState {
     >                        pruneTm (_Vs `union` singleton x) t
 
      */
-    fn prune_under(&mut self, vs: HashSet<Var>, b: Lambda) -> Result<Vec<Instantiation>> {
+    fn prune_under(&mut self, vs: HashSet<Name>, b: Lambda) -> Result<Vec<Instantiation>> {
         trace!(target: "unify", "prune_under: {:?}, vs = {vs:?}", b);
         let (x, t) = b.unbind(self);
         // let t = b.into_inner();
         let mut vs = vs;
         // let unbound_dbi = t.ctx_len();
-        vs.insert(Var::Free(x.name));
+        vs.insert(x.to_name());
         // vs.insert(Var::Bound(0)); // FIXME:
         self.prune_tm(vs, t)
     }
@@ -1732,7 +1810,7 @@ impl TypeCheckState {
     >                                                  <*> pruneUnder _Vs _T
     >     pruneElim _            = return []
      */
-    fn prune_elims(&mut self, vs: HashSet<Var>, es: Vec<Elim>) -> Result<Vec<Instantiation>> {
+    fn prune_elims(&mut self, vs: HashSet<Name>, es: Vec<Elim>) -> Result<Vec<Instantiation>> {
         let mut res = vec![];
         for e in es {
             match e {
@@ -1757,7 +1835,7 @@ impl TypeCheckState {
      */
     fn prune_meta(
         &mut self,
-        vs: HashSet<Var>,
+        vs: HashSet<Name>,
         mi: MI,
         es: Vec<Elim>,
     ) -> Result<Vec<Instantiation>> {
@@ -1766,7 +1844,7 @@ impl TypeCheckState {
         match self.prune(vs.clone(), tel.clone(), es) {
             Some(tel2) if tel2 != tel => {
                 trace!(target: "unify", "prune_meta -> {tel2}");
-                let vars = tel2.vars();
+                let vars = tel2.names();
                 if is_subset_of(ty.fvs(), vars.clone().into_iter().collect()) {
                     Ok(vec![(
                         mi,
@@ -1777,7 +1855,7 @@ impl TypeCheckState {
                                 mi2.apply(
                                     vars.clone()
                                         .into_iter()
-                                        .map(|x| Term::Var(x, vec![]))
+                                        .map(|x| Term::Var(Var::Single(x), vec![]))
                                         .collect(),
                                 ),
                             )
@@ -1808,7 +1886,7 @@ impl TypeCheckState {
 
 
     */
-    fn prune(&mut self, vs: HashSet<Var>, tel: Tele, es: Vec<Elim>) -> Option<Tele> {
+    fn prune(&mut self, vs: HashSet<Name>, tel: Tele, es: Vec<Elim>) -> Option<Tele> {
         trace!(target: "unify", "prune {vs:?}, {tel}, {es:?}");
         let mut tel = tel;
         let mut es = es;
@@ -1821,20 +1899,20 @@ impl TypeCheckState {
         };
         let s_ty = bind.ty.clone();
         let mut tel2 = self.prune(vs.clone(), tel, es)?;
-        match s.clone().to_var() {
+        match s.clone().to_name() {
             Some(y) => {
                 let s_fvs = s_ty.fvs();
-                let tel2_vars: HashSet<_> = tel2.vars().into_iter().collect();
+                let tel2_vars: HashSet<_> = tel2.names().into_iter().collect();
                 // let flag = is_subset_of(s_fvs, tel2_vars);
-                // trace!(target: "unify", "prune: s.to_var(): y = {y}, vs = {vs:?}");
-                trace!(target: "unify", "prune: s.to_var(): s_ty = {s_ty}, s_fvs = {s_fvs:?} [∈] tel2_vars = {tel2_vars:?}");
+                // trace!(target: "unify", "prune: s.to_name(): y = {y}, vs = {vs:?}");
+                trace!(target: "unify", "prune: s.to_name(): s_ty = {s_ty}, s_fvs = {s_fvs:?} [∈] tel2_vars = {tel2_vars:?}");
             }
             _ => (),
         }
-        match s.clone().to_var() {
+        match s.clone().to_name() {
             Some(y)
-                if vs.contains(&Var::Bound(y))
-                    && is_subset_of(s_ty.fvs(), tel2.vars().into_iter().collect()) =>
+                if vs.contains(&y)
+                    && is_subset_of(s_ty.fvs(), tel2.names().into_iter().collect()) =>
             {
                 tel2.0.push(bind);
                 Some(tel2)
@@ -1856,7 +1934,7 @@ impl TypeCheckState {
     >                             | otherwise         = throwError "pruning error"
 
      */
-    fn prune_tm(&mut self, vs: HashSet<Var>, t: Term) -> Result<Vec<Instantiation>> {
+    fn prune_tm(&mut self, vs: HashSet<Name>, t: Term) -> Result<Vec<Instantiation>> {
         trace!(target: "unify", "prune_tm {vs:?} {t:?}");
         match t.clone() {
             Term::Universe(_) => Ok(Vec::new()),
@@ -1874,7 +1952,7 @@ impl TypeCheckState {
             }
             Term::Meta(mi, es) => self.prune_meta(vs.clone(), mi, es),
             Term::Var(z, es) => {
-                if vs.contains(&z) {
+                if vs.contains(&z.name()) {
                     self.prune_elims(vs.clone(), es)
                 } else {
                     panic!("pruning error {vs:?} not contains {z:?}");
@@ -1923,7 +2001,8 @@ impl TypeCheckState {
 
     fn infer_(&self, var: &Var) -> Result<Type> {
         match var {
-            Var::Bound(..) | Var::Twin(..) => Ok(self.lookup2(*var).ty.clone()),
+            Var::Single(..) => Ok(self.lookup_var(var.name(), None).ty.clone()),
+            Var::Twin(_, twin) => Ok(self.lookup_var(var.name(), Some(*twin)).ty.clone()),
             Var::Meta(mi) => self.lookup_meta_ctx(*mi),
             v => unimplemented!("infer_: {:?}", v),
         }
@@ -2200,11 +2279,11 @@ impl TypeCheckState {
                 // let q = self.simplify_problem(*b.clone())?;
                 let fv_q = q.fvs();
                 // trace!(target: "unify", "q' = {q}");
-                let ctx_len = q.ctx_len();
-                let x = Var::Bound(ctx_len);
-                trace!(target: "unify", "q = {q}, fvs q = {:?}, x = {x}", fv_q);
-                if !fv_q.contains(&x) {
-                    trace!(target: "unify", "fv_q not contains {x}");
+                // let ctx_len = q.ctx_len();
+                // let x = Var::Single(ctx_len);
+                trace!(target: "unify", "q = {q}, fvs q = {:?}", fv_q);
+                if !fv_q.contains(&p.to_name()) {
+                    trace!(target: "unify", "fv_q not contains {p}");
                     self.active(id, q)
                 } else {
                     match p.ty.clone() {
@@ -2241,10 +2320,7 @@ impl TypeCheckState {
                             // trace!(target: "unify", "here5 #{id}");
                             if c {
                                 trace!(target: "unify", "re-solving-2 #{id}");
-                                self.solver(
-                                    id,
-                                    Problem::All(p.map_term(|_| Param::P(s_ty)), q.boxed()),
-                                )
+                                self.solver(id, Problem::all(p.map_term(|_| Param::P(s_ty)), q))
                             } else {
                                 let mut ctx = self.gamma2.clone();
                                 // info!(target: "additional", "add to ctx 2");
@@ -2466,7 +2542,7 @@ impl TypeCheckState {
             .gamma2
             .clone()
             .into_iter()
-            .fold(problem, |problem, bind| Problem::All(bind, problem.boxed()));
+            .fold(problem, |problem, bind| Problem::all(bind, problem));
         info!(target: "additional", "Problem::All 4, wrapped = {wrapped_problem}, Γ2 = {}, mctx = {}", self.gamma2, self.meta_ctx2.0);
         self.push_r(Right(Entry::Q(status, wrapped_problem)))
     }
@@ -2537,12 +2613,12 @@ impl TypeCheckState {
     }
 }
 
-fn to_vars(params: Vec<Elim>) -> Option<Vec<Var>> {
+fn to_names(params: Vec<Elim>) -> Option<Vec<Name>> {
     params
         .into_iter()
         .map(|t| match t {
             Elim::App(b) => match *b {
-                Term::Var(v, args) if args.is_empty() => Some(v),
+                Term::Var(v, args) if args.is_empty() => Some(v.name()),
                 _ => None,
             },
             _ => None,
@@ -2551,7 +2627,7 @@ fn to_vars(params: Vec<Elim>) -> Option<Vec<Var>> {
 }
 
 // a ∈ b
-fn is_subset_of(a: HashSet<Var>, b: HashSet<Var>) -> bool {
+fn is_subset_of(a: HashSet<Name>, b: HashSet<Name>) -> bool {
     a.iter().all(|x| b.contains(x))
 }
 
@@ -2732,7 +2808,7 @@ impl TypeCheckState {
     > x <? t = x `member` (fmvs t `union` fvs t)
      */
     fn check_dependency<T: Occurrence>(x: MI, t: &T) -> bool {
-        t.fmvs().contains(&x) || t.fvs().contains(&Var::Meta(x))
+        t.fmvs().contains(&x) || t.fvs().contains(&Name::Free(x))
     }
 
     /*
@@ -3032,7 +3108,7 @@ fn test_all() -> eyre::Result<()> {
     let eq = |x: &str, s: Type, s_: Term, t: Type, t_: Term| {
         Entry::Q(Status::Active, Problem::Unify(Equation::new(s_, s, t_, t)))
     };
-    let boy = |x: &str, t: Type, es: Vec<Entry>| lifted(Var::Bound(0), t, es);
+    let boy = |x: &str, t: Type, es: Vec<Entry>| lifted(Var::bound(0), t, es); // TODO: fix
 
     let bool_ty = Type::Data(ValData::new(0, vec![]));
 
@@ -3200,24 +3276,16 @@ mod tests {
                 ),
             ],
         );
-        let mut fv = term
-            .fvs()
-            .into_iter()
-            .map(|x| match x {
-                Var::Bound(x) => x,
-                Var::Twin(x, _) => x,
-                _ => unimplemented!(),
-            })
-            .collect::<Vec<_>>();
+        let mut fv = term.fvs().into_iter().collect::<Vec<_>>();
         fv.sort();
         let mut expected_fvs = vec![
-            y1.to_var().unwrap(),
-            x1.to_var().unwrap(),
-            x2.to_var().unwrap(),
-            z_ty.to_var().unwrap(),
-            x3.to_var().unwrap(),
-            y2.to_var().unwrap(),
-            y3.to_var().unwrap(),
+            y1.to_name().unwrap(),
+            x1.to_name().unwrap(),
+            x2.to_name().unwrap(),
+            z_ty.to_name().unwrap(),
+            x3.to_name().unwrap(),
+            y2.to_name().unwrap(),
+            y3.to_name().unwrap(),
         ];
         expected_fvs.sort();
         assert_eq!(fv, expected_fvs);
@@ -3225,10 +3293,10 @@ mod tests {
         // let fv_rigid = free_vars(&term, OccurrenceKind::Rigid);
         // assert_eq!(
         //     fv_rigid,
-        //     vec![x1.to_var(), x2.to_var(), z_ty.to_var(), x3.to_var()]
+        //     vec![x1.to_name(), x2.to_name(), z_ty.to_name(), x3.to_name()]
         // );
         // let fv_flexible = free_vars(&term, OccurrenceKind::Flexible);
-        // assert_eq!(fv_flexible, vec![y1.to_var(), y2.to_var(), y3.to_var()]);
+        // assert_eq!(fv_flexible, vec![y1.to_name(), y2.to_name(), y3.to_name()]);
     }
 
     #[test]

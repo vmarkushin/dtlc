@@ -23,7 +23,10 @@ use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
 pub use subst::{build_subst, PrimSubst, Substitution};
-pub use term::{Bind, Case, Closure, Elim, Func, Id, Lambda, Pat, Term, Type, Val, ValData, Var};
+pub use term::{
+    Bind, BoundFreeVars, Case, Closure, Elim, Func, Id, Lambda, Name, Pat, Term, Twin, Type, Val,
+    ValData, Var,
+};
 
 impl Term {
     pub fn at(self, loc: Loc) -> TermInfo {
@@ -110,12 +113,17 @@ impl<T> Tele<T> {
             .map(|(i, b)| Elim::app(Term::from_dbi(i)))
             .collect()
     }
+}
 
-    pub fn vars(&self) -> Vec<Var> {
+impl<T: Binder> Tele<T> {
+    pub fn names(&self) -> Vec<Name> {
         self.0
             .iter()
             .enumerate()
-            .map(|(i, _)| Var::Bound(i))
+            .map(|(i, x)| match x.to_name() {
+                Name::Bound(_) => Name::Bound(i),
+                x => x,
+            })
             .collect()
     }
 }
@@ -161,7 +169,7 @@ impl<T> IntoIterator for Tele<T> {
 pub struct Ctx<B = Bind>(pub Vec<B>);
 
 impl<B: Occurrence> Occurrence for Ctx<B> {
-    fn go(&self, depth: usize, vars: &mut HashSet<Var>, kind: Flavour, in_flexible: bool) {
+    fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         self.0
             .iter()
             .for_each(|b| b.go(depth, vars, kind, in_flexible));
@@ -178,11 +186,12 @@ pub trait Binder {
     type Param: Display;
     type Var: Into<usize> + Display + Copy;
 
-    fn lookup(&self, var: &Self::Var) -> Option<Bind<&Type>>;
+    fn lookup(&self, var: &Self::Var) -> Option<Bind<&Self::Param>>;
+    fn to_name(&self) -> Name;
 }
 
 impl Binder for Bind {
-    type Param = Term;
+    type Param = Type;
     type Var = DBI;
 
     fn lookup(&self, _var: &Self::Var) -> Option<Bind<&Type>> {
@@ -192,6 +201,10 @@ impl Binder for Bind {
             ty: &self.ty,
             ident: self.ident.clone(),
         })
+    }
+
+    fn to_name(&self) -> Name {
+        self.to_name()
     }
 }
 
@@ -204,7 +217,7 @@ impl<B: Binder + Debug> Ctx<B> {
     }
 
     #[track_caller]
-    pub fn lookup(&self, v: B::Var) -> Bind<&Type> {
+    pub fn lookup(&self, v: B::Var) -> Bind<&B::Param> {
         // self.0
         //     .get(self.var_to_idx(v))
         //     .unwrap_or_else(|| panic!("Invalid DBI: {}", v))

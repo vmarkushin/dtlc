@@ -1,6 +1,8 @@
 use crate::check::TypeCheckState;
 use crate::syntax::core::term::{Bind, Case, Id, Lambda};
-use crate::syntax::core::{Closure, Elim, Func, Pat, Tele, Term, TermInfo, ValData, Var};
+use crate::syntax::core::{
+    Closure, Elim, Func, Name, Pat, Tele, Term, TermInfo, Twin, ValData, Var,
+};
 use crate::syntax::surf::Nat;
 use crate::syntax::Plicitness::*;
 use crate::syntax::{ConHead, LangItem, Plicitness};
@@ -100,13 +102,10 @@ impl Display for Lambda {
     }
 }
 
-impl Display for Var {
+impl Display for Name {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Var::Bound(i) => {
-                write!(f, "@{}", i)
-            }
-            Var::Free(i) => {
+            Name::Free(i) => {
                 if *i < 26 {
                     let ci = (97 + *i) as u8 as char;
                     write!(f, "{}", ci)
@@ -114,13 +113,27 @@ impl Display for Var {
                     write!(f, "#{}", i)
                 }
             }
-            Var::Twin(i, b) => {
-                if *b {
-                    write!(f, "@r{}", i)
-                } else {
-                    write!(f, "@l{}", i)
-                }
+            Name::Bound(b) => {
+                write!(f, "@{}", b)
             }
+        }
+    }
+}
+
+impl Display for Var {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Var::Single(n) => {
+                write!(f, "{n}")
+            }
+            Var::Twin(n, b) => match *b {
+                Twin::Left => {
+                    write!(f, "{}\u{0301}", n)
+                }
+                Twin::Right => {
+                    write!(f, "{}\u{0300}", n)
+                }
+            },
             Var::Meta(m) => {
                 write!(f, "?{}", m)
             }
@@ -309,11 +322,11 @@ impl Display for Pretty<'_, Term> {
             Term::Var(v, args) => {
                 let args = args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
                 let var = match v {
-                    Var::Bound(dbi) => {
+                    Var::Single(Name::Bound(dbi)) => {
                         let x = s.lookup(*dbi);
                         format!("{}", x.ident.text)
                     }
-                    Var::Free(uid) => {
+                    Var::Single(Name::Free(uid)) => {
                         if *uid < 26 {
                             let ci = (97 + *uid) as u8 as char;
                             format!("{}", ci)
@@ -321,8 +334,8 @@ impl Display for Pretty<'_, Term> {
                             format!("#{}", uid)
                         }
                     }
-                    v @ Var::Twin(..) => {
-                        let x = s.gamma2.lookup(*v);
+                    Var::Twin(name, twin) => {
+                        let x = s.lookup_var(*name, Some(*twin));
                         format!("{}", x.ident.text)
                     }
                     Var::Meta(_) => {

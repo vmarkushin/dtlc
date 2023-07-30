@@ -39,7 +39,7 @@ pub struct Lambda(pub Bind<Box<Term>>, pub Closure);
 impl Lambda {
     pub fn unbind(self, tcs: &mut TypeCheckState) -> (Bind<Box<Term>>, Term) {
         let mut bind = self.0;
-        bind.name = tcs.next_uid.fetch_add(1, Ordering::Relaxed);
+        bind.name = tcs.next_uid();
         let term = self.1.unbind(bind.name, tcs);
         (bind, term)
     }
@@ -52,19 +52,91 @@ impl Lambda {
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 #[cfg_attr(test, derive(PartialOrd, Ord))]
-pub enum Var {
-    Bound(DBI),
-    Twin(DBI, bool),
+pub enum Name {
     Free(UID),
+    Bound(DBI),
+}
+
+impl From<Name> for usize {
+    fn from(value: Name) -> Self {
+        match value {
+            Name::Free(uid) => uid.into(),
+            Name::Bound(dbi) => dbi.into(),
+        }
+    }
+}
+
+impl Name {
+    pub fn uid(&self) -> UID {
+        match self {
+            Name::Free(uid) => *uid,
+            Name::Bound(_) => panic!("Name::Bound has no UID"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+#[cfg_attr(test, derive(PartialOrd, Ord))]
+pub enum Twin {
+    Left,
+    Right,
+}
+
+// impl Display for Twin {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+//         match self {
+//             Twin::Left => write!(f, "left"),
+//             Twin::Right => write!(f, "right"),
+//         }
+//     }
+// }
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+#[cfg_attr(test, derive(PartialOrd, Ord))]
+pub enum Var {
+    Single(Name),
+    Twin(Name, Twin),
     Meta(MI),
+}
+
+impl Var {
+    pub(crate) fn name(&self) -> Name {
+        match self {
+            Var::Single(name) | Var::Twin(name, _) => *name,
+            Var::Meta(mi) => Name::Free(*mi),
+        }
+    }
+}
+
+impl Var {
+    pub fn bound(dbi: DBI) -> Self {
+        Self::Single(Name::Bound(dbi))
+    }
+
+    pub fn free(uid: UID) -> Self {
+        Self::Single(Name::Free(uid))
+    }
+
+    pub fn twin_bound(dbi: DBI, twin: Twin) -> Self {
+        Self::Twin(Name::Bound(dbi), twin)
+    }
+
+    pub fn twin_free(uid: UID, twin: Twin) -> Self {
+        Self::Twin(Name::Free(uid), twin)
+    }
+
+    pub fn meta(mi: MI) -> Self {
+        Self::Meta(mi)
+    }
 }
 
 impl From<Var> for usize {
     fn from(value: Var) -> Self {
         match value {
-            Var::Bound(dbi) => dbi.into(),
-            Var::Twin(dbi, _) => dbi.into(),
-            Var::Free(uid) => uid.into(),
+            Var::Single(Name::Bound(dbi)) => dbi.into(),
+            Var::Single(Name::Free(uid)) => uid.into(),
+            Var::Twin(Name::Free(dbi), _) => dbi.into(),
+            Var::Twin(Name::Bound(dbi), _) => dbi.into(),
             Var::Meta(mi) => mi.into(),
         }
     }
@@ -224,6 +296,21 @@ pub enum Term {
     Ap(Tele, Vec<Term>, Box<Term>),
 }
 
+impl Term {
+    // pub(crate) fn twin_l(p0: Term) -> Term {
+    //     Term::Var(Var::Twin())
+    // }
+}
+
+impl Term {
+    pub(crate) fn as_free_var(&self) -> UID {
+        match self {
+            Term::Var(Var::Single(Name::Free(x)), _) => *x,
+            _ => panic!("Expected free variable, got {:?}", self),
+        }
+    }
+}
+
 pub type Type = Term;
 
 impl Term {
@@ -239,9 +326,16 @@ impl Term {
     > toVar v = case etaContract v of  N (V x _) B0  -> Just x
     >                                  _             -> Nothing
      */
-    pub(crate) fn to_var(self) -> Option<DBI> {
+    // pub(crate) fn to_var(self) -> Option<Var> {
+    //     match self.eta_contract() {
+    //         Term::Var(Var::Single(n) | Var::Twin(n, _), es) if es.is_empty() => Some(n),
+    //         _ => None,
+    //     }
+    // }
+
+    pub(crate) fn to_name(self) -> Option<Name> {
         match self.eta_contract() {
-            Term::Var(Var::Bound(n) | Var::Twin(n, _), es) if es.is_empty() => Some(n),
+            Term::Var(Var::Single(n) | Var::Twin(n, _), es) if es.is_empty() => Some(n),
             _ => None,
         }
     }
@@ -325,7 +419,7 @@ impl<Ix: From<DBI>, T: Subst<Term>> TryIntoPat<Ix, T> for Term {
                     .map(Term::try_into_pat)
                     .collect::<Option<Vec<_>>>()?,
             )),
-            Term::Var(Var::Bound(ix), _) => Some(Pat::Var(Ix::from(ix))),
+            Term::Var(Var::Single(Name::Bound(ix)), _) => Some(Pat::Var(Ix::from(ix))),
             _ => None,
         }
     }
@@ -389,7 +483,7 @@ impl BoundFreeVars for Term {
         match self {
             Term::Var(var, args) => {
                 args.bound_free_vars(vars, depth);
-                let uid = if let Var::Free(uid) = var {
+                let uid = if let Var::Single(Name::Free(uid)) = var && *uid != 0 {
                     *uid
                 } else {
                     return;
@@ -397,7 +491,7 @@ impl BoundFreeVars for Term {
                 if let Some(ix) = vars.get(&uid) {
                     let new_dbi = *ix + depth;
                     trace!("bound {} := {}", uid, new_dbi);
-                    *var = Var::Bound(new_dbi);
+                    *var = Var::bound(new_dbi);
                 }
             }
             Term::Redex(Func::Lam(lam), _, args) => {
@@ -479,7 +573,7 @@ impl Term {
     }
 
     pub fn free_var(uid: UID) -> Self {
-        Term::Var(Var::Free(uid), Vec::new())
+        Term::Var(Var::free(uid), Vec::new())
     }
 
     pub(crate) fn is_cons(&self) -> bool {
@@ -520,8 +614,8 @@ impl Term {
         }
     }
 
-    pub(crate) fn lam(p0: Bind<Box<Term>>, p1: Term) -> Term {
-        Term::Lam(Lambda(p0, Closure::Plain(p1.boxed())))
+    pub(crate) fn lam(p0: Bind<Box<Type>>, p1: Term) -> Term {
+        Term::Lam(Lambda::bind(p0, p1))
     }
 
     pub fn lams<T: Into<Bind<Box<Term>>>>(ps: impl IntoIterator<Item = T>, body: Term) -> Term {
@@ -531,7 +625,8 @@ impl Term {
     }
 
     pub fn pi(p0: Bind<Box<Term>>, p1: Term) -> Term {
-        Term::Pi(p0, Closure::Plain(p1.boxed()))
+        let Lambda(p0, p1) = Lambda::bind(p0, p1);
+        Term::Pi(p0, p1)
     }
 
     pub fn arrow(p0: Term, p1: Term) -> Term {

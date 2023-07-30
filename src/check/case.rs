@@ -2,7 +2,7 @@ use crate::check::meta::HasMeta;
 use crate::check::{Error, Result, TypeCheckState};
 use crate::syntax::abs::{Expr, Pat as PatA};
 use crate::syntax::core::{
-    Boxed, Case, DataInfo, DeBruijn, Decl, Pat, SubstWith, Substitution, Term, Var,
+    Boxed, Case, DataInfo, DeBruijn, Decl, Name, Pat, SubstWith, Substitution, Term, Var,
 };
 use crate::syntax::{ConHead, DBI, UID};
 use itertools::{EitherOrBoth, Itertools};
@@ -28,7 +28,7 @@ impl Constraint {
     /// Generate abstract substitution \[x := y\].
     pub fn gen_abs_subst(&self, tcs: &TypeCheckState) -> (UID, Expr) {
         match (&self.pat, &self.term) {
-            (PatA::Var(x), Term::Var(Var::Bound(y), es)) if es.is_empty() => {
+            (PatA::Var(x), Term::Var(Var::Single(Name::Bound(y)), es)) if es.is_empty() => {
                 let x1 = tcs.lookup(*y);
                 (*x, Expr::Var(x1.clone().ident(), x1.name))
             }
@@ -42,7 +42,7 @@ impl Constraint {
                         Vec1::try_from_vec(
                             es.iter()
                                 .map(|e| match e {
-                                    Term::Var(Var::Bound(y), es) if es.is_empty() => {
+                                    Term::Var(Var::Single(Name::Bound(y)), es) if es.is_empty() => {
                                         let x1 = tcs.lookup(*y);
                                         Expr::Var(x1.clone().ident(), x1.name)
                                     }
@@ -539,7 +539,7 @@ impl LshProblem {
                 delta_tick_hat_i
                     .into_iter()
                     .map(|x| match x {
-                        Term::Var(Var::Bound(i), _) => Pat::Var(i),
+                        Term::Var(Var::Single(Name::Bound(i)), _) => Pat::Var(i),
                         _ => unreachable!(),
                     })
                     .collect(),

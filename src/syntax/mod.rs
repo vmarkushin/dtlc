@@ -1,4 +1,4 @@
-use crate::syntax::core::Term;
+use crate::syntax::core::{Name, Term, Var};
 use crate::syntax::token::Position;
 use chumsky::Span;
 use codespan::{ColumnIndex, LineIndex};
@@ -224,6 +224,16 @@ pub struct Bind<T> {
     pub name: UID,
     pub ty: T,
     pub ident: Ident,
+}
+
+impl<T> Bind<T> {
+    pub(crate) fn to_name(&self) -> Name {
+        // if self.name == 0 {
+        //     Name::Bound(self.name)
+        // } else {
+        Name::Free(self.name)
+        // }
+    }
 }
 
 impl<T> Bind<T> {

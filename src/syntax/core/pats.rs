@@ -123,7 +123,7 @@ impl Term {
         let (subst, vars) = if let Some(x_max) = maybe_x_max {
             let len = x_max - x_min + 1;
             let mut y = x;
-            trace!("[push_in] Binding vars from {}", Var::Free(from_uid));
+            trace!("[push_in] Binding vars from {}", Var::free(from_uid));
 
             let vars = (from_uid..from_uid + len)
                 .rev()
@@ -159,7 +159,7 @@ impl Term {
 
             trace!(
                 "[push_in_without_pat_subst] Binding vars from {}",
-                Var::Free(from_uid)
+                Var::free(from_uid)
             );
             let vars = (from_uid..from_uid + len)
                 .rev()
@@ -194,7 +194,7 @@ impl Term {
 
             trace!(
                 "[push_in_without_pat_subst_non_var] Binding vars from {}",
-                Var::Free(from_uid)
+                Var::free(from_uid)
             );
             let vars = (from_uid..from_uid + len)
                 .rev()
@@ -232,7 +232,7 @@ mod tests {
             term_new,
             Term::cons(
                 con_head,
-                vec![Term::from_dbi(1), Term::Var(Var::Free(0), vec![])]
+                vec![Term::from_dbi(1), Term::Var(Var::free(0), vec![])]
             )
         );
         assert_eq!(

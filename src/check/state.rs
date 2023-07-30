@@ -1,7 +1,8 @@
 use crate::check::meta::MetaContext;
 use crate::check::unification::{Context, Param};
 use crate::syntax::core::{
-    Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, SubstWith, Substitution, Term, Type, Var,
+    Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, Name, SubstWith, Substitution, Term,
+    Twin, Type, Var,
 };
 use crate::syntax::{LangItem, DBI, GI, MI, UID};
 use std::collections::HashMap;
@@ -14,7 +15,7 @@ use std::sync::Arc;
 pub type Sigma = Vec<Decl>;
 
 /// Type-checking state.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TypeCheckState {
     pub(crate) indentation: Indentation,
     /// Where are we?
@@ -41,6 +42,28 @@ pub struct TypeCheckState {
     pub type_in_type: bool,
 }
 
+impl Default for TypeCheckState {
+    fn default() -> Self {
+        Self {
+            indentation: Default::default(),
+            current_checking_def: Default::default(),
+            trace_tc: Default::default(),
+            unify_depth: Default::default(),
+            sigma: Default::default(),
+            gamma: Default::default(),
+            gamma2: Default::default(),
+            lets: Default::default(),
+            meta_ctx: Default::default(),
+            meta_ctx2: Default::default(),
+            next_uid: Arc::new(AtomicUsize::new(1)),
+            next_mi: Default::default(),
+            lang_items: Default::default(),
+            lang_items_back: Default::default(),
+            type_in_type: Default::default(),
+        }
+    }
+}
+
 impl TypeCheckState {
     pub(crate) fn is_caseless(&self, ty: &Term) -> bool {
         match ty {
@@ -60,8 +83,19 @@ impl TypeCheckState {
     }
 
     #[track_caller]
-    pub(crate) fn lookup2(&self, p0: Var) -> Bind<&Type> {
+    pub(crate) fn lookup2(&self, p0: Name) -> Bind<&Param> {
         self.gamma2.lookup(p0)
+    }
+
+    #[track_caller]
+    pub(crate) fn lookup_var(&self, p0: Name, twin: Option<Twin>) -> Bind<&Type> {
+        let bind = self.gamma2.lookup(p0);
+        match (twin, bind.ty) {
+            (Some(Twin::Left), Param::Twins(ty, _)) => bind.map_term(|_| ty),
+            (Some(Twin::Right), Param::Twins(_, ty)) => bind.map_term(|_| ty),
+            (None, Param::P(ty)) => bind.map_term(|_| ty),
+            (x, y) => panic!("Expected {x:?}, found {:?}", y),
+        }
     }
 }
 
@@ -147,11 +181,16 @@ impl TypeCheckState {
     }
 
     pub fn fresh_free_var(&mut self) -> Term {
-        let t = Term::Var(
-            Var::Free(self.next_uid.fetch_add(1, Ordering::Relaxed)),
-            vec![],
-        );
+        let t = Term::Var(Var::free(self.next_uid()), vec![]);
         t
+    }
+
+    pub fn fresh_name(&self) -> Name {
+        Name::Free(self.next_uid())
+    }
+
+    pub fn next_uid(&self) -> UID {
+        self.next_uid.fetch_add(1, Ordering::Relaxed)
     }
 
     pub fn def(&self, ix: GI) -> &Decl {
@@ -205,7 +244,7 @@ impl TypeCheckState {
 
 impl<T> Bind<T> {
     pub fn unbind(mut self, tcs: &mut TypeCheckState) -> Bind<T> {
-        self.name = tcs.next_uid.fetch_add(1, Ordering::Relaxed);
+        self.name = tcs.next_uid();
         self
     }
 }

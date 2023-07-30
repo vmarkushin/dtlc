@@ -1,4 +1,4 @@
-use crate::syntax::core::{subst::PrimSubst, Elim, Term, Var};
+use crate::syntax::core::{subst::PrimSubst, Elim, Name, Term, Var};
 use crate::syntax::DBI;
 use std::rc::Rc;
 
@@ -26,13 +26,13 @@ impl DeBruijn for Elim {
 impl DeBruijn for Term {
     fn dbi_view(&self) -> Option<DBI> {
         match self {
-            Term::Var(Var::Bound(i), v) if v.is_empty() => Some(*i),
+            Term::Var(Var::Single(Name::Bound(i)), v) if v.is_empty() => Some(*i),
             _ => None,
         }
     }
 
     fn from_dbi(dbi: DBI) -> Self {
-        Term::Var(Var::Bound(dbi), Default::default())
+        Term::Var(Var::Single(Name::Bound(dbi)), Default::default())
     }
 }
 

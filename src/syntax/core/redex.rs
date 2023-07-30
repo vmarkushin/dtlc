@@ -1,7 +1,7 @@
 use super::Term;
 use crate::check::{Constraint, TypeCheckState};
 use crate::syntax::core::subst::{PrimSubst, Substitution};
-use crate::syntax::core::term::{Id, Lambda};
+use crate::syntax::core::term::{Id, Lambda, Name};
 use crate::syntax::core::{Boxed, Case, Closure, DeBruijn, Elim, Func, ValData, Var};
 use crate::syntax::pattern::Pat;
 use crate::syntax::{Bind, Ident, DBI, GI};
@@ -273,11 +273,15 @@ impl SubstWith<'_> for Term {
             Term::Meta(m, a) | Term::Var(Var::Meta(m), a) => {
                 Term::meta_with(m, a.subst_with(subst, tcs))
             }
-            Term::Var(Var::Bound(f), args) | Term::Var(Var::Twin(f, _), args) => subst
+            Term::Var(Var::Single(Name::Bound(f)), args)
+            | Term::Var(Var::Twin(Name::Bound(f), _), args) => subst
                 .lookup_with(f, tcs)
                 .apply_elim(args.subst_with(subst, tcs)),
-            Term::Var(Var::Free(n), args) => {
-                Term::Var(Var::Free(n), vec![]).apply_elim(args.subst_with(subst, tcs))
+            Term::Var(Var::Single(Name::Free(n)), args) => {
+                Term::Var(Var::free(n), vec![]).apply_elim(args.subst_with(subst, tcs))
+            }
+            Term::Var(Var::Twin(Name::Free(n), t), args) => {
+                Term::Var(Var::twin_free(n, t), vec![]).apply_elim(args.subst_with(subst, tcs))
             }
             Term::Id(id) => id.subst_with(subst, tcs),
             Term::Refl(t) => Term::Refl(t.subst_with(subst, tcs).boxed()),
@@ -298,13 +302,13 @@ impl SubstWith<'_> for Term {
                     x, subst, x_inst
                 );
                 match &x_inst {
-                    Term::Var(Var::Bound(y), es) if es.is_empty() => {
+                    Term::Var(Var::Single(Name::Bound(y)), es) if es.is_empty() => {
                         let cs = Self::subst_in_match_with_var(&subst, tcs, &x, *y, cs);
                         Term::Match(x_inst.boxed(), cs)
                     }
                     _ => {
                         let cs = match &*x {
-                            Term::Var(Var::Bound(x), es) if es.is_empty() => {
+                            Term::Var(Var::Single(Name::Bound(x)), es) if es.is_empty() => {
                                 Self::subst_non_var_in_cases_instead_of_var(&subst, tcs, cs, x)
                             }
                             _ => Self::subst_non_var_in_cases_instead_of_non_var(subst, tcs, cs),
