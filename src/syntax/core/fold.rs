@@ -109,7 +109,7 @@ impl FoldVal for Term {
             Universe(..) => Ok(init),
             Pi(p, clos) => clos.try_fold_val(p.ty.try_fold_val(init, f)?, f),
             Lam(Lambda(p, clos)) => clos.try_fold_val(p.ty.try_fold_val(init, f)?, f),
-            Var(_, v) | Meta(_, v) => v.try_fold_val(init, f),
+            Var(_, v) => v.try_fold_val(init, f),
             Id(id) => id.ty.try_fold_val(
                 id.paths.try_fold_val(
                     id.tele

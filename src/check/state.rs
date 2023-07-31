@@ -36,7 +36,7 @@ pub struct TypeCheckState {
     pub meta_ctx: Vec<MetaContext<Term>>,
     pub meta_ctx2: Context,
     pub next_uid: Arc<AtomicUsize>,
-    pub next_mi: MI,
+    // pub next_mi: MI,
     pub lang_items: HashMap<LangItem, GI>,
     pub lang_items_back: HashMap<GI, LangItem>,
     pub type_in_type: bool,
@@ -56,7 +56,7 @@ impl Default for TypeCheckState {
             meta_ctx: Default::default(),
             meta_ctx2: Default::default(),
             next_uid: Arc::new(AtomicUsize::new(1)),
-            next_mi: Default::default(),
+            // next_mi: Default::default(),
             lang_items: Default::default(),
             lang_items_back: Default::default(),
             type_in_type: Default::default(),
@@ -89,6 +89,7 @@ impl TypeCheckState {
 
     #[track_caller]
     pub(crate) fn lookup_var(&self, p0: Name, twin: Option<Twin>) -> Bind<&Type> {
+        info!(target: "additional", "lookup_var: {p0} {:?} in {}", twin, self.gamma2);
         let bind = self.gamma2.lookup(p0);
         match (twin, bind.ty) {
             (Some(Twin::Left), Param::Twins(ty, _)) => bind.map_term(|_| ty),
@@ -245,6 +246,7 @@ impl TypeCheckState {
 impl<T> Bind<T> {
     pub fn unbind(mut self, tcs: &mut TypeCheckState) -> Bind<T> {
         self.name = tcs.next_uid();
+        assert_ne!(self.name, 0);
         self
     }
 }

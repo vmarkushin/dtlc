@@ -75,10 +75,16 @@ impl Occurrence for Param {
 
 impl Display for Bind<Param> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if self.licit == Plicitness::Implicit {
-            write!(f, "{{{}:{}}}", self.ident, self.ty)
+        let name = if self.name < 26 {
+            let ci = (97 + self.name) as u8 as char;
+            format!("{}", ci)
         } else {
-            write!(f, "{}:{}", self.ident, self.ty)
+            format!("#{}", self.name)
+        };
+        if self.licit == Plicitness::Implicit {
+            write!(f, "{{{}[{}]:{}}}", self.ident, name, self.ty)
+        } else {
+            write!(f, "{}[{}]:{}", self.ident, name, self.ty)
         }
     }
 }
@@ -91,6 +97,7 @@ impl Binder for Bind<Param> {
     // type Var = Var;
 
     fn lookup(&self, var: &Self::Var) -> Option<Bind<&Self::Param>> {
+        Some(Bind::new(self.licit, self.name, &self.ty, self.ident.loc))
         // match (self, var) {
         //     (
         //         Bind {
@@ -133,7 +140,6 @@ impl Binder for Bind<Param> {
         //     }),
         //     _ => None,
         // }
-        todo!()
     }
 
     fn to_name(&self) -> Name {
@@ -271,9 +277,10 @@ impl Occurrence for Problem {
 }
 
 impl Problem {
-    pub fn all(param: Bind<Param>, prob: Problem) -> Self {
+    pub fn all(mut param: Bind<Param>, prob: Problem) -> Self {
         info!(target: "additional", "Problem::All 2");
         let problem = Problem::bind(&param, prob);
+        param.name = 0;
         Self::All(param, Box::new(problem))
     }
 
@@ -285,6 +292,7 @@ impl Problem {
     }
 
     pub fn unbind(self, uid: UID, tcs: &mut TypeCheckState) -> Problem {
+        assert_ne!(uid, 0);
         self.subst_with(Substitution::one(Term::free_var(uid)), tcs)
     }
 
@@ -296,7 +304,37 @@ impl Problem {
 
 impl BoundFreeVars for Problem {
     fn bound_free_vars(&mut self, vars: &HashMap<UID, DBI>, depth: usize) {
-        todo!()
+        match self {
+            Problem::Unify(eq) => {
+                eq.bound_free_vars(vars, depth);
+            }
+            Problem::All(x, eq) => {
+                x.bound_free_vars(vars, depth);
+                eq.bound_free_vars(vars, depth + 1);
+            }
+        }
+    }
+}
+
+impl BoundFreeVars for Equation {
+    fn bound_free_vars(&mut self, vars: &HashMap<UID, DBI>, depth: usize) {
+        let Self { ty1, tm1, ty2, tm2 } = self;
+        ty1.bound_free_vars(vars, depth);
+        tm1.bound_free_vars(vars, depth);
+        ty2.bound_free_vars(vars, depth);
+        tm2.bound_free_vars(vars, depth);
+    }
+}
+
+impl BoundFreeVars for Param {
+    fn bound_free_vars(&mut self, vars: &HashMap<UID, DBI>, depth: usize) {
+        match self {
+            Param::P(t) => t.bound_free_vars(vars, depth),
+            Param::Twins(t, u) => {
+                t.bound_free_vars(vars, depth);
+                u.bound_free_vars(vars, depth);
+            }
+        }
     }
 }
 
@@ -397,7 +435,7 @@ impl MetaSubstitution for Term {
     fn meta_subst(&mut self, subst: &MetaSubst) {
         match self {
             Term::Universe(_) => {}
-            Term::Meta(mi, es) | Term::Var(Var::Meta(mi), es) => {
+            Term::Var(Var::Meta(mi), es) => {
                 if let Some(t) = subst.get(mi) {
                     trace!(target: "unify", "Substituting  {} for {} with depth {}", t, mi, subst.1);
                     let t = t.clone().subst(Substitution::raise(subst.1));
@@ -617,7 +655,7 @@ fn traverse_term_with_depth<'a, F: FnMut(DBI, &'a Term) -> bool>(term: &'a Term,
                     }
                 }
             }
-            Term::Meta(_, params) => {
+            Term::Var(Var::Meta(_), params) => {
                 go(param, depth, f);
             }
             Term::Lam(Lambda(bind, Closure::Plain(b))) => {
@@ -708,7 +746,7 @@ fn occurrence<'a>(term: &'a Term, of: TermOrVar<'_>, kind: OccurrenceKind) -> Ve
                     }
                 }
             }
-            Term::Meta(_, params) => {
+            Term::Var(Var::Meta(_), params) => {
                 if kind != Rigid {
                     for param in params {
                         if let Elim::App(param) = param {
@@ -938,7 +976,7 @@ fn free_vars(term: &Term, kind: OccurrenceKind) -> Vec<Var> {
                     }
                 }
             }
-            Term::Meta(_, params) => {
+            Term::Var(Var::Meta(_), params) => {
                 if kind != Rigid {
                     for param in params {
                         if let Elim::App(param) = param {
@@ -1055,15 +1093,17 @@ impl Occurrence for Term {
             //     .union(&vec![x.clone()].into_iter().collect())
             //     .cloned()
             //     .collect(),
-            Term::Meta(_, _) | Term::Var(Var::Meta(..), _) if f == RigVars => Default::default(),
+            Term::Var(Var::Meta(_), _) | Term::Var(Var::Meta(..), _) if f == RigVars => {
+                Default::default()
+            }
             Term::Var(x, es) => {
                 (x, es).go(depth, vars, f, in_flexible);
                 // (x, es).free(f)
             }
-            Term::Meta(_, es) if f == Vars || f == RigVars => {
+            Term::Var(Var::Meta(_), es) if f == Vars || f == RigVars => {
                 es.go(depth, vars, f, true);
             }
-            Term::Meta(x, es) if f == Metas => {
+            Term::Var(Var::Meta(x), es) if f == Metas => {
                 add(Name::Free(*x));
                 // add(Var::Meta(*x));
                 es.go(depth, vars, f, true);
@@ -1248,7 +1288,7 @@ fn occur_check(tcs: &mut TypeCheckState, is_strong_rigid: bool, x: MI, t: &Term)
             // let t = b.1.as_inner();
             occur_check(tcs, is_strong_rigid, x, &t)
         }
-        Term::Var(Var::Meta(y), es) | Term::Meta(y, es) => {
+        Term::Var(Var::Meta(y), es) => {
             x == *y && (is_strong_rigid || !to_names(es.clone()).is_some())
         }
         Term::Var(_, es) => es.iter().any(|e| match e {
@@ -1298,26 +1338,27 @@ impl TypeCheckState {
             (Term::Pi(a1, b1), Term::Pi(a2, b2)) => {
                 let a1 = *a1.clone().ty;
                 let a2 = *a2.clone().ty;
-                // let ctx_len_1 = tm1.lam_len() - 1;
-                // let ctx_len_2 = tm2.lam_len() - 1;
                 let x = self.fresh_name();
                 let uid = x.uid();
                 info!(target: "additional", "Problem::All 1");
                 let twin_l = Term::Var(Var::twin_free(uid, Twin::Left), vec![]);
                 let twin_r = Term::Var(Var::twin_free(uid, Twin::Right), vec![]);
+
+                let problem = Problem::Unify(Equation::new(
+                    tm1.apply(vec![twin_l.clone()]),
+                    b1.instantiate_with(twin_l, self),
+                    tm2.apply(vec![twin_r.clone()]),
+                    b2.instantiate_with(twin_r, self),
+                ));
+                info!(target: "additional", "Binding {x} to {problem}");
                 let p = Problem::all(
                     Bind::explicit(uid, Param::Twins(a1, a2), Ident::new("x")),
-                    Problem::Unify(Equation::new(
-                        tm1.apply(vec![twin_l.clone()]),
-                        b1.instantiate_with(twin_l, self),
-                        tm2.apply(vec![twin_r.clone()]),
-                        b2.instantiate_with(twin_r, self),
-                    )),
+                    problem,
                 );
                 self.active(id, p)
             }
             _ => match (tm1, tm2) {
-                (Term::Meta(m1, xs), Term::Meta(m2, ys)) if m1 == m2 => {
+                (Term::Var(Var::Meta(m1), xs), Term::Var(Var::Meta(m2), ys)) if m1 == m2 => {
                     if !self.try_prune(id, equation.clone())? {
                         if !self.try_prune(id, equation.clone().sym())? {
                             return self.flex_flex_same(id, equation);
@@ -1325,7 +1366,7 @@ impl TypeCheckState {
                     }
                     Ok(())
                 }
-                (Term::Meta(m1, xs), Term::Meta(m2, ys)) => {
+                (Term::Var(Var::Meta(m1), xs), Term::Var(Var::Meta(m2), ys)) => {
                     if !self.try_prune(id, equation.clone())? {
                         if !self.try_prune(id, equation.clone().sym())? {
                             return self.flex_flex(vec![], id, equation);
@@ -1333,13 +1374,13 @@ impl TypeCheckState {
                     }
                     Ok(())
                 }
-                (Term::Meta(m1, xs), _) => {
+                (Term::Var(Var::Meta(m1), xs), _) => {
                     if !self.try_prune(id, equation.clone())? {
                         self.flex_term(vec![], id, equation)?;
                     }
                     Ok(())
                 }
-                (_, Term::Meta(m2, ys)) => {
+                (_, Term::Var(Var::Meta(m2), ys)) => {
                     if !self.try_prune(id, equation.clone().sym())? {
                         self.flex_term(vec![], id, equation)?;
                     }
@@ -1378,33 +1419,39 @@ impl TypeCheckState {
         let Equation { ty1, tm1, ty2, tm2 } = equation.clone();
         match (tm1.clone(), tm2.clone()) {
             (Term::Pi(a1, b1), Term::Pi(a2, b2)) => {
-                let xs = vec![Equation::new(
-                    b1.clone().into_inner(),
-                    Term::universe(Universe(0)),
-                    b2.clone().into_inner(),
-                    Term::universe(Universe(0)),
-                )];
+                let (Term::Universe(u1), Term::Universe(u2)) = (ty1, ty2) else {
+                    panic!("rigid_rigid: mismatch");
+                };
+                // let xs = vec![Equation::new(
+                //     b1.clone().into_inner(),
+                //     Term::universe(Universe(0)),
+                //     b2.clone().into_inner(),
+                //     Term::universe(Universe(0)),
+                // )];
                 self.active(
                     0,
                     Problem::Unify(Equation::new(
                         *a1.clone().ty,
-                        Term::universe(Universe(0)),
+                        Term::universe(u1),
                         *a2.clone().ty,
-                        Term::universe(Universe(0)),
+                        Term::universe(u2),
                     )),
                 )?;
-                let ctx_len_1 = tm1.lam_len() - 1;
-                let ctx_len_2 = tm2.lam_len() - 1;
                 info!(target: "additional", "Problem::All 3");
+                let x = self.fresh_name();
                 self.active(
                     id,
                     Problem::all(
-                        Bind::unnamed(Param::Twins(*a1.clone().ty, *a2.clone().ty)),
+                        Bind::explicit(
+                            x.uid(),
+                            Param::Twins(*a1.clone().ty, *a2.clone().ty),
+                            Ident::new("x"),
+                        ),
                         Problem::Unify(Equation::new(
-                            tm1.apply(vec![Term::from_dbi(ctx_len_1)]),
-                            b1.into_inner(),
-                            tm2.apply(vec![Term::from_dbi(ctx_len_2)]),
-                            b2.into_inner(),
+                            tm1.apply(vec![Term::var(x)]),
+                            Term::universe(u1),
+                            tm2.apply(vec![Term::var(x)]),
+                            Term::universe(u2),
                         )),
                     ),
                 )?;
@@ -1479,6 +1526,7 @@ impl TypeCheckState {
                         *yy.clone().ty,
                     )),
                 )?;
+                todo!("inst");
                 return Ok((t.into_inner(), u.into_inner()));
             }
             _ => {}
@@ -1553,9 +1601,9 @@ impl TypeCheckState {
      */
     fn flex_flex_same(&mut self, id: Id, equation: Equation) -> Result<()> {
         let Equation {
-            tm1: Term::Meta(mi_a, es),
+            tm1: Term::Var(Var::Meta(mi_a), es),
             ty1,
-            tm2: Term::Meta(mi_b, es_),
+            tm2: Term::Var(Var::Meta(mi_b), es_),
             ty2,
         } = equation.clone() else {
             panic!("flex_flex_same: not a meta equation")
@@ -1602,9 +1650,9 @@ impl TypeCheckState {
      */
     fn flex_flex(&mut self, mut entries: Vec<Entry>, id: Id, equation: Equation) -> Result<()> {
         let Equation {
-            tm1: Term::Meta(mi_a, ds),
+            tm1: Term::Var(Var::Meta(mi_a), ds),
             ty1,
-            tm2: Term::Meta(mi_b, es),
+            tm2: Term::Var(Var::Meta(mi_b), es),
             ty2,
         } = equation.clone() else {
             panic!("todo");
@@ -1711,7 +1759,7 @@ impl TypeCheckState {
      */
     fn try_invert(&mut self, id: Id, equation: Equation, ty: Term) -> Result<bool> {
         let Equation {
-            tm1: Term::Meta(mi, es),
+            tm1: Term::Var(Var::Meta(mi), es),
             ty1,
             tm2: s,
             ty2,
@@ -1765,7 +1813,7 @@ impl TypeCheckState {
     */
     fn try_prune(&mut self, id: Id, equation: Equation) -> Result<bool, Error> {
         let Equation {
-            tm1: Term::Meta(mi, ds),
+            tm1: Term::Var(Var::Meta(mi), ds),
             ty1,
             tm2: t,
             ty2,
@@ -1795,7 +1843,6 @@ impl TypeCheckState {
         let (x, t) = b.unbind(self);
         // let t = b.into_inner();
         let mut vs = vs;
-        // let unbound_dbi = t.ctx_len();
         vs.insert(x.to_name());
         // vs.insert(Var::Bound(0)); // FIXME:
         self.prune_tm(vs, t)
@@ -1935,7 +1982,7 @@ impl TypeCheckState {
 
      */
     fn prune_tm(&mut self, vs: HashSet<Name>, t: Term) -> Result<Vec<Instantiation>> {
-        trace!(target: "unify", "prune_tm {vs:?} {t:?}");
+        trace!(target: "unify", "prune_tm {vs:?} {t}");
         match t.clone() {
             Term::Universe(_) => Ok(Vec::new()),
             Term::Pi(a, b) => {
@@ -1950,7 +1997,7 @@ impl TypeCheckState {
                 let v = self.prune_under(vs.clone(), lam)?;
                 Ok(v)
             }
-            Term::Meta(mi, es) => self.prune_meta(vs.clone(), mi, es),
+            Term::Var(Var::Meta(mi), es) => self.prune_meta(vs.clone(), mi, es),
             Term::Var(z, es) => {
                 if vs.contains(&z.name()) {
                     self.prune_elims(vs.clone(), es)
@@ -2058,9 +2105,9 @@ impl TypeCheckState {
                 };
                 // TODO: check pi binder type
                 let u = self.equalise(&u_.ty, &*s, &*t)?;
-                es3.push(Elim::app(u));
+                es3.push(Elim::app(u.clone()));
                 trace!(target: "unify", "equalise_n -> Pi");
-                Ok((v3, es3, v_.into_inner()))
+                Ok((v3, es3, v_.instantiate_with(u, self)))
             }
             #[cfg(not(test))]
             (v, es, v2, es2) => {
@@ -2115,33 +2162,33 @@ impl TypeCheckState {
             (Term::Universe(_), Term::Pi(a, b), Term::Pi(s, t)) => {
                 let u = self.equalise(&Term::Universe(Universe(0)), &*a.ty, &*s.ty)?;
                 let bind_a = a.clone().map_term(|_| u.clone().boxed());
-                let b =
-                    self.binds_in_scope(a.clone().map_term(|_| u.clone()), b, t, |tcs, b, t| {
-                        tcs.equalise(&Term::Universe(Universe(0)), &b, &t)
-                    })?;
+                let b = self.binds_in_scope(
+                    a.clone().map_term(|_| u.clone()),
+                    b.clone(),
+                    t.clone(),
+                    |tcs, x, b, t| tcs.equalise(&Term::Universe(Universe(0)), &b, &t),
+                )?;
                 Ok(Term::Pi(bind_a, b))
             }
             (Term::Pi(a, b), f, g) => {
                 // let tcs = self.clone();
-                let b = self.bind_in_scope(a.clone().map_term(|x| *x), b, |tcs, b| {
+                let b = self.bind_in_scope(a.clone().map_term(|x| *x), b.clone(), |tcs, x, b| {
                     // TODO: check lambda binder type
-                    let ctx_len = f.lam_len() - 1;
-                    let f_new = f.clone().apply(vec![Term::from_dbi(ctx_len)]);
+                    let f_new = f.clone().apply(vec![Term::var(x)]);
                     let f_new = tcs.simplify(f_new)?.eta_contract(); // TODO: remove?
-                    let ctx_len = g.lam_len() - 1;
-                    let g_new = g.clone().apply(vec![Term::from_dbi(ctx_len)]);
+                    let g_new = g.clone().apply(vec![Term::var(x)]);
                     let g_new = tcs.simplify(g_new)?.eta_contract(); // TODO: remove?
                     trace!(target: "unify", "equalise: lambda body:\n\tf: {f_new}\n\tg: {g_new}");
                     tcs.equalise(&b, &f_new, &g_new)
                 })?;
-                Ok(Term::lam(a.clone(), b.into_inner()))
+                Ok(Term::Lam(Lambda(a.clone(), b)))
             }
             (ty, Term::Var(v, es), Term::Var(v2, es2)) => {
                 let (v3, es3, ty2) = self.equalise_n(v, es.clone(), v2, es2.clone())?;
                 self.equalise(&Type::universe(Universe(0)), ty, &ty2)?;
                 Ok(Term::Var(v3, es3))
             }
-            (ty, Term::Meta(v, es), Term::Meta(v2, es2)) => self.equalise(
+            (ty, Term::Var(Var::Meta(v), es), Term::Var(Var::Meta(v2), es2)) => self.equalise(
                 ty,
                 &Term::Var(Var::Meta(*v), es.clone()),
                 &Term::Var(Var::Meta(*v2), es2.clone()),
@@ -2169,34 +2216,39 @@ impl TypeCheckState {
     fn bind_in_scope(
         &mut self,
         x: Bind,
-        b: &Closure,
-        f: impl Fn(&mut Self, &Term) -> Result<Term, Error>,
+        b: Closure,
+        f: impl Fn(&mut Self, Name, &Term) -> Result<Term, Error>,
     ) -> Result<Closure> {
+        let x = x.unbind(self);
         self.gamma.push(x.clone());
         self.gamma2.push(x.clone().map_term(Param::P));
-        let Closure::Plain(bb) = &b;
-        let res = f(self, &*bb);
+        let b = b.unbind(x.name, self);
+        // let Closure::Plain(bb) = b;
+        let res = f(self, x.to_name(), &b);
         self.gamma2.pop();
         self.gamma.pop();
-        res.map(|b| Closure::plain(b))
+        res.map(|b| Lambda::bind(x.boxed(), b).1)
     }
 
     fn binds_in_scope(
         &mut self,
         x: Bind,
-        b: &Closure,
-        t: &Closure,
-        f: impl Fn(&mut Self, &Term, &Term) -> Result<Term, Error>,
+        b: Closure,
+        t: Closure,
+        f: impl Fn(&mut Self, Name, &Term, &Term) -> Result<Term, Error>,
     ) -> Result<Closure> {
+        let x = x.unbind(self);
         self.gamma.push(x.clone());
         self.gamma2.push(x.clone().map_term(Param::P));
         info!(target: "additional", "binds_in_scope {}, ctx = {}", x, self.gamma2);
-        let Closure::Plain(bb) = &b;
-        let Closure::Plain(tt) = &t;
-        let res = f(self, &*bb, &*tt);
+        // let Closure::Plain(bb) = &b;
+        // let Closure::Plain(tt) = &t;
+        let b = b.unbind(x.name, self);
+        let t = t.unbind(x.name, self);
+        let res = f(self, x.to_name(), &b, &t);
         self.gamma2.pop();
         self.gamma.pop();
-        res.map(|b| Closure::plain(b))
+        res.map(|b| Lambda::bind(x.boxed(), b).1)
     }
 
     /*
@@ -2279,10 +2331,9 @@ impl TypeCheckState {
                 // let q = self.simplify_problem(*b.clone())?;
                 let fv_q = q.fvs();
                 // trace!(target: "unify", "q' = {q}");
-                // let ctx_len = q.ctx_len();
-                // let x = Var::Single(ctx_len);
-                trace!(target: "unify", "q = {q}, fvs q = {:?}", fv_q);
-                if !fv_q.contains(&p.to_name()) {
+                let x = &p.to_name();
+                trace!(target: "unify", "q = {q}, fvs q = {{{}}}, x = {x}", fv_q.iter().map(ToString::to_string).join(", "));
+                if !fv_q.contains(x) {
                     trace!(target: "unify", "fv_q not contains {p}");
                     self.active(id, q)
                 } else {
@@ -2295,6 +2346,7 @@ impl TypeCheckState {
                                 Some((y, a, z, bb, s, _)) => {
                                     let problem = q.subst_with(Substitution::one(s), self); // x(p) := s
                                     trace!(target: "unify", "re-solving #{id} 1");
+                                    todo!("check bind");
                                     self.solver(
                                         id,
                                         Problem::alls(
@@ -2367,27 +2419,34 @@ impl TypeCheckState {
         trace!(target: "unify", "lowering ?{} : {} in {}", mi, term, tele);
         match term {
             Term::Pi(a, b) => {
+                let x = self.fresh_name();
                 let m = self.split_sig(Tele::default(), *a.ty.clone())?;
                 match m {
                     Some((y, aa, z, bb, s, (u, v))) => {
                         let t = Term::pis(
-                            vec![Bind::unnamed(aa.clone()), Bind::unnamed(bb)],
+                            vec![
+                                Bind::explicit(y.uid(), aa.clone(), Ident::new("x")),
+                                Bind::explicit(z.uid(), bb, Ident::new("x")),
+                            ],
                             b.clone().instantiate_with(s, self),
                         );
                         self.hole(tele.clone(), t, |tcs, w| {
+                            let bind = Bind::explicit(x.uid(), a.ty, Ident::new("x"));
                             tcs.define(
                                 tele,
                                 mi,
-                                Term::Pi(a.clone(), b),
-                                Term::lam(a.clone(), w.apply(vec![u]).apply(vec![v])),
+                                Term::Pi(bind.clone(), b),
+                                Term::lam(bind.clone(), w.apply(vec![u]).apply(vec![v])),
                             )?;
                             Ok(true)
                         })
                     }
                     None => {
                         let mut tel = tele.clone();
-                        tel.0.push(a.clone().map_term(|x| *x));
-                        self.lower(tel, mi, b.into_inner())
+                        let bind = Bind::explicit(x.uid(), a.ty, Ident::new("x"));
+                        tel.0.push(bind.map_term(|x| *x));
+                        let term1 = b.instantiate_with(Term::var(x), self);
+                        self.lower(tel, mi, term1)
                     }
                 }
             }
@@ -2413,13 +2472,15 @@ impl TypeCheckState {
     fn split_sig(
         &mut self,
         mut tele: Tele,
-        // x: Var,
         term: Term,
-    ) -> Result<Option<(Var, Term, Var, Term, Term, (Term, Term))>> {
+    ) -> Result<Option<(Name, Term, Name, Term, Term, (Term, Term))>> {
         match term {
             Term::Pi(a, b) => {
-                tele.0.push(a.clone().map_term(|x| *x));
-                self.split_sig(tele, b.into_inner())
+                let aa = self.fresh_name();
+                tele.0
+                    .push(Bind::explicit(aa.uid(), a.ty, Ident::new("a")).map_term(|x| *x));
+                let term1 = b.instantiate_with(Term::var(aa), self);
+                self.split_sig(tele, term1)
             }
             _ => Ok(None),
         }
@@ -2538,10 +2599,12 @@ impl TypeCheckState {
     }
 
     fn postpone(&mut self, status: Status, problem: Problem) -> Result<()> {
+        info!(target: "additional", "postponing {problem}");
         let wrapped_problem = self
             .gamma2
             .clone()
             .into_iter()
+            .rev()
             .fold(problem, |problem, bind| Problem::all(bind, problem));
         info!(target: "additional", "Problem::All 4, wrapped = {wrapped_problem}, Γ2 = {}, mctx = {}", self.gamma2, self.meta_ctx2.0);
         self.push_r(Right(Entry::Q(status, wrapped_problem)))
@@ -2571,17 +2634,11 @@ impl TypeCheckState {
         ty: Type,
         f: impl FnOnce(&mut Self, Term) -> Result<T>,
     ) -> Result<T> {
-        let alpha = self.fresh_mi();
+        let alpha = self.fresh_name().uid();
         self.push_l(Entry::E(alpha, Term::pis(tele.clone(), ty), Decl::Hole))?;
-        let r = f(self, Term::Meta(alpha, tele.to_elims()))?;
+        let r = f(self, Term::meta_with(alpha, tele.to_elims()))?;
         self.go_left()?;
         Ok(r)
-    }
-
-    fn fresh_mi(&mut self) -> MI {
-        let mi = self.next_mi;
-        self.next_mi = self.next_mi + 1;
-        mi
     }
 
     /*
@@ -2937,7 +2994,8 @@ Initial context:
         }
     });
     tcs.meta_ctx2.0 = Ctx(ezs);
-    tcs.next_mi = META_ID.load(Ordering::Relaxed);
+    tcs.next_uid
+        .store(META_ID.load(Ordering::Relaxed), Ordering::Relaxed);
     tcs.gamma.clear();
     // info!(target: "additional", "gamma2 clear");
     tcs.gamma2.clear();
@@ -3026,7 +3084,7 @@ Initial context:
 > patternUnify = runTestSolved >> runTestStuck >> runTestFailed
  */
 
-struct Metas(LazyLock<Mutex<(HashMap<String, MI>, HashMap<MI, String>)>>);
+pub struct Metas(LazyLock<Mutex<(HashMap<String, MI>, HashMap<MI, String>)>>);
 impl Metas {
     fn fresh(&self, s: &str) -> MI {
         let mut lock = self.0.lock().unwrap();
@@ -3078,23 +3136,33 @@ fn test_all() -> eyre::Result<()> {
     > boy = lifted . s2n
     */
 
-    let lift = |x: Var, ty: Type, mut g: MetaSubst, mut es: Vec<Entry>| {
+    let lift = |x: Name, ty: Type, mut g: MetaSubst, mut es: Vec<Entry>| {
         for e in es.iter_mut() {
             match e {
                 Entry::E(mi, t, d) => {
                     let i = *mi;
                     let mut tt = t.clone();
                     tt.meta_subst(&g);
-                    let t = Type::Pi(Bind::unnamed(ty.clone().boxed()), Closure::plain(tt));
-                    *e = Entry::E(i, t, d.clone());
-                    g.insert(
-                        i,
-                        Term::meta_with(i, vec![Elim::App(Term::from_dbi(0).boxed())]),
+                    let t = Type::pi(
+                        Bind::explicit(x.uid(), ty.clone().boxed(), Ident::new("x")),
+                        tt,
                     );
+                    *e = Entry::E(i, t, d.clone());
+                    if matches!(x, Name::Free(_)) {
+                        println!("WARM: got free var in lift");
+                    }
+                    g.insert(i, Term::meta_with(i, vec![Elim::App(Term::var(x).boxed())]));
                 }
                 Entry::Q(s, p) => {
                     p.meta_subst(&g);
-                    let p = Problem::alls(vec![Bind::unnamed(Param::P(ty.clone()))], p.clone());
+                    let p = Problem::alls(
+                        vec![Bind::explicit(
+                            x.uid(),
+                            Param::P(ty.clone()),
+                            Ident::new("x"),
+                        )],
+                        p.clone(),
+                    );
                     *e = Entry::Q(*s, p);
                 }
             }
@@ -3102,16 +3170,18 @@ fn test_all() -> eyre::Result<()> {
         es
     };
 
-    let lifted = |x: Var, t: Type, es: Vec<Entry>| lift(x, t, MetaSubst::default(), es);
+    let lifted = |x: Name, t: Type, es: Vec<Entry>| lift(x, t, MetaSubst::default(), es);
 
     let gal = |x: &str, t: Type| Entry::E(METAS.fresh(x), t, Decl::Hole);
     let eq = |x: &str, s: Type, s_: Term, t: Type, t_: Term| {
         Entry::Q(Status::Active, Problem::Unify(Equation::new(s_, s, t_, t)))
     };
-    let boy = |x: &str, t: Type, es: Vec<Entry>| lifted(Var::bound(0), t, es); // TODO: fix
+    let boy = |x: Name, t: Type, es: Vec<Entry>| lifted(x, t, es); // TODO: fix
 
     let bool_ty = Type::Data(ValData::new(0, vec![]));
 
+    let x = Name::Free(1);
+    let y = Name::Free(2);
     let tests = vec![
         /*
         >           ( gal "A" SET
@@ -3119,17 +3189,17 @@ fn test_all() -> eyre::Result<()> {
         >           : eq "p" SET (mv "A") SET (mv "B")
         >           : [])
                  */
-        // vec![
-        //     gal("A", Type::Universe(Universe(0))),
-        //     gal("B", Type::Universe(Universe(0))),
-        //     eq(
-        //         "p",
-        //         Type::Universe(Universe(0)),
-        //         Term::meta(METAS.s2n("A")),
-        //         Type::Universe(Universe(0)),
-        //         Term::meta(METAS.s2n("B")),
-        //     ),
-        // ],
+        vec![
+            gal("A", Type::Universe(Universe(0))),
+            gal("B", Type::Universe(Universe(0))),
+            eq(
+                "p",
+                Type::Universe(Universe(0)),
+                Term::meta(METAS.s2n("A")),
+                Type::Universe(Universe(0)),
+                Term::meta(METAS.s2n("B")),
+            ),
+        ],
         /*
         >         , ( gal "A" BOOL
         >           : gal "B" (BOOL --> BOOL)
@@ -3138,23 +3208,23 @@ fn test_all() -> eyre::Result<()> {
         >             : [])
         >           )
                  */
-        // vec![
-        //     gal("A", bool_ty.clone()),
-        //     gal("B", Type::arrow(bool_ty.clone(), bool_ty.clone())),
-        // ]
-        // .into_iter()
-        // .chain(boy(
-        //     "x",
-        //     bool_ty.clone(),
-        //     vec![eq(
-        //         "p",
-        //         bool_ty.clone(),
-        //         Term::meta(METAS.s2n("A")),
-        //         bool_ty.clone(),
-        //         Term::meta(METAS.s2n("B")).apply(vec![Term::from_dbi(0)]),
-        //     )],
-        // ))
-        // .collect::<Vec<_>>(),
+        vec![
+            gal("A", bool_ty.clone()),
+            gal("B", Type::arrow(bool_ty.clone(), bool_ty.clone())),
+        ]
+        .into_iter()
+        .chain(boy(
+            x,
+            bool_ty.clone(),
+            vec![eq(
+                "p",
+                bool_ty.clone(),
+                Term::meta(METAS.s2n("A")),
+                bool_ty.clone(),
+                Term::meta(METAS.s2n("B")).apply(vec![Term::var(x)]),
+            )],
+        ))
+        .collect::<Vec<_>>(),
         /*
         >           -- test 2: restrict B to second argument
         >         , ( gal "A" SET

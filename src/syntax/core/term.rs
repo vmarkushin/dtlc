@@ -40,6 +40,7 @@ impl Lambda {
     pub fn unbind(self, tcs: &mut TypeCheckState) -> (Bind<Box<Term>>, Term) {
         let mut bind = self.0;
         bind.name = tcs.next_uid();
+        assert_ne!(bind.name, 0);
         let term = self.1.unbind(bind.name, tcs);
         (bind, term)
     }
@@ -214,10 +215,7 @@ pub enum Term {
     Lam(Lambda),
     /// Constructor invocation, fully applied.
     Cons(ConHead, Vec<Term>),
-    /// Meta reference, with eliminations.
-    /// This does not appear in Cockx18, but we can find it in the
-    /// [implementation](https://hackage.haskell.org/package/Agda-2.6.0.1/docs/Agda-Syntax-Internal.html#v:MetaV).
-    Meta(MI, Vec<Elim>),
+    // Meta(MI, Vec<Elim>),
     /// Variable elimination, in spine-normal form.
     /// (so we have easy access to application arguments).<br/>
     /// This is convenient for meta resolution and termination check.
@@ -297,6 +295,12 @@ pub enum Term {
 }
 
 impl Term {
+    pub(crate) fn var(p0: Name) -> Term {
+        Term::Var(Var::Single(p0), vec![])
+    }
+}
+
+impl Term {
     // pub(crate) fn twin_l(p0: Term) -> Term {
     //     Term::Var(Var::Twin())
     // }
@@ -355,7 +359,7 @@ impl Term {
                             && es.last().unwrap().is_app()
                             && es.last().unwrap().clone().into_app() == Term::from_dbi(0) =>
                     {
-                        es.pop();
+                        let _z = es.pop().unwrap();
                         es = es.subst(Substitution::strengthen(1));
                         return Term::Var(y, es);
                     }
@@ -372,15 +376,6 @@ impl Term {
                         let _z = args.pop().unwrap();
                         args = args.subst(Substitution::strengthen(1));
                         return Term::Data(ValData { def, args });
-                    }
-                    Term::Meta(mi, mut es)
-                        if !es.is_empty()
-                            && es.last().unwrap().is_app()
-                            && es.last().unwrap().clone().into_app() == Term::from_dbi(0) =>
-                    {
-                        let _z = es.pop().unwrap();
-                        es = es.subst(Substitution::strengthen(1));
-                        return Term::Meta(mi, es);
                     }
                     Term::Redex(f, x, mut es)
                         if !es.is_empty()
@@ -399,7 +394,6 @@ impl Term {
                     n => Term::Lam(Lambda(x, Closure::Plain(n.boxed()))),
                 }
             }
-            Term::Meta(mi, es) => Term::Var(Var::Meta(mi), es),
             t => t,
         }
     }
@@ -452,6 +446,21 @@ pub trait BoundFreeVars {
     fn bound_free_vars(&mut self, vars: &HashMap<UID, DBI>, depth: usize);
 }
 
+impl<T: BoundFreeVars> BoundFreeVars for Box<T> {
+    fn bound_free_vars(&mut self, vars: &HashMap<UID, DBI>, depth: usize) {
+        self.as_mut().bound_free_vars(vars, depth);
+    }
+}
+
+impl<T: BoundFreeVars> BoundFreeVars for Bind<T> {
+    fn bound_free_vars(&mut self, vars: &HashMap<UID, DBI>, depth: usize) {
+        self.ty.bound_free_vars(vars, depth);
+        if vars.contains_key(&self.name) {
+            self.name = 0;
+        }
+    }
+}
+
 impl<T: BoundFreeVars> BoundFreeVars for Vec<T> {
     fn bound_free_vars(&mut self, vars: &HashMap<UID, DBI>, depth: usize) {
         for t in self {
@@ -481,21 +490,31 @@ impl BoundFreeVars for Closure {
 impl BoundFreeVars for Term {
     fn bound_free_vars(&mut self, vars: &HashMap<UID, DBI>, depth: usize) {
         match self {
+            Term::Var(Var::Meta(_), args) => {
+                args.bound_free_vars(vars, depth);
+            }
             Term::Var(var, args) => {
                 args.bound_free_vars(vars, depth);
-                let uid = if let Var::Single(Name::Free(uid)) = var && *uid != 0 {
-                    *uid
-                } else {
-                    return;
+                match var {
+                    Var::Single(Name::Free(uid)) if *uid != 0 => {
+                        if let Some(ix) = vars.get(uid) {
+                            let new_dbi = *ix + depth;
+                            // trace!("bound {} := {}", uid, new_dbi);
+                            *var = Var::bound(new_dbi);
+                        }
+                    }
+                    Var::Twin(Name::Free(uid), twin) => {
+                        if let Some(ix) = vars.get(uid) {
+                            let new_dbi = *ix + depth;
+                            // trace!("bound {} := {}", uid, new_dbi);
+                            *var = Var::Twin(Name::Bound(new_dbi), *twin);
+                        }
+                    }
+                    _ => return,
                 };
-                if let Some(ix) = vars.get(&uid) {
-                    let new_dbi = *ix + depth;
-                    trace!("bound {} := {}", uid, new_dbi);
-                    *var = Var::bound(new_dbi);
-                }
             }
             Term::Redex(Func::Lam(lam), _, args) => {
-                lam.0.ty.bound_free_vars(vars, depth);
+                lam.0.bound_free_vars(vars, depth);
                 lam.1.bound_free_vars(vars, depth);
                 args.bound_free_vars(vars, depth);
             }
@@ -524,17 +543,14 @@ impl BoundFreeVars for Term {
                 data.args.bound_free_vars(vars, depth);
             }
             Term::Pi(x, ret) => {
-                x.ty.bound_free_vars(vars, depth);
+                x.bound_free_vars(vars, depth);
                 ret.bound_free_vars(vars, depth);
             }
             Term::Lam(lam) => {
-                lam.0.ty.bound_free_vars(vars, depth);
+                lam.0.bound_free_vars(vars, depth);
                 lam.1.bound_free_vars(vars, depth);
             }
             Term::Cons(_, args) => {
-                args.bound_free_vars(vars, depth);
-            }
-            Term::Meta(_, args) => {
                 args.bound_free_vars(vars, depth);
             }
             Term::Id(_id) => {
@@ -599,7 +615,6 @@ impl Term {
                 | Term::Pi(..)
                 | Term::Lam(..)
                 | Term::Cons(..)
-                | Term::Meta(..)
                 | Term::Var(..)
                 | Term::Id(..)
                 | Term::Refl(..)
@@ -618,8 +633,13 @@ impl Term {
         Term::Lam(Lambda::bind(p0, p1))
     }
 
-    pub fn lams<T: Into<Bind<Box<Term>>>>(ps: impl IntoIterator<Item = T>, body: Term) -> Term {
+    pub fn lams<T: Into<Bind<Box<Term>>>, I>(ps: I, body: Term) -> Term
+    where
+        I: IntoIterator<Item = T>,
+        <I as IntoIterator>::IntoIter: DoubleEndedIterator,
+    {
         ps.into_iter()
+            .rev()
             .fold(body, |body, p| Term::lam(p.into(), body))
         // Term::Lam(Lambda(p0, Closure::Plain(box body)))
     }
@@ -633,8 +653,13 @@ impl Term {
         Term::Pi(Bind::unnamed(p0.boxed()), Closure::Plain(p1.boxed()))
     }
 
-    pub fn pis<T: Into<Bind<Box<Term>>>>(ps: impl IntoIterator<Item = T>, body: Term) -> Term {
+    pub fn pis<T: Into<Bind<Box<Term>>>, I>(ps: I, body: Term) -> Term
+    where
+        I: IntoIterator<Item = T>,
+        <I as IntoIterator>::IntoIter: DoubleEndedIterator,
+    {
         ps.into_iter()
+            .rev()
             .fold(body, |body, p| Term::pi(p.into(), body))
     }
 
@@ -647,12 +672,12 @@ impl Term {
     }
 
     pub fn is_meta(&self) -> bool {
-        matches!(self, Term::Meta(_, _))
+        matches!(self, Term::Var(Var::Meta(..), _))
     }
 
     pub fn as_meta(&self) -> Option<(MI, &Vec<Elim>)> {
         match self {
-            Term::Meta(i, elims) => Some((*i, elims)),
+            Term::Var(Var::Meta(i), elims) => Some((*i, elims)),
             _ => None,
         }
     }
@@ -694,6 +719,7 @@ pub enum Closure {
 
 impl Closure {
     pub(crate) fn unbind(self, uid: UID, tcs: &mut TypeCheckState) -> Term {
+        assert_ne!(uid, 0);
         let inner = self.into_inner();
         inner.subst_with(Substitution::one(Term::free_var(uid)), tcs)
     }
@@ -777,11 +803,11 @@ impl Term {
     }
 
     pub fn meta(index: MI) -> Self {
-        Term::Meta(index, vec![])
+        Term::meta_with(index, vec![])
     }
 
     pub fn meta_with(index: MI, params: Vec<Elim>) -> Self {
-        Term::Meta(index, params)
+        Term::Var(Var::Meta(index), params)
     }
 
     pub fn universe(uni: Universe) -> Self {

@@ -2,7 +2,7 @@ use crate::check::meta::MetaSol;
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
 use crate::ensure;
-use crate::syntax::core::{Bind, Boxed, Tele};
+use crate::syntax::core::{Bind, Boxed, Tele, Var};
 use crate::syntax::core::{
     Case, Closure, Elim, FoldVal, Func, Lambda, Pat, SubstWith, Substitution, Term, ValData,
 };
@@ -251,7 +251,7 @@ impl Unify for Tele {
 
 fn check_solution(meta: MI, rhs: &Term) -> Result<()> {
     rhs.try_fold_val((), |(), v| match v {
-        Term::Meta(mi, ..) if mi == &meta => Err(Error::MetaRecursion(*mi)),
+        Term::Var(Var::Meta(mi), ..) if mi == &meta => Err(Error::MetaRecursion(*mi)),
         _ => Ok(()),
     })
 }
@@ -308,6 +308,8 @@ impl TypeCheckState {
     #[track_caller]
     fn unify_val(&mut self, left: &Term, right: &Term) -> Result<()> {
         debug!("{}Unify val {} = {}", self.tc_depth_ws(), left, right);
+        use crate::syntax::core::Var::Meta;
+        // use crate::syntax::Var as V;
         use Term::*;
         match (left, right) {
             (Universe(sub_l), Universe(sup_l)) if sub_l == sup_l => Ok(()),
@@ -323,7 +325,7 @@ impl TypeCheckState {
             (Cons(c0, a), Cons(c1, b)) if c0.cons_gi == c1.cons_gi => {
                 Unify::unify(self, a.as_slice(), b.as_slice())
             }
-            (Meta(i, a), Meta(j, b)) => {
+            (Var(Meta(i), a), Var(Meta(j), b)) => {
                 if i == j {
                     Unify::unify(self, a.as_slice(), b.as_slice())
                 } else if a.is_empty() {
@@ -334,8 +336,10 @@ impl TypeCheckState {
                     unimplemented!()
                 }
             }
-            (Meta(i, a), b) | (b, Meta(i, a)) if a.is_empty() => self.unify_meta_with(b, *i),
-            (Meta(_, a), _) | (_, Meta(_, a)) if !a.is_empty() => {
+            (Var(Meta(i), a), b) | (b, Var(Meta(i), a)) if a.is_empty() => {
+                self.unify_meta_with(b, *i)
+            }
+            (Var(Meta(_), a), _) | (_, Var(Meta(_), a)) if !a.is_empty() => {
                 // FIXME: figure out how to handle this case
                 Ok(())
             }

@@ -228,11 +228,12 @@ pub struct Bind<T> {
 
 impl<T> Bind<T> {
     pub(crate) fn to_name(&self) -> Name {
-        // if self.name == 0 {
-        //     Name::Bound(self.name)
-        // } else {
-        Name::Free(self.name)
-        // }
+        // assert_ne!(self.name, 0);
+        if self.name == 0 {
+            Name::Bound(self.name)
+        } else {
+            Name::Free(self.name)
+        }
     }
 }
 
@@ -277,20 +278,36 @@ impl<T> From<Bind<T>> for Bind<Box<T>> {
 
 impl Display for Bind<Term> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        if self.licit == Plicitness::Implicit {
-            write!(f, "{{{}:{}}}", self.ident, self.ty)
+        let name = if self.name < 26 {
+            let ci = (97 + self.name) as u8 as char;
+            format!("{}", ci)
         } else {
-            write!(f, "{}:{}", self.ident, self.ty)
+            format!("#{}", self.name)
+        };
+        if self.licit == Plicitness::Implicit {
+            write!(f, "{{{}[{}]:{}}}", self.ident, name, self.ty)
+        } else {
+            write!(f, "{}[{}]:{}", self.ident, name, self.ty)
         }
     }
 }
 
 impl Display for Bind<Box<Term>> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        if self.licit == Plicitness::Implicit {
-            write!(f, "{{{}:{}}}", self.ident, self.ty)
+        let name = if self.name < 26 {
+            if self.name == 0 {
+                "-".to_string()
+            } else {
+                let ci = (97 + self.name) as u8 as char;
+                format!("{}", ci)
+            }
         } else {
-            write!(f, "{}:{}", self.ident, self.ty)
+            format!("#{}", self.name)
+        };
+        if self.licit == Plicitness::Implicit {
+            write!(f, "{{{}[{}]:{}}}", self.ident, name, self.ty)
+        } else {
+            write!(f, "{}[{}]:{}", self.ident, name, self.ty)
         }
     }
 }

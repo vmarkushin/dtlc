@@ -40,10 +40,6 @@ impl Display for Term {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         use Term::*;
         match self {
-            Meta(mi, a) => {
-                f.write_str("?")?;
-                display_application(f, mi, a)
-            }
             Var(v, a) => display_application(f, &format!("{}", v), a),
             Universe(l) => write!(f, "{}", l),
             Pi(Bind { licit, ty, .. }, clos) => match licit {
@@ -106,6 +102,7 @@ impl Display for Name {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Name::Free(i) => {
+                assert_ne!(*i, 0);
                 if *i < 26 {
                     let ci = (97 + *i) as u8 as char;
                     write!(f, "{}", ci)
@@ -315,7 +312,7 @@ impl Display for Pretty<'_, Term> {
                     display_application(f, &cons.name, &args)
                 }
             }
-            Term::Meta(mi, args) | Term::Var(Var::Meta(mi), args) => {
+            Term::Var(Var::Meta(mi), args) => {
                 let args = args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
                 display_application(f, &format!("?{}", mi), &args)
             }

@@ -184,10 +184,16 @@ impl<B> Default for Ctx<B> {
 
 pub trait Binder {
     type Param: Display;
-    type Var: Into<usize> + Display + Copy;
+    type Var: Into<usize> + Display + Copy + Into<Name>;
 
     fn lookup(&self, var: &Self::Var) -> Option<Bind<&Self::Param>>;
     fn to_name(&self) -> Name;
+}
+
+impl From<DBI> for Name {
+    fn from(value: DBI) -> Self {
+        Name::Bound(value)
+    }
 }
 
 impl Binder for Bind {
@@ -221,10 +227,18 @@ impl<B: Binder + Debug> Ctx<B> {
         // self.0
         //     .get(self.var_to_idx(v))
         //     .unwrap_or_else(|| panic!("Invalid DBI: {}", v))
-        let x = self
-            .0
-            .get(self.var_to_idx(v))
-            .unwrap_or_else(|| panic!("Invalid DBI: {}", v));
+        let n: Name = v.into();
+        let x = match n {
+            Name::Free(i) => self
+                .0
+                .iter()
+                .find(|x| x.to_name() == Name::Free(i))
+                .unwrap_or_else(|| panic!("Invalid free var: {}", v)),
+            Name::Bound(d) => self
+                .0
+                .get(self.var_to_idx(v))
+                .unwrap_or_else(|| panic!("Invalid DBI: {}", v)),
+        };
         x.lookup(&v)
             .unwrap_or_else(|| panic!("Invalid binder: {:?}", x))
     }
