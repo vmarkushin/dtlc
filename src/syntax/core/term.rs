@@ -107,6 +107,13 @@ impl Var {
             Var::Meta(mi) => Name::Free(*mi),
         }
     }
+
+    pub(crate) fn twin(&self) -> Option<Twin> {
+        match self {
+            Var::Twin(_, twin) => Some(*twin),
+            _ => None,
+        }
+    }
 }
 
 impl Var {
@@ -189,6 +196,18 @@ pub struct Case {
     pub body: Term,
 }
 
+impl Case {
+    pub fn unbind(self, tcs: &mut TypeCheckState) -> (Vec<Name>, Term) {
+        let Case { pattern, mut body } = self;
+
+        let xs = pattern.unbind(tcs);
+        for x in xs.iter().rev() {
+            body = body.unbind(x.uid(), tcs);
+        }
+        (xs, body)
+    }
+}
+
 impl Display for Case {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "  | {} => {}", self.pattern, self.body)
@@ -244,8 +263,8 @@ pub enum Term {
     Refl(Box<Term>),
     /// Application (function elimination).
     Redex(Func, Ident, Vec<Elim>),
-    /// Data elimination.
-    Match(Box<Term>, Vec<Case>),
+    /// Data elimination. With the term being matched on, cases and the return type.
+    Match(Box<Term>, Vec<Case> /*Type*/),
     /// General congruence term.
     ///
     /// ```text
@@ -292,6 +311,21 @@ pub enum Term {
     ///
     /// One can think of `ap` as a higher-dimensional explicit substitution.
     Ap(Tele, Vec<Term>, Box<Term>),
+}
+
+impl Term {
+    pub(crate) fn free_var_view(&self) -> Option<UID> {
+        match self {
+            Term::Var(Var::Single(Name::Free(uid)), es) if es.is_empty() => Some(*uid),
+            _ => None,
+        }
+    }
+}
+
+impl Term {
+    pub(crate) fn unbind(self, uid: UID, tcs: &mut TypeCheckState) -> Term {
+        self.subst_with(Substitution::one(Term::free_var(uid)), tcs)
+    }
 }
 
 impl Term {
@@ -524,15 +558,23 @@ impl BoundFreeVars for Term {
             Term::Match(t, cases) => {
                 t.bound_free_vars(vars, depth);
                 for case in cases {
+                    // trace!(target: "unify", "bound free vars in case {case} with {vars:?}, depth: {depth}");
                     let len = case.pattern.vars().len();
                     if len == 0 {
                         case.body.bound_free_vars(vars, depth);
+                        // trace!(target: "unify", "bound free vars in case: {}", case.body);
                     } else {
                         let min = *case.pattern.vars().last().unwrap();
                         let vars_new = vars
                             .clone()
                             .into_iter()
-                            .map(|(k, v)| if k >= min { (k, v + len) } else { (k, v) })
+                            .map(|(k, v)| {
+                                if k >= min {
+                                    (k, v + len)
+                                } else {
+                                    panic!("wtf")
+                                }
+                            })
                             .collect();
                         case.body.bound_free_vars(&vars_new, depth);
                     }
@@ -721,7 +763,7 @@ impl Closure {
     pub(crate) fn unbind(self, uid: UID, tcs: &mut TypeCheckState) -> Term {
         assert_ne!(uid, 0);
         let inner = self.into_inner();
-        inner.subst_with(Substitution::one(Term::free_var(uid)), tcs)
+        inner.unbind(uid, tcs)
     }
 }
 
@@ -934,7 +976,9 @@ mod tests {
         );
         println!("{}", term);
         let Term::Lam(lam) = term else { unreachable!() };
-        let (x, Term::Lam(lam2)) = lam.unbind(&mut env) else { unreachable!() };
+        let (x, Term::Lam(lam2)) = lam.unbind(&mut env) else {
+            unreachable!()
+        };
         let (y, body) = lam2.unbind(&mut env);
         println!(
             "x = {}, y = {}, body = {body}",

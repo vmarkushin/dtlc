@@ -1,11 +1,14 @@
 use super::Term;
 use crate::check::{Constraint, TypeCheckState};
+use crate::syntax::core::free_subst::SubstituteFreeVars;
 use crate::syntax::core::subst::{PrimSubst, Substitution};
 use crate::syntax::core::term::{Id, Lambda, Name};
 use crate::syntax::core::{Boxed, Case, Closure, DeBruijn, Elim, Func, ValData, Var};
 use crate::syntax::pattern::Pat;
-use crate::syntax::{Bind, Ident, DBI, GI};
+use crate::syntax::{Bind, Ident, DBI, GI, UID};
 use itertools::Itertools;
+use std::collections::HashMap;
+use std::iter;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
 
@@ -180,6 +183,23 @@ impl Term {
             .collect()
     }
 
+    pub fn subst_non_var_in_cases_instead_of_free_var(
+        tcs: &mut TypeCheckState,
+        cs: Vec<Case>,
+        x: &UID,
+    ) -> Vec<Case> {
+        let x = *x;
+        cs.into_iter()
+            .map(|mut case| {
+                let term = case.pattern.clone().into_term();
+                debug!(target: "reduce", "substituting {term} instead of free var #{} in body {}...", x , case.body);
+                let subst = iter::once((x, term)).collect::<HashMap<_, _>>();
+                case.body.subst_free_vars_with(&subst, tcs, 0);
+                case
+            })
+            .collect()
+    }
+
     fn subst_non_var_in_cases_instead_of_non_var(
         subst: Rc<Substitution>,
         tcs: &mut TypeCheckState,
@@ -304,6 +324,9 @@ impl SubstWith<'_> for Term {
                         let cs = match &*x {
                             Term::Var(Var::Single(Name::Bound(x)), es) if es.is_empty() => {
                                 Self::subst_non_var_in_cases_instead_of_var(&subst, tcs, cs, x)
+                            }
+                            Term::Var(Var::Single(Name::Free(x)), es) if es.is_empty() => {
+                                Self::subst_non_var_in_cases_instead_of_free_var(tcs, cs, x)
                             }
                             _ => Self::subst_non_var_in_cases_instead_of_non_var(subst, tcs, cs),
                         };

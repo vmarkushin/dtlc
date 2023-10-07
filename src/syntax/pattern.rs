@@ -1,4 +1,5 @@
-use crate::syntax::core::display_application;
+use crate::check::TypeCheckState;
+use crate::syntax::core::{display_application, Bind, Name, Term, Type};
 use crate::syntax::{ConHead, Ident};
 use std::fmt::{Display, Formatter};
 
@@ -12,10 +13,36 @@ pub enum Pat<Ix, Term> {
     /// Impossible pattern.
     Absurd,
     /// Dual to [`crate::syntax::core::Term::Cons`],
-    /// but can be forced (the first member is "is\_forced").
+    /// but can be forced (the first member is "is_forced").
     Cons(bool, ConHead, Vec<Self>),
     /// Forced term as an expression.
     Forced(Term),
+}
+
+impl<Ix> Pat<Ix, Term> {
+    pub(crate) fn binders(&self) -> Vec<Bind> {
+        match self {
+            Pat::Var(_) => vec![Bind::explicit(0, Term::meta(13333337), Ident::new("_p"))],
+            Pat::Wildcard => vec![],
+            Pat::Absurd => vec![],
+            Pat::Cons(false, _, args) => args.iter().flat_map(|arg| arg.binders()).collect(),
+            Pat::Cons(true, _, _) => vec![],
+            Pat::Forced(..) => vec![],
+        }
+    }
+}
+
+impl<Ix: Clone, Term> Pat<Ix, Term> {
+    pub(crate) fn unbind(&self, tcs: &mut TypeCheckState) -> Vec<Name> {
+        match self {
+            Pat::Var(name) => vec![Name::Free(tcs.next_uid())],
+            Pat::Wildcard => vec![],
+            Pat::Absurd => vec![],
+            Pat::Cons(false, _, args) => args.iter().flat_map(|arg| arg.unbind(tcs)).collect(),
+            Pat::Cons(true, _, _) => vec![],
+            Pat::Forced(..) => vec![],
+        }
+    }
 }
 
 impl<Ix: Copy, Term> Pat<Ix, Term> {

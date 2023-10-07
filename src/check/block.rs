@@ -72,7 +72,7 @@ impl Display for NotBlocked {
             NotBlocked::AbsurdMatch => write!(f, "trying to instantiate an absurd match"),
             NotBlocked::MissingClauses => write!(f, "cannot find a suitable clause"),
             NotBlocked::NotBlocked => {
-                write!(f, "not blocked by anything, you may have found a bug")
+                write!(f, "not blocked by anything")
             }
         }
     }
@@ -134,7 +134,7 @@ impl<T: Display> Display for Blocked<T> {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         match self {
             Blocked::Yes(b, t) => write!(f, "blocked by {}: {}", b, t),
-            Blocked::No(b, t) => write!(f, "not blocked by {}: {}", b, t),
+            Blocked::No(b, t) => write!(f, "not blocked: {}: {}", b, t),
         }
     }
 }

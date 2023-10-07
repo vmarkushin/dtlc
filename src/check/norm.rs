@@ -96,10 +96,14 @@ impl TypeCheckState {
                             func.body.as_ref().unwrap().clone(),
                             elims.clone(),
                         )?;
+                        info!("unfolded {simp:?}, {term}");
                         // Ok((simp, term)) =>{
                             match simp {
                                 Simpl::Yes => {
-                                    self.simplify_blocked(term)
+                                    self.simplify_blocked(term).map(|t| {
+                                        info!("simplified term: {}", &t);
+                                        t
+                                    })
                                 }
                                 Simpl::No => {
                                     Ok(Term::Redex(
@@ -188,6 +192,14 @@ impl TypeCheckState {
             Term::Match(x, mut cs) => {
                 debug!("Simplifying match");
                 let simplified = self.simplify(*x.clone())?;
+                // substitute free variables in cases
+                if let Some(uid) = simplified.free_var_view() {
+                    cs = Term::subst_non_var_in_cases_instead_of_free_var(
+                        self,
+                        cs,
+                        &uid,
+                    )
+                }
                 match try_match(&simplified, &cs) {
                     Some((i, sigma)) => {
                         debug!("matched {}th case with σ = {}", i, sigma);
@@ -247,9 +259,9 @@ impl TypeCheckState {
         elims: Vec<Elim>,
     ) -> Result<(Simpl, Blocked<Term>)> {
         let name = func_name.text;
-        if name == "+-zero" {
-            println!("func_name is empty");
-        }
+        // if name == "+-zero" {
+        //     println!("func_name is empty");
+        // }
         let mut es = elims;
         let es_len = es.len();
         let (tele, body) = body.tele_view_n(es_len);
@@ -276,6 +288,21 @@ impl TypeCheckState {
         Ok((s, Blocked::No(NotBlocked::NotBlocked, term)))
     }
 }
+/*
+A = 0
+S = 1
+B = 2
+T = 3
+
+a = 0
+b = 1
+c = 2
+d = 3
+e = 4
+f = 5
+g = 6
+h = 7
+ */
 
 #[cfg(test)]
 mod tests {

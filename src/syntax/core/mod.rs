@@ -1,6 +1,7 @@
 mod dbi;
 mod decl;
 mod fold;
+mod free_subst;
 mod id;
 mod pats;
 mod pretty;
@@ -9,13 +10,13 @@ mod subst;
 mod term;
 
 use crate::check::unification::{Flavour, Occurrence};
-use crate::check::TypeCheckState;
+use crate::check::{TypeCheckState, Unbind};
 use crate::syntax;
 use crate::syntax::{Loc, DBI};
 pub use dbi::DeBruijn;
 pub use decl::{ConsInfo, DataInfo, Decl, FuncInfo, ProjInfo};
 pub use fold::FoldVal;
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 pub use pats::Simpl;
 pub use pretty::{display_application, pretty, pretty_list, Indentation, Pretty};
 pub use redex::{Subst, SubstWith};
@@ -57,6 +58,30 @@ pub type Let<T = Term> = syntax::Let<T>;
 /// Telescopes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tele<T = Bind>(pub Vec<T>);
+
+// impl<T: Unbind> Tele<T> {
+//     pub(crate) fn unbind(&self, tcs: &mut TypeCheckState) -> (T, Either<Tele<T>, T>) {
+//         let mut iter = self.0.iter();
+//         let head = iter.next().unwrap().clone();
+//         let tail = iter.cloned().collect();
+//         (head, Tele(tail))
+//     }
+// }
+//
+
+impl<T: Clone> Unbind<T> for Tele<Bind<T>>
+where
+    Self: for<'a> SubstWith<'a>,
+{
+    type Body = Self;
+
+    fn into_closure(mut self) -> (Bind<T>, Option<Self::Body>) {
+        assert!(self.0.len() > 0, "Cannot unbind empty telescope");
+        let bind = self.pop().unwrap();
+        let body = if self.0.len() > 0 { Some(self) } else { None };
+        (bind, body)
+    }
+}
 
 impl<T> Default for Tele<T> {
     fn default() -> Self {

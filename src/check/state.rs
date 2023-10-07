@@ -95,7 +95,10 @@ impl TypeCheckState {
             (Some(Twin::Left), Param::Twins(ty, _)) => bind.map_term(|_| ty),
             (Some(Twin::Right), Param::Twins(_, ty)) => bind.map_term(|_| ty),
             (None, Param::P(ty)) => bind.map_term(|_| ty),
-            (x, y) => panic!("Expected {x:?}, found {:?}", y),
+            (x, y) => panic!(
+                "Expected {x:?}, found {}, when looking up for the variable",
+                y
+            ),
         }
     }
 }
@@ -244,9 +247,29 @@ impl TypeCheckState {
 }
 
 impl<T> Bind<T> {
-    pub fn unbind(mut self, tcs: &mut TypeCheckState) -> Bind<T> {
+    pub fn unbind(mut self, tcs: &mut TypeCheckState) -> Self {
         self.name = tcs.next_uid();
         assert_ne!(self.name, 0);
         self
+    }
+}
+
+pub trait Unbind<T>: Sized {
+    type Body: for<'a> SubstWith<'a>;
+
+    fn into_closure(self) -> (Bind<T>, Option<Self::Body>);
+
+    fn unbind_smart(self, tcs: &mut TypeCheckState) -> (Bind<T>, Option<Self::Body>) {
+        let (x, b) = Unbind::<T>::into_closure(self);
+        let bind = x.unbind(tcs);
+        let uid = bind.name;
+        assert_ne!(uid, 0);
+        match b {
+            None => (bind, None),
+            Some(b) => (
+                bind,
+                Some(b.subst_with(Substitution::one(Term::free_var(uid)), tcs)),
+            ),
+        }
     }
 }
