@@ -237,9 +237,10 @@ impl HasMeta for Term {
                 let elims = elims.inline_meta(tcs)?;
                 Ok(Term::Redex(func, id, elims))
             }
-            Term::Match(term, cases) => {
+            Term::Match(term, term_ty, cases) => {
                 let cases = cases.inline_meta(tcs)?;
-                Ok(Term::Match(term.inline_meta(tcs)?, cases))
+                let term_ty = term_ty.inline_meta(tcs)?;
+                Ok(Term::Match(term.inline_meta(tcs)?, term_ty, cases))
             }
             Term::Ap(tele, fs, ps) => {
                 let tele = tele.inline_meta(tcs)?;

@@ -263,8 +263,8 @@ pub enum Term {
     Refl(Box<Term>),
     /// Application (function elimination).
     Redex(Func, Ident, Vec<Elim>),
-    /// Data elimination. With the term being matched on, cases and the return type.
-    Match(Box<Term>, Vec<Case> /*Type*/),
+    /// Data elimination. With the term being matched on and its type; cases and their return type.
+    Match(Box<Term>, Box<Type>, Vec<Case> /*Type*/),
     /// General congruence term.
     ///
     /// ```text
@@ -555,8 +555,9 @@ impl BoundFreeVars for Term {
             Term::Redex(Func::Index(_), _, args) => {
                 args.bound_free_vars(vars, depth);
             }
-            Term::Match(t, cases) => {
+            Term::Match(t, t_ty, cases) => {
                 t.bound_free_vars(vars, depth);
+                t_ty.bound_free_vars(vars, depth);
                 for case in cases {
                     // trace!(target: "unify", "bound free vars in case {case} with {vars:?}, depth: {depth}");
                     let len = case.pattern.vars().len();
@@ -705,12 +706,16 @@ impl Term {
             .fold(body, |body, p| Term::pi(p.into(), body))
     }
 
-    pub fn match_case(t: impl Into<Box<Term>>, cs: impl Into<Vec<Case>>) -> Self {
-        Term::Match(t.into(), cs.into())
+    pub fn match_case(
+        t: impl Into<Box<Term>>,
+        t_ty: impl Into<Box<Term>>,
+        cs: impl Into<Vec<Case>>,
+    ) -> Self {
+        Term::Match(t.into(), t_ty.into(), cs.into())
     }
 
-    pub fn match_elim(x: DBI, cs: impl Into<Vec<Case>>) -> Self {
-        Self::match_case(Term::from_dbi(x), cs)
+    pub fn match_elim(x: DBI, t_ty: impl Into<Box<Term>>, cs: impl Into<Vec<Case>>) -> Self {
+        Self::match_case(Term::from_dbi(x), t_ty, cs)
     }
 
     pub fn is_meta(&self) -> bool {

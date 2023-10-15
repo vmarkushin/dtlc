@@ -2,14 +2,14 @@ use crate::check::state::TypeCheckState;
 use crate::check::{Clause, Error, LshProblem, Result};
 use crate::ensure;
 use crate::syntax::abs::{AppView, Expr, Match};
-use crate::syntax::core::{self, Boxed, Closure, Name, Tele};
+use crate::syntax::core::{self, Boxed, Closure, Name, Tele, Type};
 use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, ValData, Var};
 use crate::syntax::surf::{nat_to_term, Literal};
 use crate::syntax::{abs, ConHead, Ident, LangItem, Loc, Universe, GI};
 
 impl TypeCheckState {
     /// Infer the type of the expression. Returns evaluated term and its type.
-    pub fn infer(&mut self, input_term: &Expr) -> Result<(TermInfo, Term)> {
+    pub fn infer(&mut self, input_term: &Expr) -> Result<(TermInfo, Type)> {
         if !self.trace_tc {
             return self.infer_impl(input_term);
         }

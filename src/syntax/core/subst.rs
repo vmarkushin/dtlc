@@ -483,6 +483,7 @@ mod tests {
         let x = 1;
         let t = Term::match_elim(
             x,
+            Term::meta(0),
             vec![Case::new(
                 Pat::cons(
                     ConHead::new(Ident::new("C"), 4),

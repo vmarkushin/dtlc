@@ -56,7 +56,7 @@ impl Display for Term {
                 write!(f, "({})", lam)?;
                 display_application(f, &"".to_owned(), args)
             }
-            Match(term, cases) => {
+            Match(term, _tt, cases) => {
                 writeln!(f, "match {} {{", term)?;
                 for Case { pattern, body } in cases {
                     writeln!(f, " | {} => {}", pattern, body)?;
@@ -346,7 +346,7 @@ impl Display for Pretty<'_, Term> {
             Term::Redex(_f, ident, es) => {
                 write!(f, "({} {})", ident, pretty(es, s))
             }
-            Term::Match(t, cs) => {
+            Term::Match(t, _, cs) => {
                 write!(f, "match {} {{{}}}", pretty(&**t, s), pretty(cs, s))
             }
             Term::Ap(tele, ps, t) => {

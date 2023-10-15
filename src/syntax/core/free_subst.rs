@@ -118,8 +118,9 @@ where
             Term::Redex(Func::Index(_), _, args) => {
                 args.subst_free_vars_with(subst, state, depth);
             }
-            Term::Match(t, cases) => {
+            Term::Match(t, tt, cases) => {
                 t.subst_free_vars_with(subst, state, depth);
+                tt.subst_free_vars_with(subst, state, depth);
                 for case in cases {
                     // trace!(target: "unify", "bound free vars in case {case} with {vars:?}, depth: {depth}");
                     let len = case.pattern.vars().len();

@@ -307,9 +307,10 @@ impl SubstWith<'_> for Term {
                 id,
                 args.subst_with(subst, tcs),
             ),
-            Term::Match(x, cs) => {
+            Term::Match(x, x_ty, cs) => {
                 // For how substitution in `match` generally work see inner comments
                 // of `Self::subst_in_match_with_var` function.
+                let x_ty = x_ty.clone().subst_with(subst.clone(), tcs).boxed();
                 let x_inst = x.clone().subst_with(subst.clone(), tcs);
                 debug!(
                     "subst in `match {} ...` with {} => `match {} ...`",
@@ -318,7 +319,7 @@ impl SubstWith<'_> for Term {
                 match &x_inst {
                     Term::Var(Var::Single(Name::Bound(y)), es) if es.is_empty() => {
                         let cs = Self::subst_in_match_with_var(&subst, tcs, &x, *y, cs);
-                        Term::Match(x_inst.boxed(), cs)
+                        Term::Match(x_inst.boxed(), x_ty.clone(), cs)
                     }
                     _ => {
                         let cs = match &*x {
@@ -331,7 +332,7 @@ impl SubstWith<'_> for Term {
                             _ => Self::subst_non_var_in_cases_instead_of_non_var(subst, tcs, cs),
                         };
 
-                        Term::Match(x_inst.boxed(), cs)
+                        Term::Match(x_inst.boxed(), x_ty.clone(), cs)
                     }
                 }
             }

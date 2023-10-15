@@ -138,8 +138,9 @@ impl Unify for Term {
             (Redex(Func::Lam(_i), _, a), Redex(Func::Lam(_j), _, b)) if a.len() == b.len() => {
                 todo!("lambda reduction unification")
             }
-            (Match(x, cs1), Match(y, cs2)) => {
+            (Match(x, ty1, cs1), Match(y, ty2, cs2)) => {
                 Unify::unify(tcs, x, y)?;
+                Unify::unify(tcs, ty1, ty2)?;
                 Unify::unify(tcs, cs1.as_slice(), cs2.as_slice())
             }
             (a, b) => {

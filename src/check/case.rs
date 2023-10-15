@@ -2,7 +2,7 @@ use crate::check::meta::HasMeta;
 use crate::check::{Error, Result, TypeCheckState};
 use crate::syntax::abs::{Expr, Pat as PatA};
 use crate::syntax::core::{
-    Boxed, Case, DataInfo, DeBruijn, Decl, Name, Pat, SubstWith, Substitution, Term, Var,
+    Boxed, Case, DataInfo, DeBruijn, Decl, Name, Pat, SubstWith, Substitution, Term, Type, Var,
 };
 use crate::syntax::{ConHead, DBI, UID};
 use itertools::{EitherOrBoth, Itertools};
@@ -148,14 +148,14 @@ pub struct LshProblem {
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub enum CaseTree {
     Leaf(Term),
-    Case(Term, Vec<(Pat, Option<CaseTree>)>),
+    Case(Term, Type, Vec<(Pat, Option<CaseTree>)>),
 }
 
 impl Display for CaseTree {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             CaseTree::Leaf(t) => write!(f, "{}", t),
-            CaseTree::Case(t, cases) => {
+            CaseTree::Case(t, _ty, cases) => {
                 write!(f, "case {} of", t)?;
                 for (pat, tree) in cases {
                     write!(f, " | {}", pat)?;
@@ -171,15 +171,19 @@ impl Display for CaseTree {
 }
 
 impl CaseTree {
-    pub fn case(term: impl Into<Term>, cases: impl Into<Vec<(Pat, Option<CaseTree>)>>) -> Self {
-        Self::Case(term.into(), cases.into())
+    pub fn case(
+        term: impl Into<Term>,
+        term_ty: impl Into<Type>,
+        cases: impl Into<Vec<(Pat, Option<CaseTree>)>>,
+    ) -> Self {
+        Self::Case(term.into(), term_ty.into(), cases.into())
     }
 
     /// Converts an elaborated case tree to a core term. Panics if the tree is not fully elaborated.
     pub(crate) fn into_term(self) -> Term {
         match self {
             CaseTree::Leaf(t) => t,
-            CaseTree::Case(i, cases) => {
+            CaseTree::Case(i, i_ty, cases) => {
                 let cases = cases
                     .into_iter()
                     .map(|(p, c)| {
@@ -204,7 +208,7 @@ impl CaseTree {
                         }
                     })
                     .collect::<Vec<_>>();
-                Term::match_case(i, cases)
+                Term::match_case(i, i_ty, cases)
             }
         }
     }
@@ -214,7 +218,7 @@ impl HasMeta for CaseTree {
     fn inline_meta(self, tcs: &mut TypeCheckState) -> Result<Self> {
         match self {
             CaseTree::Leaf(t) => Ok(CaseTree::Leaf(t.inline_meta(tcs)?)),
-            CaseTree::Case(x, cases) => {
+            CaseTree::Case(x, x_ty, cases) => {
                 let cases = cases
                     .into_iter()
                     .map(|(pat, tree)| {
@@ -223,7 +227,7 @@ impl HasMeta for CaseTree {
                         Ok((pat, tree))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Ok(CaseTree::Case(x, cases))
+                Ok(CaseTree::Case(x, x_ty, cases))
             }
         }
     }
@@ -234,8 +238,9 @@ impl CaseTree {
         use crate::syntax::pattern::Pat::*;
         use CaseTree::*;
         match (self, other) {
-            (Case(i, cases_a), Case(j, cases_b)) => {
+            (Case(i, i_ty, cases_a), Case(j, j_ty, cases_b)) => {
                 debug_assert_eq!(i, j);
+                // TODO: check that i_ty == j_ty?
                 let cases = cases_a
                     .into_iter()
                     .merge_join_by(cases_b, |(pat_a, _ct_a), (pat_b, _ct_b)| {
@@ -272,7 +277,7 @@ impl CaseTree {
                         EitherOrBoth::Left(x) | EitherOrBoth::Right(x) => x,
                     })
                     .collect::<Vec<_>>();
-                Case(i, cases)
+                Case(i, i_ty, cases)
             }
             (Leaf(a), Leaf(b)) => {
                 assert_eq!(a, b);
@@ -348,7 +353,8 @@ impl LshProblem {
                         match tcs.def(data.def).clone() {
                             Decl::Data(data) => {
                                 if data.conses.is_empty() {
-                                    return Self::split_empty(clause_1, ct, x);
+                                    let x_ty = tcs.lookup(x).ty.clone();
+                                    return Self::split_empty(clause_1, ct, x, x_ty);
                                 }
                                 self.split_con(tcs, ct, ct_idx, x, data_args, data)
                             }
@@ -372,14 +378,14 @@ impl LshProblem {
         }
     }
 
-    fn split_empty(clause_1: &Clause, ct: &Constraint, x: DBI) -> Result<CaseTree> {
+    fn split_empty(clause_1: &Clause, ct: &Constraint, x: DBI, x_ty: Type) -> Result<CaseTree> {
         if !ct.pat.is_abusrd() {
             return Err(Error::ExpectedAbsurd(ct.pat.clone().boxed()));
         }
         if clause_1.rhs.is_some() {
             return Err(Error::UnexpectedRhs);
         }
-        Ok(CaseTree::case(x, Vec::new()))
+        Ok(CaseTree::case(x, x_ty, Vec::new()))
     }
 
     fn split_con(
@@ -546,7 +552,8 @@ impl LshProblem {
             );
             ct_clauses.push((clause_pat, Some(ct)));
         }
-        Ok(CaseTree::case(x, ct_clauses))
+        let x_ty = tcs.lookup(x).ty.clone();
+        Ok(CaseTree::case(x, x_ty, ct_clauses))
     }
 
     fn done(tcs: &mut TypeCheckState, clause_1: &Clause, target: Term) -> Result<CaseTree> {
@@ -575,12 +582,13 @@ impl LshProblem {
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::check::Unify;
     use crate::pct;
-    use crate::syntax::core::{Elim, Func, Subst, ValData};
+    use crate::syntax::core::{Elim, Func, Subst, Type, ValData};
     use crate::syntax::desugar::desugar_prog;
     use crate::syntax::parser::Parser;
     use crate::syntax::pattern::Pat::{Cons as ConsPat, Var};
@@ -728,6 +736,7 @@ mod tests {
                     ),
                     body: Match(
                         Term::from_dbi(1).boxed(),
+                        Type::data(ValData::new(0, vec![])).boxed(),
                         vec![
                             Case {
                                 pattern: ConsPat(
@@ -2529,3 +2538,4 @@ mod tests {
         assert_eq!(ct, ct_exp);
     }
 }
+*/

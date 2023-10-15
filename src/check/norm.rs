@@ -189,7 +189,7 @@ impl TypeCheckState {
                     self.simplify(term)
                 }
             },
-            Term::Match(x, mut cs) => {
+            Term::Match(x, ty, mut cs) => {
                 debug!("Simplifying match");
                 let simplified = self.simplify(*x.clone())?;
                 // substitute free variables in cases
@@ -211,7 +211,7 @@ impl TypeCheckState {
                     }
                     None => {
                     // TODO: simplify cases?
-                        Ok(Term::Match(simplified.boxed(), cs))
+                        Ok(Term::Match(simplified.boxed(), self.simplify(*ty)?.boxed(), cs))
                     },
                     /*
                     None => Err(Error::Blocked(box Blocked::new(

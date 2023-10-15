@@ -78,7 +78,9 @@ impl FoldVal for CaseTree {
     ) -> Result<R, E> {
         match self {
             CaseTree::Leaf(t) => t.try_fold_val(init, f),
-            CaseTree::Case(x, cs) => x.try_fold_val(cs.try_fold_val(init, f)?, f),
+            CaseTree::Case(x, x_ty, cs) => {
+                x.try_fold_val(x_ty.try_fold_val(cs.try_fold_val(init, f)?, f)?, f)
+            }
         }
     }
 }
@@ -120,7 +122,9 @@ impl FoldVal for Term {
             ),
             Refl(val) => val.try_fold_val(init, f),
             Redex(func, _, args) => args.try_fold_val(func.try_fold_val(init, f)?, f),
-            Match(t, cases) => t.try_fold_val(cases.try_fold_val(init, f)?, f),
+            Match(t, t_ty, cases) => {
+                t.try_fold_val(t_ty.try_fold_val(cases.try_fold_val(init, f)?, f)?, f)
+            }
             Ap(tele, ps, t) => t.try_fold_val(ps.try_fold_val(tele.try_fold_val(init, f)?, f)?, f),
         }
     }
