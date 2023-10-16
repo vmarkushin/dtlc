@@ -147,13 +147,17 @@ impl TypeCheckState {
         mut ctx: Ctx<Bind<Param>>,
         f: F,
     ) -> R {
-        info!(target: "additional", "under new ctx: {}", ctx);
+        // info!(target: "additional", "under new ctx: {}", ctx);
         swap(&mut self.gamma2, &mut ctx);
         let res = f(self);
         swap(&mut self.gamma2, &mut ctx);
         res
     }
 
+    /*
+    @1 (?21 ( @0 (((\x[e]. (\_[-]. (?21 @1)))))))  ( @1 (?0 @1))
+
+     */
     pub fn tc_shallower(&mut self) {
         if self.indentation.tc_depth > 0 {
             self.indentation.tc_depth -= 1;

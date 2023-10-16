@@ -3,7 +3,8 @@ use crate::check::state::TypeCheckState;
 use crate::check::unification::{Equation, Param, Problem};
 use crate::check::{Error, Result};
 use crate::syntax::core::{
-    build_subst, Boxed, Case, Closure, Decl, Elim, Func, Simpl, SubstWith, Substitution, Term,
+    build_subst, Boxed, Case, Closure, Decl, Elim, Func, Lambda, Simpl, SubstWith, Substitution,
+    Term,
 };
 use crate::syntax::{ConHead, Ident, Loc, GI};
 use std::collections::HashMap;
@@ -28,37 +29,49 @@ pub fn try_match(x: &Term, cs: &[Case]) -> Option<(usize, Rc<Substitution>)> {
 }
 
 impl TypeCheckState {
-    pub fn simplify_blocked(&mut self, term: Blocked<Term>) -> Result<Term> {
+    pub fn simplify_blocked(&mut self, term: Blocked<Term>, shallow: bool) -> Result<Term> {
         match term {
             Blocked::Yes(_, t) => Ok(t),
-            Blocked::No(_, t) => self.simplify(t),
+            Blocked::No(_, t) => self.reduce(t, shallow),
         }
     }
 
-    pub fn simplify_problem(&mut self, prob: Problem) -> Result<Problem> {
+    pub fn normalize_problem(&mut self, prob: Problem) -> Result<Problem> {
         match prob {
             Problem::Unify(Equation { tm1, ty1, tm2, ty2 }) => {
-                let tm1 = self.simplify(tm1)?;
-                let ty1 = self.simplify(ty1)?;
-                let tm2 = self.simplify(tm2)?;
-                let ty2 = self.simplify(ty2)?;
+                let tm1 = self.normalize(tm1)?;
+                let ty1 = self.normalize(ty1)?;
+                let tm2 = self.normalize(tm2)?;
+                let ty2 = self.normalize(ty2)?;
                 Ok(Problem::Unify(Equation { tm1, ty1, tm2, ty2 }))
             }
             Problem::All(mut param, prob) => {
                 let ty = match param.ty {
-                    Param::P(term) => Param::P(self.simplify(term)?),
-                    Param::Twins(t1, t2) => Param::Twins(self.simplify(t1)?, self.simplify(t2)?),
+                    Param::P(term) => Param::P(self.normalize(term)?),
+                    Param::Twins(t1, t2) => Param::Twins(self.normalize(t1)?, self.normalize(t2)?),
                 };
                 param.ty = ty;
-                let prob = self.simplify_problem(*prob)?;
+                let prob = self.normalize_problem(*prob)?;
                 Ok(Problem::All(param, prob.boxed()))
             }
         }
     }
 
+    /// Normalize a term to NF.
+    pub fn normalize(&mut self, term: Term) -> Result<Term> {
+        let term_out = self.simplify_impl(term.clone(), false)?;
+        debug!(
+            "{}[normalize]\n\t{}\n\t{}",
+            self.tc_depth_ws(),
+            term,
+            term_out
+        );
+        Ok(term_out)
+    }
+
     /// Normalize a term to WHNF.
     pub fn simplify(&mut self, term: Term) -> Result<Term> {
-        let term_out = self.simplify_impl(term.clone())?;
+        let term_out = self.simplify_impl(term.clone(), true)?;
         debug!(
             "{}[simplify]\n\t{}\n\t{}",
             self.tc_depth_ws(),
@@ -68,18 +81,87 @@ impl TypeCheckState {
         Ok(term_out)
     }
 
-    pub fn simplify_impl(&mut self, term: Term) -> Result<Term> {
+    /// Normalize a term.
+    pub fn reduce(&mut self, term: Term, shallow: bool) -> Result<Term> {
+        let term_out = self.simplify_impl(term.clone(), shallow)?;
+        debug!(
+            "{}[reduce {shallow}]\n\t{}\n\t{}",
+            self.tc_depth_ws(),
+            term,
+            term_out
+        );
+        Ok(term_out)
+    }
+
+    fn normalize_neutral(&mut self, term: Term) -> Result<Term> {
+        match term {
+            Term::Data(mut data) => data
+                .clone()
+                .args
+                .into_iter()
+                .map(|t| self.normalize(t))
+                .collect::<Result<Vec<_>>>()
+                .map(|args| {
+                    data.args = args;
+                    Term::Data(data)
+                }),
+            Term::Cons(head, args) => {
+                let args = args
+                    .into_iter()
+                    .map(|t| self.normalize(t))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Term::Cons(head, args))
+            }
+            Term::Pi(mut a, b) => {
+                a.ty = self.normalize(*a.ty)?.boxed();
+                let bb = self.normalize(b.into_inner())?;
+                Ok(Term::Pi(a, Closure::Plain(bb.boxed())))
+            }
+            Term::Lam(mut lam) => {
+                let mut body = lam.1;
+                body = Closure::Plain(self.normalize(body.into_inner())?.boxed());
+                lam.0.ty = self.normalize(*lam.0.ty)?.boxed();
+                Ok(Term::Lam(Lambda(lam.0, body)))
+            }
+            Term::Var(head, elims) => {
+                let elims = elims
+                    .into_iter()
+                    .map(|e| match e {
+                        Elim::App(t) => Ok(Elim::App(self.normalize(*t)?.boxed())),
+                        e => Ok(e),
+                    })
+                    .collect::<Result<_>>()?;
+                Ok(Term::Var(head, elims))
+            }
+            Term::Id(_) => {
+                todo!("Id norm")
+            }
+            Term::Refl(_) => {
+                todo!("Refl norm")
+            }
+            t => Ok(t),
+        }
+    }
+
+    pub fn simplify_impl(&mut self, term: Term, shallow: bool) -> Result<Term> {
         debug!("simplifying term: {}", &term);
         if matches!(term, Term::Match(..)) {
             trace!("simplifying match: {}", &term);
         }
         match term {
             Term::Id(mut id) => {
-                id.a1 = self.simplify(*id.a1)?.boxed();
-                id.a2 = self.simplify(*id.a2)?.boxed();
+                id.a1 = self.reduce(*id.a1, shallow)?.boxed();
+                id.a2 = self.reduce(*id.a2, shallow)?.boxed();
                 Ok(Term::Id(id).into())
             }
-            t if t.is_whnf() => Ok(t),
+            t if t.is_whnf() => {
+                if shallow {
+                    Ok(t)
+                } else {
+                    trace!(target: "reduce", "normalizing neutral term: {}", t);
+                    self.normalize_neutral(t)
+                }
+            },
             Term::Redex(f, id, elims) => match f {
                 Func::Index(def) => match self.def(def) {
                     // TODO: make a separate function for each data and constructor
@@ -100,7 +182,7 @@ impl TypeCheckState {
                         // Ok((simp, term)) =>{
                             match simp {
                                 Simpl::Yes => {
-                                    self.simplify_blocked(term).map(|t| {
+                                    self.simplify_blocked(term, shallow).map(|t| {
                                         info!("simplified term: {}", &t);
                                         t
                                     })
@@ -113,7 +195,7 @@ impl TypeCheckState {
                                             .into_iter()
                                             .map(|e| match e {
                                                 Elim::App(t) => {
-                                                    Ok(Elim::App(self.simplify(*t)?.boxed()))
+                                                    Ok(Elim::App(self.reduce(*t, shallow)?.boxed()))
                                                 }
                                                 e => Ok(e),
                                             })
@@ -121,7 +203,7 @@ impl TypeCheckState {
                                     ))
                                 }
                             }
-                            // self.simplify(term)
+                            // self.reduce(term)
                         // }
                         // {
                             /*
@@ -144,7 +226,7 @@ impl TypeCheckState {
                              */
 
                             // Err(blockage) => match blockage.stuck {
-                            //     NotBlocked::NotBlocked => self.simplify(blockage.anyway),
+                            //     NotBlocked::NotBlocked => self.reduce(blockage.anyway),
                             //     NotBlocked::OnElim(e) => {
                             //         trace!("stuck on elim: {}", e);
                             //         // TODO: simplify elims?
@@ -186,12 +268,12 @@ impl TypeCheckState {
                     } else {
                         term2.apply_elim(elims)
                     };
-                    self.simplify(term)
+                    self.reduce(term, shallow)
                 }
             },
             Term::Match(x, ty, mut cs) => {
                 debug!("Simplifying match");
-                let simplified = self.simplify(*x.clone())?;
+                let simplified = self.reduce(*x.clone(), shallow)?;
                 // substitute free variables in cases
                 if let Some(uid) = simplified.free_var_view() {
                     cs = Term::subst_non_var_in_cases_instead_of_free_var(
@@ -207,11 +289,11 @@ impl TypeCheckState {
                         trace!("matched_case.body = {}", matched_case.body);
                         let term1 = matched_case.body.subst_with(sigma, self);
                         trace!("matched_case.bodyσ = {}", term1);
-                        self.simplify(term1)
+                        self.reduce(term1, shallow)
                     }
                     None => {
                     // TODO: simplify cases?
-                        Ok(Term::Match(simplified.boxed(), self.simplify(*ty)?.boxed(), cs))
+                        Ok(Term::Match(simplified.boxed(), self.reduce(*ty, shallow)?.boxed(), cs))
                     },
                     /*
                     None => Err(Error::Blocked(box Blocked::new(
@@ -224,12 +306,12 @@ impl TypeCheckState {
             Term::Ap(tele, ps, t) => {
                 if tele.is_empty() {
                     debug_assert!(ps.is_empty());
-                    Ok(Term::Refl(self.simplify(*t)?.boxed()).into())
-                    // Ok(Term::ap([], [], self.simplify(*t)?))
+                    Ok(Term::Refl(self.reduce(*t, shallow)?.boxed()).into())
+                    // Ok(Term::ap([], [], self.reduce(*t)?))
                 } else {
                     let ps = ps
                         .into_iter()
-                        .map(|p| self.simplify(p))
+                        .map(|p| self.reduce(p, shallow))
                         .collect::<Result<Vec<_>>>()?;
                     let ps = ps
                         .into_iter()
@@ -240,8 +322,8 @@ impl TypeCheckState {
                         .rev()
                         .collect::<Result<Vec<_>>>()?;
                     let refl = t.subst_with(Substitution::parallel(ps.into_iter()), self);
-                    Ok(Term::Refl(self.simplify(refl)?.boxed()).into())
-                    // Ok(Term::ap([], [], self.simplify(refl)?))
+                    Ok(Term::Refl(self.reduce(refl, shallow)?.boxed()).into())
+                    // Ok(Term::ap([], [], self.reduce(refl)?))
                 }
             }
             _ => unreachable!(

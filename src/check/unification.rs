@@ -442,9 +442,9 @@ impl MetaSubstitution for Term {
             Term::Universe(_) => {}
             Term::Var(Var::Meta(mi), es) => {
                 if let Some(t) = subst.get(mi) {
-                    trace!(target: "unify", "Substituting  {} for {} with depth {}", t, mi, subst.1);
+                    // trace!(target: "unify", "Substituting  {} for {} with depth {}", t, mi, subst.1);
                     let t = t.clone().subst(Substitution::raise(subst.1));
-                    trace!(target: "unify", "Substituting' {} for {}", t, mi);
+                    // trace!(target: "unify", "Substituting' {} for {}", t, mi);
                     es.meta_subst(subst);
                     *self = t.apply_elim(es.clone())
                 }
@@ -1384,9 +1384,9 @@ impl TypeCheckState {
                 let twin_r = Term::Var(Var::twin_free(uid, Twin::Right), vec![]);
 
                 let problem = Problem::Unify(Equation::new(
-                    tm1.apply(vec![twin_l.clone()]),
+                    self.simplify(tm1.apply(vec![twin_l.clone()]))?,
                     b1.instantiate_with(twin_l, self),
-                    tm2.apply(vec![twin_r.clone()]),
+                    self.simplify(tm2.apply(vec![twin_r.clone()]))?,
                     b2.instantiate_with(twin_r, self),
                 ));
                 info!(target: "additional", "Binding {x} to {problem}");
@@ -1398,6 +1398,7 @@ impl TypeCheckState {
             }
             _ => match (tm1, tm2) {
                 (Term::Var(Var::Meta(m1), xs), Term::Var(Var::Meta(m2), ys)) if m1 == m2 => {
+                    info!(target: "additional", "Problem::All 11");
                     if !self.try_prune(id, equation.clone())? {
                         if !self.try_prune(id, equation.clone().sym())? {
                             return self.flex_flex_same(id, equation);
@@ -1406,6 +1407,7 @@ impl TypeCheckState {
                     Ok(())
                 }
                 (Term::Var(Var::Meta(m1), xs), Term::Var(Var::Meta(m2), ys)) => {
+                    info!(target: "additional", "Problem::All 12");
                     if !self.try_prune(id, equation.clone())? {
                         if !self.try_prune(id, equation.clone().sym())? {
                             return self.flex_flex(vec![], id, equation);
@@ -1414,12 +1416,14 @@ impl TypeCheckState {
                     Ok(())
                 }
                 (Term::Var(Var::Meta(m1), xs), _) => {
+                    info!(target: "additional", "Problem::All 13");
                     if !self.try_prune(id, equation.clone())? {
                         self.flex_term(vec![], id, equation)?;
                     }
                     Ok(())
                 }
                 (_, Term::Var(Var::Meta(m2), ys)) => {
+                    info!(target: "additional", "Problem::All 14");
                     let equation_sym = equation.sym();
                     if !self.try_prune(id, equation_sym.clone())? {
                         self.flex_term(vec![], id, equation_sym)?;
@@ -1427,6 +1431,7 @@ impl TypeCheckState {
                     Ok(())
                 }
                 (t, u) => {
+                    info!(target: "additional", "Problem::All 15");
                     trace!(target: "unify", "rigid_rigid: mismatch {t}, {u}");
                     self.rigid_rigid(equation.clone())?;
                     Ok(())
@@ -1459,6 +1464,7 @@ impl TypeCheckState {
         let Equation { ty1, tm1, ty2, tm2 } = equation.clone();
         match (tm1.clone(), tm2.clone()) {
             (Term::Pi(a1, b1), Term::Pi(a2, b2)) => {
+                trace!(target: "unify", "rigid_rigid: 1");
                 let (Term::Universe(u1), Term::Universe(u2)) = (ty1, ty2) else {
                     panic!("rigid_rigid: mismatch");
                 };
@@ -1479,6 +1485,8 @@ impl TypeCheckState {
                 )?;
                 info!(target: "additional", "Problem::All 3");
                 let x = self.fresh_name();
+                let tm1 = b1.instantiate_with(Term::Var(Var::Twin(x, Twin::Left), vec![]), self);
+                let tm2 = b2.instantiate_with(Term::Var(Var::Twin(x, Twin::Right), vec![]), self);
                 self.active(
                     id,
                     Problem::all(
@@ -1488,9 +1496,9 @@ impl TypeCheckState {
                             Ident::new("x"),
                         ),
                         Problem::Unify(Equation::new(
-                            tm1.apply(vec![Term::var(x)]),
+                            tm1,
                             Term::universe(u1),
-                            tm2.apply(vec![Term::var(x)]),
+                            tm2,
                             Term::universe(u2),
                         )),
                     ),
@@ -1567,8 +1575,9 @@ impl TypeCheckState {
                         *yy.clone().ty,
                     )),
                 )?;
-                todo!("inst");
-                return Ok((t.into_inner(), u.into_inner()));
+                let t = t.instantiate_with(a, self);
+                let u = u.instantiate_with(b, self);
+                return Ok((t, u));
             }
             _ => {}
         }
@@ -2784,7 +2793,7 @@ impl TypeCheckState {
                 p0.meta_subst(&subst);
                 trace!(target: "unify", "update (subst ) {p0}");
                 p0 = self
-                    .simplify_problem(p0)
+                    .normalize_problem(p0)
                     .expect("update: simplify_problem failed");
                 trace!(target: "unify", "update (subst') {p0}");
                 let s0 = if p == p0 { s } else { Status::Active };
@@ -3219,7 +3228,7 @@ fn initialise() -> Result<()> {
 }
 
 fn test(tt: TestType, ezs: Vec<Entry>) -> eyre::Result<()> {
-    println!(
+    info!(target: "unify",
         r#"
 
 Initial context:
@@ -3238,7 +3247,8 @@ Initial context:
             | false => y
         }
         data Nat : Type | zero |  succ (n : Nat)
-        -- X &&& X == if {lam _ => Bool} x x false
+
+        -- aaand x y := if {lam _ => Bool} x y false
        "#,
     )?)?;
     tcs.check_prog(des.clone())?;
@@ -3252,7 +3262,7 @@ Initial context:
     });
     tcs.meta_ctx2.0 = Ctx(ezs);
     tcs.next_uid
-        .store(META_ID.load(Ordering::Relaxed), Ordering::Relaxed);
+        .store(META_ID.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
     tcs.gamma.clear();
     // info!(target: "additional", "gamma2 clear");
     tcs.gamma2.clear();
@@ -3433,12 +3443,47 @@ fn test_all() -> eyre::Result<()> {
 
     let x = Name::Free(1);
     let y = Name::Free(2);
-    let f = Name::Free(3);
+    let z = Name::Free(3);
+    let f = Name::Free(4);
     let bool_ty = Term::Data(ValData::new(0, vec![]));
     let false_val = Term::Cons(ConHead::new("false", 1), vec![]);
     let true_val = Term::Cons(ConHead::new("true", 2), vec![]);
     let if_fn = Func::Index(3);
     let nat_ty = Term::Data(ValData::new(4, vec![]));
+
+    /*
+        (mv "B" &&& vv "X")
+
+        Term::Redex(
+           if_fn.clone(),
+           Ident::new("if"),
+           vec![
+               Elim::app(Term::lam(
+                   Bind::unnamed(bool_ty.clone().boxed()),
+                   bool_ty.clone(),
+               )),
+               Elim::app(Term::meta(METAS.s2n("B"))),
+               Elim::app(Term::var(x.clone())),
+               Elim::app(false_val.clone()),
+           ],
+       ),
+    */
+    let aaand = |b, t| {
+        Term::Redex(
+            if_fn.clone(),
+            Ident::new("if"),
+            vec![
+                Elim::app(Term::lam(
+                    Bind::unnamed(bool_ty.clone().boxed()),
+                    bool_ty.clone(),
+                )),
+                Elim::app(b),
+                Elim::app(t),
+                Elim::app(false_val.clone()),
+            ],
+        )
+    };
+
     let tests = vec![
         /*
         /*
@@ -3595,19 +3640,7 @@ fn test_all() -> eyre::Result<()> {
                 bool_ty.clone(),
                 Term::meta(METAS.s2n("A")).apply(vec![Term::var(x.clone())]),
                 bool_ty.clone(),
-                Term::Redex(
-                    if_fn.clone(),
-                    Ident::new("if"),
-                    vec![
-                        Elim::app(Term::lam(
-                            Bind::unnamed(bool_ty.clone().boxed()),
-                            bool_ty.clone(),
-                        )),
-                        Elim::app(Term::meta(METAS.s2n("B"))),
-                        Elim::app(Term::var(x.clone())),
-                        Elim::app(false_val.clone()),
-                    ],
-                ),
+                aaand(Term::meta(METAS.s2n("B")), Term::var(x.clone())),
             )],
         )),
         // -- test 7: solve A with \ _ X _ . B X &&& X
@@ -4102,7 +4135,6 @@ fn test_all() -> eyre::Result<()> {
                 ),
             ]
         },
-         */
         {
             // -- test 25: fill a gap
             // , ( eq "p" (C Set) ((C Bool) --> (C Bool)) (C Set) ((C Bool) --> (C Bool))
@@ -4115,6 +4147,242 @@ fn test_all() -> eyre::Result<()> {
                 Type::universe(Universe(0)),
                 Type::arrow(bool_ty.clone(), bool_ty.clone()),
             )]
+        },
+        {
+            // -- test 26: solve A with \ _ Y . Y
+            // , ( gal "A" ((C Bool) --> (C Bool) --> (C Bool))
+            // : boy "X" (C Bool)
+            // ( boy "Z" (C Bool)
+            //     ( eq "p" (if'' (C Set) (mv "A" $$ vv "X" $$ vv "X") (C Bool) (C Nat) --> (C Bool))
+            //     (ll "Y" (mv "A" $$ vv "X" $$ vv "Z"))
+            //     (if'' (C Set) (vv "X") (C Bool) (C Nat) --> (C Bool))
+            //       (ll "Y" (vv "X"))
+            // : [])
+            // )
+            // )
+            let entry = gal(
+                "A",
+                Type::arrow(
+                    bool_ty.clone(),
+                    Type::arrow(bool_ty.clone(), bool_ty.clone()),
+                ),
+            );
+            let if_ = Term::Redex(
+                if_fn.clone(),
+                Ident::new("if"),
+                vec![
+                    Elim::app(Term::lam(
+                        Bind::unnamed(bool_ty.clone().boxed()),
+                        Type::universe(Universe(0)),
+                    )),
+                    Elim::app(
+                        Term::meta(METAS.s2n("A"))
+                            .apply(vec![Term::var(x.clone()), Term::var(x.clone())]),
+                    ),
+                    Elim::app(bool_ty.clone()),
+                    Elim::app(nat_ty.clone()),
+                ],
+            );
+            let if_x = Term::Redex(
+                if_fn.clone(),
+                Ident::new("if"),
+                vec![
+                    Elim::app(Term::lam(
+                        Bind::unnamed(bool_ty.clone().boxed()),
+                        Type::universe(Universe(0)),
+                    )),
+                    Elim::app(Term::var(x.clone())),
+                    Elim::app(bool_ty.clone()),
+                    Elim::app(nat_ty.clone()),
+                ],
+            );
+            vec![entry].cons(boy(
+                x.clone(),
+                bool_ty.clone(),
+                boy(
+                    z.clone(),
+                    bool_ty.clone(),
+                    vec![eq(
+                        "p",
+                        Type::arrow(if_.clone(), bool_ty.clone()),
+                        Term::lam(
+                            Bind::explicit(y.uid(), if_.clone().boxed(), Ident::new("Y")),
+                            Term::meta(METAS.s2n("A"))
+                                .apply(vec![Term::var(x.clone()), Term::var(z.clone())]),
+                        ),
+                        Type::arrow(if_x.clone(), bool_ty.clone()),
+                        Term::lam(
+                            Bind::explicit(y.uid(), if_x.clone().boxed(), Ident::new("Y")),
+                            Term::var(x.clone()),
+                        ),
+                    )],
+                ),
+            ))
+        },
+        {
+            // -- test 27: solve A with (C Tt)
+            // , [ gal "A" (C Bool)
+            // , eq "p" (((C Bool) --> (C Bool)) --> (C Bool)) (ll "X" (vv "X" $$ mv "A"))
+            // (((C Bool) --> (C Bool)) --> (C Bool)) (ll "X" (vv "X" $$ (C Tt)))
+            // ]
+            // ?A : Bool |- (\x . x A) : (Bool -> Bool) -> Bool = (\x . x tt) : (Bool -> Bool) -> Bool
+
+            let entry = gal("A", bool_ty.clone());
+            let arrow_ = Type::arrow(bool_ty.clone(), bool_ty.clone());
+            let arrow_arrow_ = Type::arrow(arrow_.clone(), bool_ty.clone());
+            vec![
+                entry,
+                eq(
+                    "p",
+                    arrow_arrow_.clone(),
+                    Term::lam(
+                        Bind::explicit(x.uid(), arrow_.clone().boxed(), Ident::new("X")),
+                        Term::var(x.clone()).apply(vec![Term::meta(METAS.s2n("A"))]),
+                    ),
+                    arrow_arrow_.clone(),
+                    Term::lam(
+                        Bind::explicit(x.uid(), arrow_.clone().boxed(), Ident::new("X")),
+                        Term::var(x.clone()).apply(vec![true_val.clone()]),
+                    ),
+                ),
+            ]
+        },
+        // TODO: Σ tests
+        {
+            // -- test 29: prune A and solve B with A
+            // , ( gal "A" ((C Bool) --> (C Bool))
+            // : gal "B" (C Bool)
+            // : eq "p" ((C Bool) --> (C Bool)) (ll "X" (mv "A" $$ (vv "X" &&& vv "X")))
+            //          ((C Bool) --> (C Bool)) (ll "X" (mv "B"))
+            // : [])
+            // ?A : Bool -> Bool, ?B : Bool |- (\x. A (x &&& x)) : (Bool -> Bool) -> Bool = (\x. B) : (Bool -> Bool) -> Bool
+            let arrow_ = Type::arrow(bool_ty.clone(), bool_ty.clone());
+            vec![
+                gal("A", Type::arrow(bool_ty.clone(), bool_ty.clone())),
+                gal("B", bool_ty.clone()),
+                eq(
+                    "p",
+                    arrow_.clone(),
+                    Term::lam(
+                        Bind::explicit(x.uid(), bool_ty.clone().boxed(), Ident::new("X")),
+                        Term::meta(METAS.s2n("A"))
+                            .apply(vec![aaand(Term::var(x.clone()), Term::var(x.clone()))]),
+                    ),
+                    arrow_.clone(),
+                    Term::lam(
+                        Bind::explicit(x.uid(), bool_ty.clone().boxed(), Ident::new("X")),
+                        Term::meta(METAS.s2n("B")),
+                    ),
+                ),
+            ]
+        },
+        {
+            // -- test 30: prune A and solve B with A
+            // , ( gal "B" (C Bool)
+            // : gal "A" ((C Bool) --> (C Bool))
+            // : eq "p" ((C Bool) --> (C Bool)) (ll "X" (mv "A" $$ (vv "X" &&& vv "X")))
+            // ((C Bool) --> (C Bool)) (ll "X" (mv "B"))
+            // : [])
+            // ?B : Bool, ?A : Bool -> Bool |- (\x. A (x &&& x)) : (Bool -> Bool) -> Bool = (\x. B) : (Bool -> Bool) -> Bool
+            let arrow_ = Type::arrow(bool_ty.clone(), bool_ty.clone());
+            vec![
+                gal("B", bool_ty.clone()),
+                gal("A", Type::arrow(bool_ty.clone(), bool_ty.clone())),
+                eq(
+                    "p",
+                    arrow_.clone(),
+                    Term::lam(
+                        Bind::explicit(x.uid(), bool_ty.clone().boxed(), Ident::new("X")),
+                        Term::meta(METAS.s2n("A"))
+                            .apply(vec![aaand(Term::var(x.clone()), Term::var(x.clone()))]),
+                    ),
+                    arrow_.clone(),
+                    Term::lam(
+                        Bind::explicit(x.uid(), bool_ty.clone().boxed(), Ident::new("X")),
+                        Term::meta(METAS.s2n("B")),
+                    ),
+                ),
+            ]
+        },
+        {
+            // -- test 31: solve A with (C Bool) and f with \ x . x
+            // , ( gal "A" (C Set)
+            // : gal "f" (mv "A" --> (C Bool))
+            // : eq "p" (mv "A" --> (C Bool)) (mv "f")
+            //          (mv "A" --> mv "A")   (ll "x" (vv "x"))
+            // : eq "q" (C Set) (mv "A" --> (C Bool))
+            //          (C Set) (mv "A" --> mv "A")
+            // : [])
+            // ?A : Set, ?f : A -> Bool |- ?f : A -> Bool = \x. x : A -> A
+            //                             ?A -> Bool : Set = ?A -> ?A : Set
+
+            let entry = gal("A", Type::universe(Universe(0)));
+            let arrow_a = Type::arrow(Type::meta(METAS.s2n("A")), bool_ty.clone());
+            let arrow_a_a = Type::arrow(Type::meta(METAS.s2n("A")), Type::meta(METAS.s2n("A")));
+            vec![
+                entry,
+                gal("f", arrow_a.clone()),
+                eq(
+                    "p",
+                    arrow_a.clone(),
+                    Term::meta(METAS.s2n("f")),
+                    arrow_a_a.clone(),
+                    Term::lam(
+                        Bind::explicit(
+                            x.uid(),
+                            Type::meta(METAS.s2n("A")).boxed(),
+                            Ident::new("x"),
+                        ),
+                        Term::var(x.clone()),
+                    ),
+                ),
+                eq(
+                    "q",
+                    Type::universe(Universe(0)),
+                    arrow_a.clone(),
+                    Type::universe(Universe(0)),
+                    arrow_a_a.clone(),
+                ),
+            ]
+        },
+        */
+        {
+            // -- test 32: prune B and solve A with f B B
+            // , ( boy "f" ((C Bool) --> (C Bool) --> (C Bool))
+            // ( gal "A" (C Bool)
+            // : gal "B" ((C Bool) --> (C Bool))
+            // : eq "p" ((C Bool) --> (C Bool)) (ll "Y" (mv "A"))
+            //          ((C Bool) --> (C Bool)) (ll "X" (vv "f" $$ (mv "B" $$ vv "X") $$ (mv "B" $$ mv "A")))
+            // : [])
+            // )
+            // ?f : Bool -> Bool -> Bool
+            //      ?B : Bool -> Bool, ?A : Bool
+            // |- (\y. ?A) : (Bool -> Bool) -> Bool = (\x. f (?B x) (?B ?A)) : (Bool -> Bool)
+            let arrow = Type::arrow(bool_ty.clone(), bool_ty.clone());
+            boy(
+                f,
+                Type::arrow(bool_ty.clone(), arrow.clone()),
+                vec![
+                    gal("A", bool_ty.clone()),
+                    gal("B", arrow.clone()),
+                    eq(
+                        "p",
+                        arrow.clone(),
+                        Term::lam(
+                            Bind::explicit(y.uid(), bool_ty.clone().boxed(), Ident::new("Y")),
+                            Term::meta(METAS.s2n("A")),
+                        ),
+                        arrow.clone(),
+                        Term::lam(
+                            Bind::explicit(x.uid(), bool_ty.clone().boxed(), Ident::new("X")),
+                            Term::var(f).apply(vec![
+                                Term::meta(METAS.s2n("B")).apply(vec![Term::var(x)]),
+                                Term::meta(METAS.s2n("B")).apply(vec![Term::meta(METAS.s2n("A"))]),
+                            ]),
+                        ),
+                    ),
+                ],
+            )
         },
     ];
     let stucks = vec![
