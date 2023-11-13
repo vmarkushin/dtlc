@@ -4345,7 +4345,6 @@ fn test_all() -> eyre::Result<()> {
                 ),
             ]
         },
-        */
         {
             // -- test 32: prune B and solve A with f B B
             // , ( boy "f" ((C Bool) --> (C Bool) --> (C Bool))
@@ -4383,6 +4382,33 @@ fn test_all() -> eyre::Result<()> {
                     ),
                 ],
             )
+        },
+        */
+        {
+            // -- test 33: eta-contract pi
+            // , ( gal "A" (((C Bool) --> (C Bool)) --> (C Bool))
+            // : boy "f" ((C Bool) --> (C Bool))
+            // ( eq "p" (C Bool) (mv "A" $$ (ll "y" (vv "f" $$ vv "y")))
+            // (C Bool) (vv "f" $$ (C Tt))
+            // : [])
+            // )
+            // ?A : (Bool -> Bool) -> Bool, f : Bool -> Bool
+            // |- ?A (\y. f y) : Bool = f true : Bool
+            let arrow = Type::arrow(bool_ty.clone(), bool_ty.clone());
+            vec![gal("A", Type::arrow(arrow.clone(), bool_ty.clone()))].cons(boy(
+                f,
+                arrow.clone(),
+                vec![eq(
+                    "p",
+                    bool_ty.clone(),
+                    Term::meta(METAS.s2n("A")).apply(vec![Term::lam(
+                        Bind::explicit(y.uid(), bool_ty.clone().boxed(), Ident::new("y")),
+                        Term::var(f).apply(vec![Term::var(y)]),
+                    )]),
+                    bool_ty.clone(),
+                    Term::var(f).apply(vec![true_val.clone()]),
+                )],
+            ))
         },
     ];
     let stucks = vec![
