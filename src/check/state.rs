@@ -1,5 +1,6 @@
 use crate::check::meta::MetaContext;
 use crate::check::unification::{Context, Param};
+use crate::check::Error;
 use crate::syntax::core::{
     Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, Name, SubstWith, Substitution, Term,
     Twin, Type, Var,
@@ -88,10 +89,13 @@ impl TypeCheckState {
     }
 
     #[track_caller]
-    pub(crate) fn lookup_var(&self, p0: Name, twin: Option<Twin>) -> Bind<&Type> {
+    pub(crate) fn lookup_var(&self, p0: Name, twin: Option<Twin>) -> Result<Bind<&Type>, Error> {
         info!(target: "additional", "lookup_var: {p0} {:?} in {}", twin, self.gamma2);
-        let bind = self.gamma2.lookup(p0);
-        match (twin, bind.ty) {
+        let bind = self
+            .gamma2
+            .maybe_lookup(p0)
+            .ok_or_else(|| Error::Other(format!("Variable not found: {:?}", p0)))?;
+        Ok(match (twin, bind.ty) {
             (Some(Twin::Left), Param::Twins(ty, _)) => bind.map_term(|_| ty),
             (Some(Twin::Right), Param::Twins(_, ty)) => bind.map_term(|_| ty),
             (None, Param::P(ty)) => bind.map_term(|_| ty),
@@ -99,7 +103,7 @@ impl TypeCheckState {
                 "Expected {x:?}, found {}, when looking up for the variable",
                 y
             ),
-        }
+        })
     }
 }
 

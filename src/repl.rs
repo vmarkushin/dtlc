@@ -5,6 +5,7 @@ use crate::check::TypeCheckState;
 use crate::syntax::desugar::{desugar_prog, DesugarState};
 use crate::syntax::parser::Parser;
 use eyre::{Result, WrapErr};
+use home::home_dir;
 use rustyline::{
     completion::Completer,
     config,
@@ -194,8 +195,7 @@ pub fn repl(
             .build(),
     );
     rl.set_helper(Some(Helper::default()));
-
-    let history = PathBuf::from(std::env::var("HOME").unwrap()).join(".dtlc_history");
+    let history = home_dir().unwrap().join(".dtlc_history");
     drop(rl.load_history(&history));
 
     loop {

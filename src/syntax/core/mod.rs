@@ -268,6 +268,16 @@ impl<B: Binder + Debug> Ctx<B> {
             .unwrap_or_else(|| panic!("Invalid binder: {:?}", x))
     }
 
+    #[track_caller]
+    pub fn maybe_lookup(&self, v: B::Var) -> Option<Bind<&B::Param>> {
+        let n: Name = v.into();
+        let x = match n {
+            Name::Free(i) => self.0.iter().find(|x| x.to_name() == Name::Free(i))?,
+            Name::Bound(d) => self.0.get(self.var_to_idx(v))?,
+        };
+        x.lookup(&v)
+    }
+
     pub fn remove(&mut self, v: B::Var) -> B {
         self.0.remove(self.var_to_idx(v))
     }

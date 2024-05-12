@@ -332,7 +332,7 @@ impl Display for Pretty<'_, Term> {
                         }
                     }
                     Var::Twin(name, twin) => {
-                        let x = s.lookup_var(*name, Some(*twin));
+                        let x = s.lookup_var(*name, Some(*twin)).map_err(|_| fmt::Error)?;
                         format!("{}", x.ident.text)
                     }
                     Var::Meta(_) => {
