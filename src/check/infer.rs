@@ -47,7 +47,7 @@ impl TypeCheckState {
                         bind_ch.map_term(|x| x.boxed()),
                         Closure::Plain(body_ch.ast.boxed()),
                     )
-                    .at(*loc),
+                        .at(*loc),
                     pi_ty.into(),
                 ));
             }
@@ -161,11 +161,11 @@ impl TypeCheckState {
         let decl = self.def(decl);
         match decl {
             Decl::Data(DataInfo {
-                loc,
-                params,
-                universe: level,
-                ..
-            }) => Ok(Term::pi_from_tele(params.clone(), Term::universe(*level)).at(*loc)),
+                           loc,
+                           params,
+                           universe: level,
+                           ..
+                       }) => Ok(Term::pi_from_tele(params.clone(), Term::universe(*level)).at(*loc)),
             Decl::Cons(cons) => {
                 Ok(cons.signature.clone().at(cons.loc()))
                 // let params = &cons.params;
@@ -328,7 +328,7 @@ impl TypeCheckState {
                         ps_checked.clone(),
                         t_checked.ast.clone(),
                     )
-                    .at(*loc),
+                        .at(*loc),
                     Term::from(core::Id::new(
                         tele_checked,
                         t_ty,
@@ -394,6 +394,7 @@ impl TypeCheckState {
                 let ident = decl.ident();
                 let simplified = ty;
                 let loc = ident.loc;
+                // FIXME: check params
                 let res = match decl {
                     Decl::Data(_) => Ok(Term::data(ValData::new(gi, vec![])).at(loc)),
                     Decl::Cons(_) => Ok(Term::cons(ConHead::new(ident, gi), vec![]).at(loc)),

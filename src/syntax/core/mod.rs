@@ -104,11 +104,11 @@ impl<T> Tele<T> {
         Ctx(self.0)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &T> {
+    pub fn iter(&self) -> impl Iterator<Item=&T> {
         self.0.iter()
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item=&mut T> {
         self.0.iter_mut()
     }
 
@@ -211,7 +211,9 @@ pub trait Binder {
     type Param: Display;
     type Var: Into<usize> + Display + Copy + Into<Name>;
 
+    // TODO: rename to something like `to_bind`?
     fn lookup(&self, var: &Self::Var) -> Option<Bind<&Self::Param>>;
+
     fn to_name(&self) -> Name;
 }
 
@@ -298,7 +300,7 @@ impl<B: Clone> Ctx<B> {
 }
 
 impl<B> Ctx<B> {
-    pub fn extend<I: IntoIterator<Item = B>>(&mut self, iter: I) {
+    pub fn extend<I: IntoIterator<Item=B>>(&mut self, iter: I) {
         self.0.extend(iter)
     }
 
@@ -306,11 +308,11 @@ impl<B> Ctx<B> {
         Tele::<B>(self.0)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &B> {
+    pub fn iter(&self) -> impl Iterator<Item=&B> {
         self.0.iter()
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut B> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item=&mut B> {
         self.0.iter_mut()
     }
 
@@ -386,7 +388,7 @@ impl LetList {
         Self(field0)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Let> {
+    pub fn iter(&self) -> impl Iterator<Item=&Let> {
         self.0.iter()
     }
 }
@@ -410,7 +412,6 @@ impl<T> Boxed for T {
 
 #[cfg(test)]
 mod tests {
-
     use crate::check::{TypeCheckState, Unify};
     use crate::syntax::desugar::desugar_prog;
     use crate::syntax::parser::Parser;

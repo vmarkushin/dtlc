@@ -40,6 +40,7 @@ pub struct TypeCheckState {
     // pub next_mi: MI,
     pub lang_items: HashMap<LangItem, GI>,
     pub lang_items_back: HashMap<GI, LangItem>,
+    // pub cons_to_data_gi: HashMap<GI, GI>,
     pub type_in_type: bool,
 }
 
@@ -207,6 +208,16 @@ impl TypeCheckState {
 
     pub fn def(&self, ix: GI) -> &Decl {
         &self.sigma[ix]
+    }
+
+    pub fn cons_to_data_gi(&self, ix: GI) -> GI {
+        assert!(self.sigma[ix].is_cons());
+        // TODO: use hashmap in cons_to_data_gi
+        let mut ix = ix - 1;
+        while !self.sigma[ix].is_data() {
+            ix -= 1;
+        }
+        ix
     }
 
     pub fn local_by_id(&mut self, id: UID) -> Let {

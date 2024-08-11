@@ -35,6 +35,16 @@ pub struct ConsInfo {
     pub name: Ident,
     pub params: Tele,
     pub data_gi: GI,
+    /// Full data type's constructor signature. For example, the `cons` constructor of `List`
+    /// ```hs
+    /// data List (A : Type) : Type1
+    /// | nil
+    /// | cons A (List A)
+    /// ```
+    /// will have the following signature
+    /// ```hs
+    /// Π {A : Type} → A → List A → List A
+    /// ```
     pub signature: Term,
 }
 
@@ -58,6 +68,16 @@ pub struct DataInfo {
     /// References to its constructors.
     pub conses: Vec<GI>,
     pub universe: Universe,
+    /// Full data type signature. For example,
+    /// ```hs
+    /// data List (A : Type) : Type1
+    /// | nil
+    /// | cons A (List A)
+    /// ```
+    /// will have signature
+    /// ```hs
+    /// Π (A : Type) → Type1
+    /// ```
     pub signature: Term,
 }
 
@@ -129,6 +149,14 @@ impl Decl {
             Decl::Data(d) => d,
             _ => panic!("not a data"),
         }
+    }
+
+    pub fn is_data(&self) -> bool {
+        matches!(self, Decl::Data(_))
+    }
+
+    pub fn is_cons(&self) -> bool {
+        matches!(self, Decl::Cons(_))
     }
 
     pub fn as_cons(&self) -> &ConsInfo {

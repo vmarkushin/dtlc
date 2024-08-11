@@ -104,10 +104,10 @@ impl Unify for Pat {
         match (left, right) {
             (Pat::Var(x), Pat::Var(y)) if x == y => Ok(()),
             (Pat::Cons(forced1, a_head, a_args), Pat::Cons(forced2, b_head, b_args))
-                if forced1 == forced2 && a_head.cons_gi == b_head.cons_gi =>
-            {
-                Unify::unify(tcs, a_args.as_slice(), b_args.as_slice())
-            }
+            if forced1 == forced2 && a_head.cons_gi == b_head.cons_gi =>
+                {
+                    Unify::unify(tcs, a_args.as_slice(), b_args.as_slice())
+                }
             (Pat::Forced(x), Pat::Forced(y)) => Unify::unify(tcs, x, y),
             (Pat::Absurd, Pat::Absurd) => Ok(()),
             (Pat::Wildcard, Pat::Wildcard) => Ok(()),
@@ -259,50 +259,51 @@ fn check_solution(meta: MI, rhs: &Term) -> Result<()> {
 
 impl TypeCheckState {
     fn unify_meta_with(&mut self, term: &Term, mi: MI) -> Result<()> {
-        let depth = self.unify_depth;
-        match self.meta_ctx().solution(mi).clone() {
-            MetaSol::Unsolved => {
-                check_solution(mi, term)?;
-                if self.trace_tc {
-                    debug!("{}?{} := {} at {}", self.tc_depth_ws(), mi, term, depth);
-                }
-                let solution = term.clone();
-                self.mut_meta_ctx().solve_meta(mi, depth, solution);
-                Ok(())
-            }
-            MetaSol::Solved(ix, sol) => {
-                debug!(
-                    "{}using ?{} := {} at {}. cd = {}",
-                    self.tc_depth_ws(),
-                    mi,
-                    sol,
-                    ix,
-                    depth
-                );
-                match ix.cmp(&depth) {
-                    Ordering::Equal => {
-                        let sol = self.simplify(*sol)?;
-                        Unify::unify(self, &sol, term)
-                    }
-                    Ordering::Less => {
-                        let sol = sol.subst_with(Substitution::raise(depth - ix), self);
-                        let sol = self.simplify(sol)?;
-                        Unify::unify(self, &sol, term)
-                    }
-                    Ordering::Greater => {
-                        let sol_ix = ix;
-                        let term = term
-                            .clone()
-                            .subst_with(Substitution::raise(sol_ix - depth), self);
-                        self.unify_depth_set(sol_ix);
-                        let res = Unify::unify(self, &*sol, &term);
-                        self.unify_depth_set(depth);
-                        res?;
-                        Ok(())
-                    }
-                }
-            }
-        }
+        Ok(())
+        // let depth = self.unify_depth;
+        // match self.meta_ctx().solution(mi).clone() {
+        //     MetaSol::Unsolved => {
+        //         check_solution(mi, term)?;
+        //         if self.trace_tc {
+        //             debug!("{}?{} := {} at {}", self.tc_depth_ws(), mi, term, depth);
+        //         }
+        //         let solution = term.clone();
+        //         self.mut_meta_ctx().solve_meta(mi, depth, solution);
+        //         Ok(())
+        //     }
+        //     MetaSol::Solved(ix, sol) => {
+        //         debug!(
+        //             "{}using ?{} := {} at {}. cd = {}",
+        //             self.tc_depth_ws(),
+        //             mi,
+        //             sol,
+        //             ix,
+        //             depth
+        //         );
+        //         match ix.cmp(&depth) {
+        //             Ordering::Equal => {
+        //                 let sol = self.simplify(*sol)?;
+        //                 Unify::unify(self, &sol, term)
+        //             }
+        //             Ordering::Less => {
+        //                 let sol = sol.subst_with(Substitution::raise(depth - ix), self);
+        //                 let sol = self.simplify(sol)?;
+        //                 Unify::unify(self, &sol, term)
+        //             }
+        //             Ordering::Greater => {
+        //                 let sol_ix = ix;
+        //                 let term = term
+        //                     .clone()
+        //                     .subst_with(Substitution::raise(sol_ix - depth), self);
+        //                 self.unify_depth_set(sol_ix);
+        //                 let res = Unify::unify(self, &*sol, &term);
+        //                 self.unify_depth_set(depth);
+        //                 res?;
+        //                 Ok(())
+        //             }
+        //         }
+        //     }
+        // }
     }
 
     #[allow(clippy::many_single_char_names)]
