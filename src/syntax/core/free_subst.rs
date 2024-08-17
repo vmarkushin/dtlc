@@ -10,7 +10,7 @@ pub trait SubstituteFreeVars<'a, U = UID, T = Term, S = &'a mut TypeCheckState> 
 }
 
 impl<'a, T: SubstituteFreeVars<'a, UID, Term>, UID, Term> SubstituteFreeVars<'a, UID, Term>
-    for Box<T>
+for Box<T>
 {
     fn subst_free_vars_with(
         &mut self,

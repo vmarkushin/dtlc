@@ -2985,7 +2985,7 @@ fn to_names(params: Vec<Elim>) -> Option<Vec<(Name, Option<Twin>)>> {
 
             match t {
                 Elim::App(b) => match b.eta_contract() {
-                    Term::Var(v, args) if args.is_empty() => {
+                    Term::Var(v, args) if args.is_empty() && matches!(v, Var::Single(..) | Var::Twin(..)) => {
                         info!(target: "additional", "to_names: {}", v);
                         Some((v.name(), v.twin()))
                     }
@@ -5514,7 +5514,293 @@ fn test_all() -> eyre::Result<()> {
                 ),
             )
         },
+        // -- stuck 6: cannot safely prune second argument of B
+        // , ( gal "A" (C Bool)
+        //   : gal "B" ((C Bool) --> (C Bool) --> (C Bool))
+        //   : boy "X" (C Bool)
+        //     ( eq "p" (C Bool) (mv "A")
+        //              (C Bool) (mv "B" $$ mv "A" $$ vv "X")
+        //     : [])
+        //   )
+        {
+            vec![
+                gal("A", bool_ty.clone()),
+                gal(
+                    "B",
+                    Type::arrow(
+                        bool_ty.clone(),
+                        Type::arrow(bool_ty.clone(), bool_ty.clone()),
+                    ),
+                )].cons(
+                boy(
+                    x,
+                    bool_ty.clone(),
+                    vec![
+                        eq(
+                            "p",
+                            bool_ty.clone(),
+                            Term::meta(METAS.s2n("A")),
+                            bool_ty.clone(),
+                            Term::meta(METAS.s2n("B")).apply(vec![
+                                Term::meta(METAS.s2n("A")),
+                                Term::var(x.clone()),
+                            ]),
+                        ),
+                    ],
+                )
+            )
+        },
+        // -- stuck 8: awkward occurrence
+        // , ( gal "A" (C Set)
+        //   : gal "a" (mv "A")
+        //   : gal "f" (mv "A" --> (C Bool))
+        //   : eq "p" (C Set) (mv "A") (C Set) (if'' (C Set) (mv "f" $$ mv "a") (C Nat) (C Bool) --> (C Bool))
+        //   : [])
+        {
+            vec![
+                gal("A", Type::universe(Universe(0))),
+                gal("a", Term::meta(METAS.s2n("A"))),
+                gal(
+                    "f",
+                    Type::arrow(
+                        Term::meta(METAS.s2n("A")),
+                        bool_ty.clone(),
+                    ),
+                ),
+                eq(
+                    "p",
+                    Type::universe(Universe(0)),
+                    Term::meta(METAS.s2n("A")),
+                    Type::universe(Universe(0)),
+                    /*
+                        Term::Redex(
+                            if_fn.clone(),
+                            Ident::new("if"),
+                            vec![
+                                Elim::app(Term::lam(
+                                    Bind::unnamed(bool_ty.clone().boxed()),
+                                    bool_ty.clone(),
+                                )),
+                                Elim::app(Term::meta(METAS.s2n("B")).apply(vec![Term::var(y.clone())])),
+                                Elim::app(Term::var(x.clone())),
+                                Elim::app(false_val.clone()),
+                            ],
+                        ),
+
+                     */
+                    Term::Redex(
+                        if_fn.clone(),
+                        Ident::new("if"),
+                        vec![
+                            Elim::app(Term::lam(
+                                Bind::unnamed(bool_ty.clone().boxed()),
+                                Type::universe(Universe(0)),
+                            )),
+                            Elim::app(
+                                Term::meta(METAS.s2n("f"))
+                                    .apply(vec![Term::meta(METAS.s2n("a"))]),
+                            ),
+                            Elim::app(nat_ty.clone()),
+                            Elim::app(bool_ty.clone()),
+                        ],
+                    ),
+                ),
+            ]
+        },
+        // -- stuck 10
+        // , ( gal "A" ((C Bool) --> (C Bool))
+        //   : gal "B" (C Bool)
+        //   : boy "X" (C Bool)
+        //     ( eq "p" (C Bool) (mv "A" $$ (mv "A" $$ vv "X"))
+        //              (C Bool) (mv "B")
+        //     : [])
+        //   )
+        {
+            vec![
+                gal(
+                    "A",
+                    Type::arrow(bool_ty.clone(), bool_ty.clone()),
+                ),
+                gal("B", bool_ty.clone())].cons(
+                boy(
+                    x,
+                    bool_ty.clone(),
+                    vec![
+                        eq(
+                            "p",
+                            bool_ty.clone(),
+                            Term::meta(METAS.s2n("A"))
+                                .apply(vec![
+                                    Term::meta(METAS.s2n("A"))
+                                        .apply(vec![Term::var(x.clone())]),
+                                ]),
+                            bool_ty.clone(),
+                            Term::meta(METAS.s2n("B")),
+                        ),
+                    ],
+                ),
+            )
+        },
+        // -- stuck 11
+        // , ( gal "F" ((C Bool) --> (C Bool))
+        //   : gal "A" (_PI "X" (C Bool) (if'' (C Set) (mv "F" $$ vv "X") (C Bool) (C Bool)))
+        //   : boy "X" (C Bool)
+        //     ( boy "Y" (C Bool)
+        //       ( eq "p" (if'' (C Set) (mv "F" $$ vv "X") (C Bool) (C Bool)) (mv "A" $$ vv "X")
+        //                (if'' (C Set) (mv "F" $$ vv "Y") (C Bool) (C Bool)) (mv "A" $$ vv "Y")
+        //       : [])
+        //     )
+        //   )
+        {
+            vec![
+                gal(
+                    "F",
+                    Type::arrow(bool_ty.clone(), bool_ty.clone()),
+                ),
+                gal(
+                    "A",
+                    Type::pi(
+                        Bind::explicit(x.uid(), bool_ty.clone().boxed(), Ident::new("X")),
+                        Term::Redex(
+                            if_fn.clone(),
+                            Ident::new("if"),
+                            vec![
+                                Elim::app(Term::lam(
+                                    Bind::unnamed(bool_ty.clone().boxed()),
+                                    Type::universe(Universe(0)),
+                                )),
+                                Elim::app(
+                                    Term::meta(METAS.s2n("F"))
+                                        .apply(vec![Term::var(x.clone())]),
+                                ),
+                                Elim::app(bool_ty.clone()),
+                                Elim::app(bool_ty.clone()),
+                            ],
+                        ),
+                    ),
+                )].cons(
+                boy(
+                    x,
+                    bool_ty.clone(),
+                    boy(
+                        y,
+                        bool_ty.clone(),
+                        vec![
+                            eq(
+                                "p",
+                                Term::Redex(
+                                    if_fn.clone(),
+                                    Ident::new("if"),
+                                    vec![
+                                        Elim::app(Term::lam(
+                                            Bind::unnamed(bool_ty.clone().boxed()),
+                                            Type::universe(Universe(0)),
+                                        )),
+                                        Elim::app(
+                                            Term::meta(METAS.s2n("F"))
+                                                .apply(vec![Term::var(x.clone())]),
+                                        ),
+                                        Elim::app(bool_ty.clone()),
+                                        Elim::app(bool_ty.clone()),
+                                    ],
+                                ),
+                                Term::meta(METAS.s2n("A"))
+                                    .apply(vec![Term::var(x.clone())]),
+                                Term::Redex(
+                                    if_fn.clone(),
+                                    Ident::new("if"),
+                                    vec![
+                                        Elim::app(Term::lam(
+                                            Bind::unnamed(bool_ty.clone().boxed()),
+                                            Type::universe(Universe(0)),
+                                        )),
+                                        Elim::app(
+                                            Term::meta(METAS.s2n("F"))
+                                                .apply(vec![Term::var(y.clone())]),
+                                        ),
+                                        Elim::app(bool_ty.clone()),
+                                        Elim::app(bool_ty.clone()),
+                                    ],
+                                ),
+                                Term::meta(METAS.s2n("A"))
+                                    .apply(vec![Term::var(y.clone())]),
+                            ),
+                        ],
+                    ),
+                ),
+            )
+        },
          */
+        // -- stuck 12
+        // , ( gal "B" ((C Bool) --> (C Bool))
+        //   : gal "F" (if'' (C Set) (mv "B" $$ (C Tt)) (C Bool) (C Bool) --> (C Bool))
+        //   : eq "p" (if'' (C Set) (mv "B" $$ (C Tt)) (C Bool) (C Bool) --> (C Bool))
+        //                (ll "Y" (mv "F" $$ vv "Y"))
+        //            ((C Bool) --> (C Bool))
+        //                (ll "Y" (vv "Y"))
+        //   : [])
+        {
+            vec![
+                gal(
+                    "B",
+                    Type::arrow(bool_ty.clone(), bool_ty.clone()),
+                ),
+                gal(
+                    "F",
+                    Type::arrow(
+                        Term::Redex(
+                            if_fn.clone(),
+                            Ident::new("if"),
+                            vec![
+                                Elim::app(Term::lam(
+                                    Bind::unnamed(bool_ty.clone().boxed()),
+                                    Type::universe(Universe(0)),
+                                )),
+                                Elim::app(
+                                    Term::meta(METAS.s2n("B"))
+                                        .apply(vec![true_val.clone()]),
+                                ),
+                                Elim::app(bool_ty.clone()),
+                                Elim::app(bool_ty.clone()),
+                            ],
+                        ),
+                        bool_ty.clone(),
+                    ),
+                ),
+                eq(
+                    "p",
+                    Type::arrow(
+                        Term::Redex(
+                            if_fn.clone(),
+                            Ident::new("if"),
+                            vec![
+                                Elim::app(Term::lam(
+                                    Bind::unnamed(bool_ty.clone().boxed()),
+                                    Type::universe(Universe(0)),
+                                )),
+                                Elim::app(
+                                    Term::meta(METAS.s2n("B"))
+                                        .apply(vec![true_val.clone()]),
+                                ),
+                                Elim::app(bool_ty.clone()),
+                                Elim::app(bool_ty.clone()),
+                            ],
+                        ),
+                        bool_ty.clone(),
+                    ),
+                    Term::lam(
+                        Bind::explicit(y.uid(), bool_ty.clone().boxed(), Ident::new("Y")),
+                        Term::meta(METAS.s2n("F"))
+                            .apply(vec![Term::var(y.clone())]),
+                    ),
+                    Type::arrow(bool_ty.clone(), bool_ty.clone()),
+                    Term::lam(
+                        Bind::explicit(y.uid(), bool_ty.clone().boxed(), Ident::new("Y")),
+                        Term::var(y.clone()),
+                    ),
+                ),
+            ]
+        },
     ];
     let fails = vec![
         // -- fail 0: occur check failure (A occurs in suc A)
