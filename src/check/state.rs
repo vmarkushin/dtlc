@@ -1,10 +1,7 @@
 use crate::check::meta::MetaContext;
 use crate::check::unification::{Context, Param};
 use crate::check::Error;
-use crate::syntax::core::{
-    Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, Name, SubstWith, Substitution, Term,
-    Twin, Type, Var,
-};
+use crate::syntax::core::{Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, Name, SubstCtx, SubstWith, Substitution, Term, Twin, Type, Var};
 use crate::syntax::{LangItem, DBI, GI, MI, UID};
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -193,11 +190,6 @@ impl TypeCheckState {
             .fresh_meta(|m| Term::meta_with(m, vec![]))
     }
 
-    pub fn fresh_free_var(&mut self) -> Term {
-        let t = Term::Var(Var::free(self.next_uid()), vec![]);
-        t
-    }
-
     pub fn fresh_name(&self) -> Name {
         Name::Free(self.next_uid())
     }
@@ -265,30 +257,36 @@ impl TypeCheckState {
     }
 }
 
+impl SubstCtx for TypeCheckState {
+    fn fresh_uid(&mut self) -> UID {
+        self.next_uid.load(Ordering::Relaxed)
+    }
+}
+
 impl<T> Bind<T> {
-    pub fn unbind(mut self, tcs: &mut TypeCheckState) -> Self {
-        self.name = tcs.next_uid();
+    pub fn unbind<C: SubstCtx>(mut self, tcs: &mut C) -> Self {
+        self.name = tcs.fresh_uid();
         assert_ne!(self.name, 0);
         self
     }
 }
 
-pub trait Unbind<T>: Sized {
-    type Body: for<'a> SubstWith<'a>;
-
-    fn into_closure(self) -> (Bind<T>, Option<Self::Body>);
-
-    fn unbind_smart(self, tcs: &mut TypeCheckState) -> (Bind<T>, Option<Self::Body>) {
-        let (x, b) = Unbind::<T>::into_closure(self);
-        let bind = x.unbind(tcs);
-        let uid = bind.name;
-        assert_ne!(uid, 0);
-        match b {
-            None => (bind, None),
-            Some(b) => (
-                bind,
-                Some(b.subst_with(Substitution::one(Term::free_var(uid)), tcs)),
-            ),
-        }
-    }
-}
+// pub trait Unbind<T>: Sized {
+//     type Body: SubstWith;
+//
+//     fn into_closure(self) -> (Bind<T>, Option<Self::Body>);
+//
+//     fn unbind_smart(self, tcs: &mut TypeCheckState) -> (Bind<T>, Option<Self::Body>) {
+//         let (x, b) = Unbind::<T>::into_closure(self);
+//         let bind = x.unbind(tcs);
+//         let uid = bind.name;
+//         assert_ne!(uid, 0);
+//         match b {
+//             None => (bind, None),
+//             Some(b) => (
+//                 bind,
+//                 Some(b.subst_with(Substitution::one(Term::free_var(uid)), tcs)),
+//             ),
+//         }
+//     }
+// }

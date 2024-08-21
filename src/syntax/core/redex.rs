@@ -8,6 +8,7 @@ use crate::syntax::pattern::Pat;
 use crate::syntax::{Bind, Ident, DBI, GI, UID};
 use itertools::Itertools;
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::iter;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
@@ -50,19 +51,23 @@ impl Term {
         }
     }
 
-    fn subst_in_match_with_var(
-        subst: &Rc<Substitution>,
-        tcs: &mut TypeCheckState,
+    pub(crate) fn subst_in_match_with_var<S, C: SubstCtx>(
+        subst: &Rc<PrimSubst<S>>,
+        tcs: &mut C,
         x: &Term,
         y: DBI,
         cs: Vec<Case>,
-    ) -> Vec<Case> {
+    ) -> Vec<Case>
+    where
+        Pat<DBI, Term>: SubstWith<S, C>,
+        Term: SubstWith<S, C>,
+    {
         let x = x.dbi_view().expect("unexpected term");
         debug!("Replacing with var {} instead of {}...", y, x);
         /*
         Given a case tree of the form:
         match x { | cons ... => ... }
-        Before entering the match, our context was Γ = t_n, t_n-1, ..., x, ..., t_0.
+        Before entering the match, our context is Γ = t_n, t_n-1, ..., x, ..., t_0.
         After entering the match, the variable `x` gets eliminated, so all the variables
         on the left are shifted to the right.
         Γ = t_n, t_n-1, ..., t_0
@@ -75,11 +80,11 @@ impl Term {
                 /*
                 When having such case:
                 | cons y_m y_m-1 ... y0 => t
-                Our context after entering it will look like:
+                Our context after entering the branch will look like this:
                 Γ = t_n, t_n-1, ..., y_m, y_m-1, ..., y_0, t_k, ..., t_0.
                 Meaning, all the variables >t_k should be lifted by `y_m - y_0 + 1`
 
-                Notice also, that `x` was changed to `y` (after substitution).
+                Notice also, that `x` has changed to `y` (after substitution).
                 It means, that we should lower all deBruijn indices >x in
                 the case body by 1, but ignoring the newly introduced variables y_i.
 
@@ -118,8 +123,8 @@ impl Term {
                     variables are replaced with the corresponding pattern variables and variables
                     are shifted).
                      */
-                    let fresh_uid = tcs.next_uid.load(Ordering::Relaxed);
-                    let popped_body = case.body.clone().pop_out(tcs, x, Some(x_max));
+                    let fresh_uid = tcs.fresh_uid();
+                    let popped_body = case.body.clone().pop_out::<C>(tcs, x, Some(x_max));
                     trace!("Popped body: {}", &popped_body);
                     let popped_body_new = popped_body.subst_with(subst.clone(), tcs);
                     trace!("Popped body': {}", &popped_body_new);
@@ -143,12 +148,18 @@ impl Term {
             .collect()
     }
 
-    fn subst_non_var_in_cases_instead_of_var(
-        subst: &Rc<Substitution>,
-        tcs: &mut TypeCheckState,
+    pub(crate) fn subst_non_var_in_cases_instead_of_var<S, C>(
+        subst: &Rc<PrimSubst<S>>,
+        tcs: &mut C,
         cs: Vec<Case>,
         x: &DBI,
-    ) -> Vec<Case> {
+    ) -> Vec<Case>
+    where
+        C: SubstCtx,
+        Pat<DBI, Term>: SubstWith<S, C>,
+        Term: SubstWith<S, C>,
+        Term: SubstWith<Term, C>,
+    {
         let x = *x;
         debug!("substituting instead of var {}...", x);
         cs.into_iter()
@@ -159,7 +170,7 @@ impl Term {
                     debug_assert_eq!(x_min, x);
                     let x_max = *pat_vars.first().unwrap();
 
-                    let fresh_uid = tcs.next_uid.load(Ordering::Relaxed);
+                    let fresh_uid = tcs.fresh_uid();
                     let popped_body = case.body.clone().pop_out(tcs, x, Some(x_max));
                     trace!("Popped body: {}", &popped_body);
                     let popped_body_new = popped_body.subst_with(subst.clone(), tcs);
@@ -183,11 +194,15 @@ impl Term {
             .collect()
     }
 
-    pub fn subst_non_var_in_cases_instead_of_free_var(
-        tcs: &mut TypeCheckState,
+    pub fn subst_non_var_in_cases_instead_of_free_var<C>(
+        tcs: &mut C,
         cs: Vec<Case>,
         x: &UID,
-    ) -> Vec<Case> {
+    ) -> Vec<Case>
+    where
+        C: SubstCtx,
+        Term: SubstWith<Term, C>,
+    {
         let x = *x;
         cs.into_iter()
             .map(|mut case| {
@@ -200,13 +215,16 @@ impl Term {
             .collect()
     }
 
-    fn subst_non_var_in_cases_instead_of_non_var(
-        subst: Rc<Substitution>,
-        tcs: &mut TypeCheckState,
+    pub(crate) fn subst_non_var_in_cases_instead_of_non_var<S, C: SubstCtx>(
+        subst: Rc<PrimSubst<S>>,
+        tcs: &mut C,
         cs: Vec<Case>,
-    ) -> Vec<Case> {
+    ) -> Vec<Case>
+    where
+        Term: SubstWith<S, C>,
+    {
         let new_subst = subst.clone();
-        debug!("new''' {} = drop({}, 1) ", new_subst, subst);
+        // debug!("new''' {} = drop({}, 1) ", new_subst, subst);
         cs.into_iter()
             .map(|mut case| {
                 let pat_vars = case.pattern.vars();
@@ -214,7 +232,7 @@ impl Term {
                     let x_min = *pat_vars.last().unwrap();
                     let x_max = *pat_vars.first().unwrap();
 
-                    let fresh_uid = tcs.next_uid.load(Ordering::Relaxed);
+                    let fresh_uid = tcs.fresh_uid();
                     let popped_body = case.body.clone().pop_out_non_var(tcs, x_min, x_max);
                     trace!("Popped body: {}", &popped_body);
                     let popped_body_new = popped_body.subst_with(subst.clone(), tcs);
@@ -224,7 +242,7 @@ impl Term {
                         .push_in_without_pat_subst_non_var(tcs, x_min, x_max, fresh_uid);
                     trace!("Pushed in body: {}", &case.body);
                 } else {
-                    case.body = case.body.subst(new_subst.clone());
+                    case.body = case.body.subst_with(new_subst.clone(), tcs);
                 };
                 case
             })
@@ -239,38 +257,54 @@ pub fn def_app(f: GI, id: Ident, mut a: Vec<Elim>, mut args: Vec<Elim>) -> Term 
     Term::Redex(Func::Index(f), id, a)
 }
 
+pub trait SubstCtx {
+    fn fresh_uid(&mut self) -> UID;
+
+    fn fresh_free_var(&mut self) -> Term {
+        Term::Var(Var::free(self.fresh_uid()), vec![])
+    }
+}
+
 /// [Agda](https://hackage.haskell.org/package/Agda-2.6.0.1/docs/src/Agda.TypeChecking.Substitute.Class.html#Subst).
-pub trait Subst<T: Sized = Self, A = Term>: Sized {
+pub trait Subst<A = Term, T: Sized = Self>: Sized {
     /// Apply a substitution to an open term.
     fn subst(self, subst: Rc<PrimSubst<A>>) -> T;
 }
 
-pub trait SubstWith<'a, T: Sized = Self, A = Term, S = &'a mut TypeCheckState>: Sized {
+pub trait SubstWith<A = Term, C = TypeCheckState, T: Sized = Self>: Sized {
     /// Apply a substitution to an open term.
-    fn subst_with(self, subst: Rc<PrimSubst<A>>, state: S) -> T;
+    fn subst_with(self, subst: Rc<PrimSubst<A>>, state: &mut C) -> T;
 }
 
-impl Subst for Term {
-    fn subst(self, subst: Rc<Substitution>) -> Term {
-        let mut tcs = TypeCheckState::default();
-        self.subst_with(subst, &mut tcs)
+impl<S, T, R> Subst<S, R> for T
+where
+    T: SubstWith<S, TypeCheckState, R>,
+{
+    fn subst(self, subst: Rc<PrimSubst<S>>) -> R {
+        self.subst_with(subst, &mut TypeCheckState::default())
     }
 }
 
-impl Subst for Elim {
-    fn subst(self, subst: Rc<Substitution>) -> Elim {
+impl<C: SubstCtx> SubstWith<Term, C, Term> for Var {
+    fn subst_with(self, subst: Rc<PrimSubst<Term>>, state: &mut C) -> Term {
         match self {
-            Elim::App(t) => {
-                let t = t.subst(subst.clone());
-                Elim::App(t.boxed())
+            Var::Single(Name::Bound(f)) | Var::Twin(Name::Bound(f), _) => {
+                subst.lookup_with::<C>(f, state)
             }
-            Elim::Proj(p) => Elim::Proj(p),
+            v if matches!(&v, Var::Meta(_) | Var::Single(_) | Var::Twin(_, _)) => Term::Var(v, vec![]),
+            _ => unreachable!()
         }
     }
 }
 
-impl SubstWith<'_> for Term {
-    fn subst_with(self, subst: Rc<Substitution>, tcs: &'_ mut TypeCheckState) -> Term {
+impl<S, C> SubstWith<S, C> for Term
+where
+    Var: SubstWith<S, C, Self>,
+    Pat<DBI, Term>: SubstWith<S, C>,
+    S: Display,
+    C: SubstCtx,
+{
+    fn subst_with(self, subst: Rc<PrimSubst<S>>, tcs: &mut C) -> Term {
         match self {
             Term::Pi(arg, closure) => Term::pi2(
                 arg.unboxed().subst_with(subst.clone(), tcs).boxed(),
@@ -286,17 +320,7 @@ impl SubstWith<'_> for Term {
             }
             Term::Universe(n) => Term::universe(n),
             Term::Data(info) => Term::data(info.subst_with(subst, tcs)),
-            Term::Var(Var::Meta(m), a) => Term::meta_with(m, a.subst_with(subst, tcs)),
-            Term::Var(Var::Single(Name::Bound(f)), args)
-            | Term::Var(Var::Twin(Name::Bound(f), _), args) => subst
-                .lookup_with(f, tcs)
-                .apply_elim(args.subst_with(subst, tcs)),
-            Term::Var(Var::Single(Name::Free(n)), args) => {
-                Term::Var(Var::free(n), vec![]).apply_elim(args.subst_with(subst, tcs))
-            }
-            Term::Var(Var::Twin(Name::Free(n), t), args) => {
-                Term::Var(Var::twin_free(n, t), vec![]).apply_elim(args.subst_with(subst, tcs))
-            }
+            Term::Var(var, args) => var.subst_with(subst.clone(), tcs).apply_elim(args.subst_with(subst, tcs)),
             Term::Id(id) => id.subst_with(subst, tcs),
             Term::Refl(t) => Term::Refl(t.subst_with(subst, tcs).boxed()),
             Term::Redex(Func::Index(f), id, args) => {
@@ -316,9 +340,10 @@ impl SubstWith<'_> for Term {
                     "subst in `match {} ...` with {} => `match {} ...`",
                     x, subst, x_inst
                 );
-                match &x_inst {
-                    Term::Var(Var::Single(Name::Bound(y)), es) if es.is_empty() => {
-                        let cs = Self::subst_in_match_with_var(&subst, tcs, &x, *y, cs);
+                let maybe_x_inst_var = x_inst.dbi_view();
+                match maybe_x_inst_var {
+                    Some(y) => {
+                        let cs = Self::subst_in_match_with_var::<S, C>(&subst, tcs, &x, y, cs);
                         Term::Match(x_inst.boxed(), x_ty.clone(), cs)
                     }
                     _ => {
@@ -346,8 +371,11 @@ impl SubstWith<'_> for Term {
     }
 }
 
-impl SubstWith<'_> for Elim {
-    fn subst_with(self, subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Elim {
+impl<S, C> SubstWith<S, C> for Elim
+where
+    Term: SubstWith<S, C>,
+{
+    fn subst_with(self, subst: Rc<PrimSubst<S>>, tcs: &mut C) -> Elim {
         match self {
             Elim::App(term) => Elim::app(term.subst_with(subst, tcs)),
             e => e,
@@ -355,8 +383,11 @@ impl SubstWith<'_> for Elim {
     }
 }
 
-impl SubstWith<'_> for Lambda {
-    fn subst_with(self, subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Self {
+impl<S, C> SubstWith<S, C> for Lambda
+where
+    Term: SubstWith<S, C>,
+{
+    fn subst_with(self, subst: Rc<PrimSubst<S>>, tcs: &mut C) -> Self {
         match self {
             Lambda(arg, closure) => Lambda(
                 arg.unboxed().subst_with(subst.clone(), tcs).boxed(),
@@ -366,8 +397,11 @@ impl SubstWith<'_> for Lambda {
     }
 }
 
-impl SubstWith<'_, Term> for Id {
-    fn subst_with(self, subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Term {
+impl<S, C> SubstWith<S, C, Term> for Id
+where
+    Term: SubstWith<S, C>,
+{
+    fn subst_with(self, subst: Rc<PrimSubst<S>>, tcs: &mut C) -> Term {
         Term::Id(Id {
             tele: self.tele.subst_with(subst.clone(), tcs),
             ty: self.ty.subst_with(subst.clone(), tcs).boxed(),
@@ -378,85 +412,59 @@ impl SubstWith<'_, Term> for Id {
     }
 }
 
-impl SubstWith<'_> for Closure {
-    fn subst_with(self, subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Self {
+
+impl<S, C> SubstWith<S, C> for Closure
+where
+    Term: SubstWith<S, C>,
+{
+    fn subst_with(self, subst: Rc<PrimSubst<S>>, tcs: &mut C) -> Self {
         match self {
             Closure::Plain(body) => Self::plain(body.subst_with(subst.lift_by(1), tcs)),
         }
     }
 }
 
-impl<R, T: Subst<R>> Subst<Vec<R>> for Vec<T> {
-    fn subst(self, subst: Rc<Substitution>) -> Vec<R> {
-        self.into_iter().map(|e| e.subst(subst.clone())).collect()
+impl<A, S, C, T> SubstWith<S, C, Vec<A>> for Vec<T>
+where
+    T: SubstWith<S, C, A>,
+{
+    fn subst_with(self, subst: Rc<PrimSubst<S>>, tcs: &mut C) -> Vec<A> {
+        self.into_iter().map(|e| e.subst_with(subst.clone(), tcs)).collect()
     }
 }
 
-impl<R, T: Subst<R>, const N: usize> Subst<[R; N]> for [T; N] {
-    fn subst(self, subst: Rc<Substitution>) -> [R; N] {
-        self.map(|e| e.subst(subst.clone()))
-    }
-}
-
-impl<A, B, X: Subst<A>, Y: Subst<B>> Subst<(A, B)> for (X, Y) {
-    fn subst(self, subst: Rc<Substitution>) -> (A, B) {
+impl<A, B, S, C, X, Y> SubstWith<S, C, (A, B)> for (X, Y)
+where
+    X: SubstWith<S, C, A>,
+    Y: SubstWith<S, C, B>,
+{
+    fn subst_with(self, subst: Rc<PrimSubst<S>>, tcs: &mut C) -> (A, B) {
         let (x, y) = self;
-        (x.subst(subst.clone()), y.subst(subst))
+        (x.subst_with(subst.clone(), tcs), y.subst_with(subst, tcs))
     }
 }
 
-impl<R, T: Subst<R>> Subst<Bind<R>> for Bind<T> {
-    fn subst(self, subst: Rc<Substitution>) -> Bind<R> {
-        self.map_term(|t| t.subst(subst))
-    }
-}
-
-macro_rules! impl_subst_with_for_vec {
-    ($t: ty) => {
-        impl<'a> SubstWith<'a, Self> for Vec<$t> {
-            fn subst_with(self, subst: Rc<Substitution>, tcs: &'a mut TypeCheckState) -> Self {
-                self.into_iter()
-                    .map(|e| e.subst_with(subst.clone(), tcs))
-                    .collect()
-            }
-        }
-    };
-}
-
-impl_subst_with_for_vec!(Term);
-impl_subst_with_for_vec!(Elim);
-impl_subst_with_for_vec!(Constraint);
-impl_subst_with_for_vec!(Pat<DBI, Term>);
-
-/*
-impl<'a, R, T: SubstWith<'a, R>, const N: usize> SubstWith<'a, [R; N]> for [T; N] {
-    fn subst_with(self, subst: Rc<Substitution>, tcs: &'a mut TypeCheckState) -> [R; N] {
-        self.map(|e| e.subst_with(subst.clone(), tcs))
-    }
-}
-*/
-
-impl<'a, A, B, X: Subst<A>, Y: SubstWith<'a, B>> SubstWith<'a, (A, B)> for (X, Y) {
-    fn subst_with(self, subst: Rc<Substitution>, tcs: &'a mut TypeCheckState) -> (A, B) {
-        let (x, y) = self;
-        (x.subst(subst.clone()), y.subst_with(subst, tcs))
-    }
-}
-
-impl<'a, R, T: SubstWith<'a, R>> SubstWith<'a, Bind<R>> for Bind<T> {
-    fn subst_with(self, subst: Rc<Substitution>, tcs: &'a mut TypeCheckState) -> Bind<R> {
+impl<R, S, C, T> SubstWith<S, C, Bind<R>> for Bind<T>
+where
+    T: SubstWith<S, C, R>,
+{
+    fn subst_with(self, subst: Rc<PrimSubst<S>>, tcs: &mut C) -> Bind<R> {
         self.map_term(|t| t.subst_with(subst, tcs))
     }
 }
 
-impl SubstWith<'_> for ValData {
-    fn subst_with(self, subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Self {
+impl<S, C> SubstWith<S, C> for ValData
+where
+    Term: SubstWith<S, C>,
+{
+    fn subst_with(self, subst: Rc<PrimSubst<S>>, tcs: &mut C) -> Self {
         ValData::new(self.def, self.args.subst_with(subst, tcs))
     }
 }
 
-impl<'a> SubstWith<'a, Pat<DBI, Term>> for Pat<DBI, Term> {
-    fn subst_with(self, subst: Rc<PrimSubst<Term>>, tcs: &'a mut TypeCheckState) -> Pat<DBI, Term> {
+impl<C: SubstCtx> SubstWith<Term, C> for Pat<DBI, Term>
+{
+    fn subst_with(self, subst: Rc<PrimSubst<Term>>, tcs: &mut C) -> Self {
         match self {
             Pat::Absurd => Pat::Absurd,
             Pat::Var(v) => {
@@ -598,7 +606,7 @@ mod tests {
         let x_max = 3;
 
         let mut tcs = TypeCheckState::default();
-        let fresh_uid = tcs.next_uid.load(Ordering::Relaxed);
+        let fresh_uid = tcs.fresh_uid();
         assert_eq!(
             term.pop_out(&mut tcs, x, Some(x_max)),
             Term::fun_app(

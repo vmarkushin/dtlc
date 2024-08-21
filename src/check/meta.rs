@@ -1,9 +1,6 @@
 use crate::check::state::TypeCheckState;
 use crate::check::Result;
-use crate::syntax::core::{
-    self, Bind, Case, Closure, Elim, Func, Lambda, Pat, Subst, Substitution, Tele, Term, ValData,
-    Var,
-};
+use crate::syntax::core::{self, Bind, Case, Closure, Elim, Func, Lambda, Pat, PrimSubst, Subst, Substitution, Tele, Term, ValData, Var};
 use crate::syntax::{DBI, MI};
 use std::{
     fmt::{Debug, Display, Formatter, Write},
@@ -26,15 +23,15 @@ impl<Val> Default for MetaSol<Val> {
     }
 }
 
-impl<R, T: Subst<R>> Subst<MetaSol<R>> for MetaSol<T> {
-    fn subst(self, subst: Rc<Substitution>) -> MetaSol<R> {
-        use MetaSol::*;
-        match self {
-            Solved(i, t) => MetaSol::solved(i, t.subst(subst)),
-            Unsolved => Unsolved,
-        }
-    }
-}
+// impl<S, T: Subst<S, R>, R> Subst<S, MetaSol<R>> for MetaSol<T> {
+//     fn subst(self, subst: Rc<PrimSubst<S>>) -> MetaSol<R> {
+//         use MetaSol::*;
+//         match self {
+//             Solved(i, t) => MetaSol::solved(i, t.subst(subst)),
+//             Unsolved => Unsolved,
+//         }
+//     }
+// }
 
 #[derive(Clone, Debug)]
 pub struct MetaContext<Val>(Vec<MetaSol<Val>>);

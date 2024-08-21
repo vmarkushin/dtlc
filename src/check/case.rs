@@ -1,9 +1,7 @@
 use crate::check::meta::HasMeta;
 use crate::check::{Error, Result, TypeCheckState};
 use crate::syntax::abs::{Expr, Pat as PatA};
-use crate::syntax::core::{
-    Boxed, Case, DataInfo, DeBruijn, Decl, Name, Pat, SubstWith, Substitution, Term, Type, Var,
-};
+use crate::syntax::core::{Boxed, Case, DataInfo, DeBruijn, Decl, Name, Pat, PrimSubst, SubstWith, Substitution, Term, Type, Var};
 use crate::syntax::{ConHead, DBI, UID};
 use itertools::{EitherOrBoth, Itertools};
 use std::cmp::Ordering;
@@ -58,7 +56,7 @@ impl Constraint {
                                 })
                                 .collect(),
                         )
-                        .unwrap(),
+                            .unwrap(),
                     )
                 },
             ),
@@ -67,11 +65,13 @@ impl Constraint {
     }
 }
 
-impl SubstWith<'_> for Constraint {
-    fn subst_with(self, subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Self {
+impl<S, C> SubstWith<S, C> for Constraint
+where
+    Term: SubstWith<S, C, Term>,
+{
+    fn subst_with(self, subst: Rc<PrimSubst<S>>, tcs: &mut C) -> Self {
         let pat = self.pat;
-        let term = self.term.subst_with(subst.clone(), tcs);
-        let ty = self.ty.subst_with(subst, tcs);
+        let (term, ty) = (self.term, self.ty).subst_with(subst.clone(), tcs);
         Self { pat, term, ty }
     }
 }

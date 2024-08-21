@@ -1,8 +1,5 @@
-use crate::check::{Error, Result, TypeCheckState, Unbind};
-use crate::syntax::core::{
-    Bind, Binder, BoundFreeVars, Boxed, Closure, Ctx, DeBruijn, Elim, Func, Lambda, Name, Pat,
-    PrimSubst, Subst, SubstWith, Substitution, Tele, Term, Twin, Type, ValData, Var,
-};
+use crate::check::{Error, Result, TypeCheckState};
+use crate::syntax::core::{Bind, Binder, BoundFreeVars, Boxed, Closure, Ctx, DeBruijn, Elim, Func, Lambda, Name, Pat, PrimSubst, Subst, SubstWith, Substitution, Tele, Term, Twin, Type, Unbind, ValData, Var};
 use crate::syntax::core::{Case, Decl as DataDecl};
 use crate::syntax::desugar::desugar_prog;
 use crate::syntax::parser::Parser;
@@ -234,20 +231,26 @@ pub enum Problem {
     All(Bind<Param>, Box<Problem>),
 }
 
-impl SubstWith<'_> for Equation {
-    fn subst_with(self, subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Self {
+impl<S, C> SubstWith<S, C> for Equation
+where
+    Term: SubstWith<S, C, Term>,
+{
+    fn subst_with(self, subst: Rc<PrimSubst<S>>, ctx: &mut C) -> Self {
         let Equation { ty1, tm1, ty2, tm2 } = self;
         Equation {
-            ty1: ty1.subst_with(subst.clone(), tcs),
-            tm1: tm1.subst_with(subst.clone(), tcs),
-            ty2: ty2.subst_with(subst.clone(), tcs),
-            tm2: tm2.subst_with(subst, tcs),
+            ty1: ty1.subst_with(subst.clone(), ctx),
+            tm1: tm1.subst_with(subst.clone(), ctx),
+            ty2: ty2.subst_with(subst.clone(), ctx),
+            tm2: tm2.subst_with(subst, ctx),
         }
     }
 }
 
-impl SubstWith<'_> for Param {
-    fn subst_with(self, subst: Rc<PrimSubst<Term>>, state: &'_ mut TypeCheckState) -> Self {
+impl<S, C> SubstWith<S, C> for Param
+where
+    Term: SubstWith<S, C>,
+{
+    fn subst_with(self, subst: Rc<PrimSubst<S>>, state: &mut C) -> Self {
         match self {
             Param::P(t) => Param::P(t.subst_with(subst, state)),
             Param::Twins(t, u) => Param::Twins(
@@ -258,8 +261,11 @@ impl SubstWith<'_> for Param {
     }
 }
 
-impl SubstWith<'_> for Problem {
-    fn subst_with(self, subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Self {
+impl<S, C> SubstWith<S, C> for Problem
+where
+    Term: SubstWith<S, C, Term>,
+{
+    fn subst_with(self, subst: Rc<PrimSubst<S>>, tcs: &mut C) -> Self {
         match self {
             Problem::Unify(t) => Problem::Unify(t.subst_with(subst, tcs)),
             Problem::All(bind, p) => {
@@ -300,7 +306,7 @@ impl Problem {
 
     pub fn unbind(self, uid: UID, tcs: &mut TypeCheckState) -> Problem {
         assert_ne!(uid, 0);
-        self.subst_with(Substitution::one(Term::free_var(uid)), tcs)
+        self.subst_with(PrimSubst::<Unbind>::one(Unbind(uid)), tcs)
     }
 
     pub fn bind(binder: &Bind<Param>, mut prob: Self) -> Self {
@@ -1419,6 +1425,8 @@ impl TypeCheckState {
                     Bind::explicit(uid, Param::Twins(a1, a2), Ident::new("x")),
                     problem,
                 );
+                info!(target: "additional", "Wrapped {p}, {p:?}");
+
                 self.active(id, p)
             }
             _ => match (tm1, tm2) {
@@ -2245,6 +2253,7 @@ impl TypeCheckState {
         // trace!(target: "unify", "equalise_n:\n\tv:  {v:?}\n\tes: {es:?}\n\tv2:  {v2:?}\n\tes2: {es2:?}");
         match (v, es, v2, es2) {
             (v, es, v2, es2) if v == v2 && es.is_empty() && es2.is_empty() => {
+                info!(target: "unify", "equalise_n: infer {v}");
                 let term = self.infer_(v)?;
                 trace!(target: "unify", "equalise_n -> infer {v} -> {term}");
                 Ok((v.clone(), es, term))

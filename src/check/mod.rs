@@ -5,7 +5,7 @@ use crate::syntax::core::{pretty, Elim, Pat, Pretty, Term};
 use crate::syntax::{Ident, Loc, Universe, MI};
 pub use case::{CaseTree, Clause, Constraint, LshProblem};
 pub use meta::{HasMeta, MetaSol};
-pub use state::{TypeCheckState, Unbind};
+pub use state::{TypeCheckState};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 pub use unify::Unify;

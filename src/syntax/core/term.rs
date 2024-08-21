@@ -1,7 +1,7 @@
 use crate::check::TypeCheckState;
 use crate::syntax::core::redex::Subst;
 use crate::syntax::core::subst::Substitution;
-use crate::syntax::core::{Boxed, DeBruijn, SubstWith, Tele};
+use crate::syntax::core::{Boxed, DeBruijn, PrimSubst, SubstWith, Tele, Unbind};
 use crate::syntax::pattern;
 use crate::syntax::{ConHead, Ident, Universe, DBI, GI, MI, UID};
 use derive_more::From;
@@ -313,6 +313,12 @@ pub enum Term {
     Ap(Tele, Vec<Term>, Box<Term>),
 }
 
+impl From<Var> for Term {
+    fn from(var: Var) -> Self {
+        Term::Var(var, Vec::new())
+    }
+}
+
 impl Term {
     pub(crate) fn free_var_view(&self) -> Option<UID> {
         match self {
@@ -324,13 +330,17 @@ impl Term {
 
 impl Term {
     pub(crate) fn unbind(self, uid: UID, tcs: &mut TypeCheckState) -> Term {
-        self.subst_with(Substitution::one(Term::free_var(uid)), tcs)
+        self.subst_with(PrimSubst::<Unbind>::one(Unbind(uid)), tcs)
     }
 }
 
 impl Term {
     pub(crate) fn var(p0: Name) -> Term {
         Term::Var(Var::Single(p0), vec![])
+    }
+
+    pub fn bound_var(dbi: DBI) -> Self {
+        Term::Var(Var::bound(dbi), Vec::new())
     }
 }
 
@@ -389,42 +399,42 @@ impl Term {
                 let n = n.unboxed();
                 match n {
                     Term::Var(y, mut es)
-                        if !es.is_empty()
-                            && es.last().unwrap().is_app()
-                            && es.last().unwrap().clone().into_app() == Term::from_dbi(0) =>
-                    {
-                        let _z = es.pop().unwrap();
-                        es = es.subst(Substitution::strengthen(1));
-                        return Term::Var(y, es);
-                    }
-                    Term::Cons(c, mut args)
-                        if !args.is_empty() && args.last().unwrap() == &Term::from_dbi(0) =>
-                    {
-                        let _z = args.pop().unwrap();
-                        args = args.subst(Substitution::strengthen(1));
-                        return Term::Cons(c, args);
-                    }
-                    Term::Data(ValData { def, mut args })
-                        if !args.is_empty() && args.last().unwrap() == &Term::from_dbi(0) =>
-                    {
-                        let _z = args.pop().unwrap();
-                        args = args.subst(Substitution::strengthen(1));
-                        return Term::Data(ValData { def, args });
-                    }
-                    Term::Redex(f, x, mut es)
-                        if !es.is_empty()
-                            && es.last().unwrap().is_app()
-                            && es.last().unwrap().clone().into_app() == Term::from_dbi(0) =>
-                    {
-                        let _z = es.pop().unwrap();
-                        es = es.subst(Substitution::strengthen(1));
-                        let is_empty = es.is_empty();
-                        let contracted = Term::Redex(f, x, es);
-                        if !is_empty {
-                            return contracted.eta_contract();
+                    if !es.is_empty()
+                        && es.last().unwrap().is_app()
+                        && es.last().unwrap().clone().into_app() == Term::from_dbi(0) =>
+                        {
+                            let _z = es.pop().unwrap();
+                            es = es.subst(Substitution::strengthen(1));
+                            return Term::Var(y, es);
                         }
-                        return contracted;
-                    }
+                    Term::Cons(c, mut args)
+                    if !args.is_empty() && args.last().unwrap() == &Term::from_dbi(0) =>
+                        {
+                            let _z = args.pop().unwrap();
+                            args = args.subst(Substitution::strengthen(1));
+                            return Term::Cons(c, args);
+                        }
+                    Term::Data(ValData { def, mut args })
+                    if !args.is_empty() && args.last().unwrap() == &Term::from_dbi(0) =>
+                        {
+                            let _z = args.pop().unwrap();
+                            args = args.subst(Substitution::strengthen(1));
+                            return Term::Data(ValData { def, args });
+                        }
+                    Term::Redex(f, x, mut es)
+                    if !es.is_empty()
+                        && es.last().unwrap().is_app()
+                        && es.last().unwrap().clone().into_app() == Term::from_dbi(0) =>
+                        {
+                            let _z = es.pop().unwrap();
+                            es = es.subst(Substitution::strengthen(1));
+                            let is_empty = es.is_empty();
+                            let contracted = Term::Redex(f, x, es);
+                            if !is_empty {
+                                return contracted.eta_contract();
+                            }
+                            return contracted;
+                        }
                     n => Term::Lam(Lambda(x, Closure::Plain(n.boxed()))),
                 }
             }
@@ -678,7 +688,7 @@ impl Term {
 
     pub fn lams<T: Into<Bind<Box<Term>>>, I>(ps: I, body: Term) -> Term
     where
-        I: IntoIterator<Item = T>,
+        I: IntoIterator<Item=T>,
         <I as IntoIterator>::IntoIter: DoubleEndedIterator,
     {
         ps.into_iter()
@@ -698,7 +708,7 @@ impl Term {
 
     pub fn pis<T: Into<Bind<Box<Term>>>, I>(ps: I, body: Term) -> Term
     where
-        I: IntoIterator<Item = T>,
+        I: IntoIterator<Item=T>,
         <I as IntoIterator>::IntoIter: DoubleEndedIterator,
     {
         ps.into_iter()
@@ -729,7 +739,7 @@ impl Term {
         }
     }
 
-    pub fn fun_app(gi: GI, name: impl Into<Ident>, args: impl IntoIterator<Item = Term>) -> Term {
+    pub fn fun_app(gi: GI, name: impl Into<Ident>, args: impl IntoIterator<Item=Term>) -> Term {
         Term::Redex(
             Func::Index(gi),
             name.into(),
@@ -857,8 +867,8 @@ impl Term {
         Term::Var(Var::Meta(index), params)
     }
 
-    pub fn universe(uni: Universe) -> Self {
-        Term::Universe(uni)
+    pub fn universe(uni: impl Into<Universe>) -> Self {
+        Term::Universe(uni.into())
     }
 
     pub fn def(gi: GI, ident: Ident, elims: Vec<Elim>) -> Self {

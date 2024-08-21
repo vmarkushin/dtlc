@@ -8,9 +8,10 @@ mod pretty;
 mod redex;
 mod subst;
 mod term;
+mod binding;
 
 use crate::check::unification::{Flavour, Occurrence};
-use crate::check::{TypeCheckState, Unbind};
+use crate::check::{TypeCheckState};
 use crate::syntax;
 use crate::syntax::{Loc, DBI};
 pub use dbi::DeBruijn;
@@ -28,6 +29,8 @@ pub use term::{
     Bind, BoundFreeVars, Case, Closure, Elim, Func, Id, Lambda, Name, Pat, Term, Twin, Type, Val,
     ValData, Var,
 };
+pub use redex::SubstCtx;
+pub use binding::Unbind;
 
 impl Term {
     pub fn at(self, loc: Loc) -> TermInfo {
@@ -69,19 +72,19 @@ pub struct Tele<T = Bind>(pub Vec<T>);
 // }
 //
 
-impl<T: Clone> Unbind<T> for Tele<Bind<T>>
-where
-    Self: for<'a> SubstWith<'a>,
-{
-    type Body = Self;
-
-    fn into_closure(mut self) -> (Bind<T>, Option<Self::Body>) {
-        assert!(self.0.len() > 0, "Cannot unbind empty telescope");
-        let bind = self.pop().unwrap();
-        let body = if self.0.len() > 0 { Some(self) } else { None };
-        (bind, body)
-    }
-}
+// impl<T: Clone> Unbind<T> for Tele<Bind<T>>
+// where
+//     Self: SubstWith,
+// {
+//     type Body = Self;
+//
+//     fn into_closure(mut self) -> (Bind<T>, Option<Self::Body>) {
+//         assert!(self.0.len() > 0, "Cannot unbind empty telescope");
+//         let bind = self.pop().unwrap();
+//         let body = if self.0.len() > 0 { Some(self) } else { None };
+//         (bind, body)
+//     }
+// }
 
 impl<T> Default for Tele<T> {
     fn default() -> Self {
@@ -153,6 +156,12 @@ impl<T: Binder> Tele<T> {
     }
 }
 
+impl<T: Binder> FromIterator<T> for Tele<T> {
+    fn from_iter<I: IntoIterator<Item=T>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
 impl<T: Display> Display for Tele<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -163,8 +172,11 @@ impl<T: Display> Display for Tele<T> {
     }
 }
 
-impl SubstWith<'_> for Tele {
-    fn subst_with(self, mut subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Self {
+impl<S, C> SubstWith<S, C> for Tele
+where
+    Term: SubstWith<S, C>,
+{
+    fn subst_with(self, mut subst: Rc<PrimSubst<S>>, tcs: &mut C) -> Self {
         Tele(
             self.0
                 .into_iter()
@@ -360,7 +372,7 @@ impl<T: Display> Display for Ctx<T> {
     }
 }
 
-impl SubstWith<'_> for Ctx<Bind<Type>> {
+impl SubstWith for Ctx<Bind<Type>> {
     fn subst_with(self, mut subst: Rc<Substitution>, tcs: &mut TypeCheckState) -> Self {
         Ctx(self
             .0

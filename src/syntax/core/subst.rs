@@ -1,11 +1,12 @@
 use crate::check::TypeCheckState;
+use crate::syntax::core::binding::Unbind;
 use crate::syntax::core::dbi::DeBruijn;
 use crate::syntax::core::redex::Subst;
-use crate::syntax::core::{SubstWith, Term};
+use crate::syntax::core::{Pat, SubstCtx, SubstWith, Term, Var};
 use crate::syntax::{dbi_nat, dbi_pred, DBI, UID};
 use itertools::Either;
 use std::collections::HashMap;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::hash::BuildHasher;
 use std::rc::Rc;
 
@@ -153,29 +154,111 @@ impl<Term: DeBruijn + Subst<Term, Term> + Clone> PrimSubst<Term> {
     }
 }
 
-impl<'a> PrimSubst<Term> {
-    pub fn raise_term_with(k: DBI, term: Term, tcs: &'a mut TypeCheckState) -> Term {
-        Self::raise_from_with(0, k, term, tcs)
+impl<'a, T> PrimSubst<T>
+{
+    pub fn raise_term_with2<C>(k: DBI, term: T, tcs: &mut C) -> T
+    where
+        Term: SubstWith<T, C>,
+        T: SubstWith<T, C> + Debug + Clone,
+    {
+        Self::raise_from_with2(0, k, term, tcs)
     }
 
-    pub fn raise_from_with(n: DBI, k: DBI, term: Term, tcs: &'a mut TypeCheckState) -> Term {
+    pub fn raise_from_with2<C>(n: DBI, k: DBI, term: T, tcs: &mut C) -> T
+    where
+        Term: SubstWith<T, C>,
+        T: SubstWith<T, C> + Debug + Clone,
+    {
         term.subst_with(Self::raise(k).lift_by(n), tcs)
     }
 
-    pub fn lookup_with(&self, dbi: DBI, state: &'a mut TypeCheckState) -> Term {
-        self.lookup_with_impl(dbi, state)
-            .map_left(Clone::clone)
-            .into_inner()
-    }
+
+    // pub fn lookup_with2(&self, dbi: DBI, state: &'a mut TypeCheckState) -> Term {
+    //     self.lookup_with_impl(dbi, state)
+    //         // .map_left(Clone::clone)
+    //         .map_left(|l| {
+    //         l.clone().subst_with(Self::raise(*n), state)
+    //     }).map_right(|term| term.subst_with(Self::raise(*n), state))
+    //         .into_inner()
+    // }
 
     /// If lookup failed, return the DBI.
-    pub fn lookup_with_impl(&self, i: DBI, state: &'a mut TypeCheckState) -> Either<&Term, Term> {
+    pub fn lookup_with_impl2<C>(&self, i: DBI, state: &'a mut C) -> Either<T, Term>
+    where
+        C: SubstCtx,
+    // Var: SubstWith<T, C, Term>,
+    // Pat: SubstWith<T, C>,
+        Term: SubstWith<T, C>,
+        T: SubstWith<T, C> + Debug + Clone + Display,
+
+    {
         use Either::*;
         use PrimSubst::*;
         match self {
             IdS => Right(DeBruijn::from_dbi(i)),
             Weak(n, rest) => match &**rest {
                 IdS => Right(Term::from_dbi(i + *n)),
+                rho => Right(
+                    rho.lookup_with_impl2(i, state)
+                        .map_left(|l| l.subst_with(Self::raise(*n), state))
+                        .map_right(|term| term.subst_with(Self::raise(*n), state))
+                        .expect_right("expected Right. This is a bug, revert to previous version"),
+                ),
+                // rho => Right(rho.lookup_with(i, state).subst_with(Self::raise(*n), state)),
+            },
+            Cons(o, rest) => match dbi_nat(i) {
+                None => Left(o.clone()),
+                Some(i) => rest.lookup_with_impl2(i, state),
+            },
+            Succ(rest) => rest.lookup_with_impl2(dbi_pred(i), state),
+            Lift(n, _) if i < *n => Right(DeBruijn::from_dbi(i)),
+            Lift(n, rest) => {
+                rest.lookup_with_impl2(i - *n, state)
+                    .map_left(|l| PrimSubst::raise_term_with2(*n, l.clone(), state))
+                    .map_right(|term| PrimSubst::<Term>::raise_term_with2(*n, term, state))
+                // let term1 = Self::raise_term_with2(*n, term, state);
+            }
+            Empty => panic!(),
+        }
+    }
+}
+
+impl<'a> PrimSubst<Term> {
+    pub fn raise_term_with<C>(k: DBI, term: Term, tcs: &mut C) -> Term
+    where
+        Term: SubstWith<Term, C>,
+    {
+        Self::raise_from_with(0, k, term, tcs)
+    }
+
+    pub fn raise_from_with<C>(n: DBI, k: DBI, term: Term, tcs: &mut C) -> Term
+    where
+        Term: SubstWith<Term, C>,
+    {
+        term.subst_with(Self::raise(k).lift_by(n), tcs)
+    }
+
+    pub fn lookup_with<C>(&self, dbi: DBI, state: &'a mut C) -> Term
+    where
+        Term: SubstWith<Term, C>,
+    {
+        self.lookup_with_impl(dbi, state)
+            .map_left(Clone::clone)
+            .into_inner()
+    }
+
+    /// If lookup failed, return the DBI.
+    pub fn lookup_with_impl<C>(&self, i: DBI, state: &'a mut C) -> Either<&Term, Term>
+    where
+        Term: SubstWith<Term, C>,
+    {
+        use Either::*;
+        use PrimSubst::*;
+        match self {
+            IdS => Right(DeBruijn::from_dbi(i)),
+            Weak(n, rest) => match &**rest {
+                IdS => Right(Term::from_dbi(i + *n)),
+                // rho => rho.lookup_with_impl(i, state).expect_right("expected Right. This is a bug, revert to previous version").subst_with(Self::raise(*n), state),
                 rho => Right(rho.lookup_with(i, state).subst_with(Self::raise(*n), state)),
             },
             Cons(o, rest) => match dbi_nat(i) {
@@ -502,9 +585,9 @@ mod tests {
                 (1, Term::data(ValData::new(1, vec![]))),
                 (0, Term::data(ValData::new(2, vec![]))),
             ]
-            .into_iter()
-            .map(From::from)
-            .collect(),
+                .into_iter()
+                .map(From::from)
+                .collect(),
         );
         debug!("Γ = {}", Γ);
         debug!("{}", t);
@@ -516,9 +599,9 @@ mod tests {
                 (3, Term::data(ValData::new(4, vec![]))),
                 (0, Term::data(ValData::new(2, vec![]))),
             ]
-            .into_iter()
-            .map(From::from)
-            .collect(),
+                .into_iter()
+                .map(From::from)
+                .collect(),
         );
 
         debug!("Γ' = {}", Γ_new);
@@ -528,8 +611,8 @@ mod tests {
                 (1, Term::from_dbi(1)),
                 (2, Term::meta_with(2, vec![])),
             ]
-            .into_iter()
-            .collect::<HashMap<_, _>>(),
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
             3,
         );
         debug!("σ = {}", σ);

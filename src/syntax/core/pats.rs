@@ -1,7 +1,7 @@
 use crate::check::TypeCheckState;
 use crate::syntax::core::redex::SubstWith;
 use crate::syntax::core::term::BoundFreeVars;
-use crate::syntax::core::{DeBruijn, Pat, Substitution, Term, Var};
+use crate::syntax::core::{DeBruijn, Pat, SubstCtx, Substitution, Term, Var};
 use crate::syntax::{DBI, UID};
 use itertools::Itertools;
 use std::rc::Rc;
@@ -89,7 +89,11 @@ impl Pat {
 }
 
 impl Term {
-    pub fn pop_out_non_var(self, tcs: &mut TypeCheckState, x: DBI, x_max: DBI) -> Term {
+    pub fn pop_out_non_var<C>(self, tcs: &mut C, x: DBI, x_max: DBI) -> Term
+    where
+        C: SubstCtx,
+        Term: SubstWith<Term, C>,
+    {
         let x_min = x;
         let subst = Substitution::raise(0).union(
             Substitution::parallel((x_min..=x_max).map(|_| tcs.fresh_free_var())).lift_by(x_min),
@@ -97,7 +101,11 @@ impl Term {
         self.subst_with(subst, tcs)
     }
 
-    pub fn pop_out(self, tcs: &mut TypeCheckState, x: DBI, maybe_x_max: Option<DBI>) -> Term {
+    pub fn pop_out<C>(self, tcs: &mut C, x: DBI, maybe_x_max: Option<DBI>) -> Term
+    where
+        C: SubstCtx,
+        Term: SubstWith<Term, C>,
+    {
         let x_min = x;
         let subst = if let Some(x_max) = maybe_x_max {
             let _len = x_max - x_min + 1;
@@ -111,14 +119,16 @@ impl Term {
         self.subst_with(subst, tcs)
     }
 
-    pub fn push_in(
+    pub fn push_in<C>(
         self,
-        tcs: &mut TypeCheckState,
+        tcs: &mut C,
         x: DBI,
         maybe_x_max: Option<DBI>,
         from_uid: UID,
         pat_term: Term,
-    ) -> Term {
+    ) -> Term where
+        Term: SubstWith<Term, C>,
+    {
         let x_min = x;
         let (subst, vars) = if let Some(x_max) = maybe_x_max {
             let len = x_max - x_min + 1;
@@ -145,13 +155,16 @@ impl Term {
         t
     }
 
-    pub fn push_in_without_pat_subst(
+    pub fn push_in_without_pat_subst<C: SubstCtx>(
         self,
-        tcs: &mut TypeCheckState,
+        tcs: &mut C,
         x: DBI,
         maybe_x_max: Option<DBI>,
         from_uid: UID,
-    ) -> Term {
+    ) -> Term
+    where
+        Term: SubstWith<Term, C>,
+    {
         let x_min = x;
         let (subst, vars) = if let Some(x_max) = maybe_x_max {
             let len = x_max - x_min + 1;
@@ -180,13 +193,16 @@ impl Term {
         t
     }
 
-    pub fn push_in_without_pat_subst_non_var(
+    pub fn push_in_without_pat_subst_non_var<C>(
         self,
-        tcs: &mut TypeCheckState,
+        tcs: &mut C,
         x: DBI,
         x_max: DBI,
         from_uid: UID,
-    ) -> Term {
+    ) -> Term where
+        C: SubstCtx,
+        Term: SubstWith<Term, C>,
+    {
         let x_min = x;
         let (subst, vars) = {
             let len = x_max - x_min + 1;
@@ -217,7 +233,7 @@ impl Term {
 #[cfg(test)]
 mod tests {
     use crate::check::TypeCheckState;
-    use crate::syntax::core::{DeBruijn, Pat, Subst, Term, Var};
+    use crate::syntax::core::{DeBruijn, Pat, Subst, SubstCtx, Term, Var};
     use crate::syntax::ConHead;
     use std::sync::atomic::Ordering;
 
@@ -226,7 +242,7 @@ mod tests {
         let con_head = ConHead::new("cons", 0);
         let term = Term::cons(con_head.clone(), [2, 0].map(Term::from_dbi).to_vec());
         let mut tcs = TypeCheckState::default();
-        let fresh_uid = tcs.next_uid.load(Ordering::Relaxed);
+        let fresh_uid = tcs.fresh_uid();
         let term_new = term.clone().pop_out_non_var(&mut tcs, 0, 0);
         assert_eq!(
             term_new,
