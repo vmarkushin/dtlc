@@ -123,7 +123,7 @@ impl Term {
                     variables are replaced with the corresponding pattern variables and variables
                     are shifted).
                      */
-                    let fresh_uid = tcs.fresh_uid();
+                    let fresh_uid = tcs.next_fresh_uid();
                     let popped_body = case.body.clone().pop_out::<C>(tcs, x, Some(x_max));
                     trace!("Popped body: {}", &popped_body);
                     let popped_body_new = popped_body.subst_with(subst.clone(), tcs);
@@ -170,7 +170,7 @@ impl Term {
                     debug_assert_eq!(x_min, x);
                     let x_max = *pat_vars.first().unwrap();
 
-                    let fresh_uid = tcs.fresh_uid();
+                    let fresh_uid = tcs.next_fresh_uid();
                     let popped_body = case.body.clone().pop_out(tcs, x, Some(x_max));
                     trace!("Popped body: {}", &popped_body);
                     let popped_body_new = popped_body.subst_with(subst.clone(), tcs);
@@ -232,7 +232,7 @@ impl Term {
                     let x_min = *pat_vars.last().unwrap();
                     let x_max = *pat_vars.first().unwrap();
 
-                    let fresh_uid = tcs.fresh_uid();
+                    let fresh_uid = tcs.next_fresh_uid();
                     let popped_body = case.body.clone().pop_out_non_var(tcs, x_min, x_max);
                     trace!("Popped body: {}", &popped_body);
                     let popped_body_new = popped_body.subst_with(subst.clone(), tcs);
@@ -259,6 +259,8 @@ pub fn def_app(f: GI, id: Ident, mut a: Vec<Elim>, mut args: Vec<Elim>) -> Term 
 
 pub trait SubstCtx {
     fn fresh_uid(&mut self) -> UID;
+
+    fn next_fresh_uid(&mut self) -> UID;
 
     fn fresh_free_var(&mut self) -> Term {
         Term::Var(Var::free(self.fresh_uid()), vec![])
@@ -288,11 +290,10 @@ where
 impl<C: SubstCtx> SubstWith<Term, C, Term> for Var {
     fn subst_with(self, subst: Rc<PrimSubst<Term>>, state: &mut C) -> Term {
         match self {
-            Var::Single(Name::Bound(f)) | Var::Twin(Name::Bound(f), _) => {
+            v if let Some(f) = v.dbi_view() => {
                 subst.lookup_with::<C>(f, state)
             }
-            v if matches!(&v, Var::Meta(_) | Var::Single(_) | Var::Twin(_, _)) => Term::Var(v, vec![]),
-            _ => unreachable!()
+            v => Term::Var(v, vec![]),
         }
     }
 }
@@ -348,11 +349,17 @@ where
                     }
                     _ => {
                         let cs = match &*x {
-                            Term::Var(Var::Single(Name::Bound(x)), es) if es.is_empty() => {
-                                Self::subst_non_var_in_cases_instead_of_var(&subst, tcs, cs, x)
+                            t if let Some(x) = t.dbi_view() => {
+                                if t.is_twin_var() {
+                                    warn!("Twin var in match: {}", x);
+                                }
+                                Self::subst_non_var_in_cases_instead_of_var(&subst, tcs, cs, &x)
                             }
-                            Term::Var(Var::Single(Name::Free(x)), es) if es.is_empty() => {
-                                Self::subst_non_var_in_cases_instead_of_free_var(tcs, cs, x)
+                            t if let Some(x) = t.free_var_view() => {
+                                if t.is_twin_var() {
+                                    warn!("Twin (free) var in match: {}", x);
+                                }
+                                Self::subst_non_var_in_cases_instead_of_free_var(tcs, cs, &x)
                             }
                             _ => Self::subst_non_var_in_cases_instead_of_non_var(subst, tcs, cs),
                         };
@@ -606,7 +613,7 @@ mod tests {
         let x_max = 3;
 
         let mut tcs = TypeCheckState::default();
-        let fresh_uid = tcs.fresh_uid();
+        let fresh_uid = tcs.next_fresh_uid();
         assert_eq!(
             term.pop_out(&mut tcs, x, Some(x_max)),
             Term::fun_app(

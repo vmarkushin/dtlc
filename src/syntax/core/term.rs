@@ -76,9 +76,11 @@ impl Name {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, Default)]
 #[cfg_attr(test, derive(PartialOrd, Ord))]
 pub enum Twin {
+    #[default]
+    Only,
     Left,
     Right,
 }
@@ -95,42 +97,57 @@ pub enum Twin {
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 #[cfg_attr(test, derive(PartialOrd, Ord))]
 pub enum Var {
-    Single(Name),
-    Twin(Name, Twin),
+    V(Name, Twin),
     Meta(MI),
+}
+
+impl DeBruijn for Var {
+    fn dbi_view(&self) -> Option<DBI> {
+        match self {
+            Var::V(Name::Bound(dbi), _) => Some(*dbi),
+            _ => None,
+        }
+    }
+
+    fn from_dbi(dbi: DBI) -> Self {
+        Var::V(Name::Bound(dbi), Twin::Only)
+    }
+}
+
+impl Var {
+    pub(crate) fn single(p0: Name) -> Var {
+        Var::V(p0, Twin::Only)
+    }
 }
 
 impl Var {
     pub(crate) fn name(&self) -> Name {
         match self {
-            Var::Single(name) | Var::Twin(name, _) => *name,
+            Var::V(name, _) => *name,
             Var::Meta(mi) => Name::Free(*mi),
         }
     }
 
-    pub(crate) fn twin(&self) -> Option<Twin> {
-        match self {
-            Var::Twin(_, twin) => Some(*twin),
-            _ => None,
-        }
+    pub fn is_twin_var(&self) -> bool {
+        matches!(self, Var::V(_, Twin::Left | Twin::Right))
     }
 }
 
 impl Var {
     pub fn bound(dbi: DBI) -> Self {
-        Self::Single(Name::Bound(dbi))
+        Self::V(Name::Bound(dbi), Twin::Only)
     }
 
     pub fn free(uid: UID) -> Self {
-        Self::Single(Name::Free(uid))
+        Self::V(Name::Free(uid), Twin::Only)
     }
 
     pub fn twin_bound(dbi: DBI, twin: Twin) -> Self {
-        Self::Twin(Name::Bound(dbi), twin)
+        Self::V(Name::Bound(dbi), twin)
     }
 
     pub fn twin_free(uid: UID, twin: Twin) -> Self {
-        Self::Twin(Name::Free(uid), twin)
+        Self::V(Name::Free(uid), twin)
     }
 
     pub fn meta(mi: MI) -> Self {
@@ -141,10 +158,8 @@ impl Var {
 impl From<Var> for usize {
     fn from(value: Var) -> Self {
         match value {
-            Var::Single(Name::Bound(dbi)) => dbi.into(),
-            Var::Single(Name::Free(uid)) => uid.into(),
-            Var::Twin(Name::Free(dbi), _) => dbi.into(),
-            Var::Twin(Name::Bound(dbi), _) => dbi.into(),
+            Var::V(Name::Bound(dbi), _) => dbi.into(),
+            Var::V(Name::Free(uid), _) => uid.into(),
             Var::Meta(mi) => mi.into(),
         }
     }
@@ -313,6 +328,12 @@ pub enum Term {
     Ap(Tele, Vec<Term>, Box<Term>),
 }
 
+impl Term {
+    pub(crate) fn bound(p0: DBI, p1: Twin) -> Term {
+        Term::Var(Var::V(Name::Bound(p0), p1), Vec::new())
+    }
+}
+
 impl From<Var> for Term {
     fn from(var: Var) -> Self {
         Term::Var(var, Vec::new())
@@ -322,9 +343,21 @@ impl From<Var> for Term {
 impl Term {
     pub(crate) fn free_var_view(&self) -> Option<UID> {
         match self {
-            Term::Var(Var::Single(Name::Free(uid)), es) if es.is_empty() => Some(*uid),
+            Term::Var(Var::V(Name::Free(uid), _t), es) if es.is_empty() => Some(*uid),
             _ => None,
         }
+    }
+
+    /// Returns DBI of a bound variable, ignoring the spine (see `Term::dbi_view` to return DBI for an unapplied variable).
+    fn head_bound_var_view(&self) -> Option<DBI> {
+        match self {
+            Term::Var(Var::V(Name::Bound(i), _), _xs) => Some(*i),
+            _ => None,
+        }
+    }
+
+    pub fn is_twin_var(&self) -> bool {
+        matches!(self, Term::Var(Var::V(_, Twin::Left | Twin::Right), _))
     }
 }
 
@@ -336,7 +369,7 @@ impl Term {
 
 impl Term {
     pub(crate) fn var(p0: Name) -> Term {
-        Term::Var(Var::Single(p0), vec![])
+        Term::Var(Var::V(p0, Twin::Only), vec![])
     }
 
     pub fn bound_var(dbi: DBI) -> Self {
@@ -353,7 +386,7 @@ impl Term {
 impl Term {
     pub(crate) fn as_free_var(&self) -> UID {
         match self {
-            Term::Var(Var::Single(Name::Free(x)), _) => *x,
+            Term::Var(Var::V(Name::Free(x), _), _) => *x,
             _ => panic!("Expected free variable, got {:?}", self),
         }
     }
@@ -383,7 +416,7 @@ impl Term {
 
     pub(crate) fn to_name(self) -> Option<Name> {
         match self.eta_contract() {
-            Term::Var(Var::Single(n) | Var::Twin(n, _), es) if es.is_empty() => Some(n),
+            Term::Var(Var::V(n, _), es) if es.is_empty() => Some(n),
             _ => None,
         }
     }
@@ -392,6 +425,7 @@ impl Term {
     ///
     /// (λx. t x) ≡ t
     /// (fst a, snd a) ≡ a
+    /// TODO: implement recursion
     pub(crate) fn eta_contract(self) -> Term {
         match self {
             Term::Lam(Lambda(x, n)) => {
@@ -457,7 +491,12 @@ impl<Ix: From<DBI>, T: Subst<Term>> TryIntoPat<Ix, T> for Term {
                     .map(Term::try_into_pat)
                     .collect::<Option<Vec<_>>>()?,
             )),
-            Term::Var(Var::Single(Name::Bound(ix)), _) => Some(Pat::Var(Ix::from(ix))),
+            Term::Var(Var::V(Name::Bound(ix), _), _) => {
+                if self.is_twin_var() {
+                    warn!("twin var in pattern");
+                }
+                Some(Pat::Var(Ix::from(ix)))
+            }
             _ => None,
         }
     }
@@ -540,18 +579,11 @@ impl BoundFreeVars for Term {
             Term::Var(var, args) => {
                 args.bound_free_vars(vars, depth);
                 match var {
-                    Var::Single(Name::Free(uid)) if *uid != 0 => {
+                    Var::V(Name::Free(uid), twin) => {
                         if let Some(ix) = vars.get(uid) {
                             let new_dbi = *ix + depth;
                             // trace!("bound {} := {}", uid, new_dbi);
-                            *var = Var::bound(new_dbi);
-                        }
-                    }
-                    Var::Twin(Name::Free(uid), twin) => {
-                        if let Some(ix) = vars.get(uid) {
-                            let new_dbi = *ix + depth;
-                            // trace!("bound {} := {}", uid, new_dbi);
-                            *var = Var::Twin(Name::Bound(new_dbi), *twin);
+                            *var = Var::V(Name::Bound(new_dbi), *twin);
                         }
                     }
                     _ => return,

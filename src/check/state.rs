@@ -87,16 +87,16 @@ impl TypeCheckState {
     }
 
     #[track_caller]
-    pub(crate) fn lookup_var(&self, p0: Name, twin: Option<Twin>) -> Result<Bind<&Type>, Error> {
+    pub(crate) fn lookup_var(&self, p0: Name, twin: Twin) -> Result<Bind<&Type>, Error> {
         info!(target: "additional", "lookup_var: {p0} {:?} in {}", twin, self.gamma2);
         let bind = self
             .gamma2
             .maybe_lookup(p0)
             .ok_or_else(|| Error::Other(format!("Variable not found: {:?}", p0)))?;
         Ok(match (twin, bind.ty) {
-            (Some(Twin::Left), Param::Twins(ty, _)) => bind.map_term(|_| ty),
-            (Some(Twin::Right), Param::Twins(_, ty)) => bind.map_term(|_| ty),
-            (None, Param::P(ty)) => bind.map_term(|_| ty),
+            (Twin::Left, Param::Twins(ty, _)) => bind.map_term(|_| ty),
+            (Twin::Right, Param::Twins(_, ty)) => bind.map_term(|_| ty),
+            (Twin::Only, Param::P(ty)) => bind.map_term(|_| ty),
             (x, y) => panic!(
                 "Expected {x:?}, found {}, when looking up for the variable",
                 y
@@ -259,6 +259,10 @@ impl TypeCheckState {
 
 impl SubstCtx for TypeCheckState {
     fn fresh_uid(&mut self) -> UID {
+        self.next_uid.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn next_fresh_uid(&mut self) -> UID {
         self.next_uid.load(Ordering::Relaxed)
     }
 }

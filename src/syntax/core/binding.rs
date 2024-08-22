@@ -34,28 +34,17 @@ impl<C> SubstWith<Unbind, C> for Unbind {
 impl<C: SubstCtx> SubstWith<Unbind, C, Term> for Var {
     fn subst_with(self, subst: Rc<UnbindSubst>, state: &mut C) -> Term {
         match self {
-            Var::Single(Name::Bound(f)) => {
+            Var::V(Name::Bound(f), twin) => {
                 let either = subst
                     .lookup_with_impl2::<C>(f, state);
                 match either {
                     Either::Left(Unbind(uid)) => {
-                        Term::Var(Var::free(uid), vec![])
+                        Term::Var(Var::V(Name::Free(uid), twin), vec![])
                     }
                     Either::Right(t) => { t }
                 }
             }
-            Var::Twin(Name::Bound(f), twin) => {
-                let either = subst
-                    .lookup_with_impl2::<C>(f, state);
-                match either {
-                    Either::Left(Unbind(uid)) => {
-                        Term::Var(Var::twin_free(uid, twin), vec![])
-                    }
-                    Either::Right(t) => { t }
-                }
-            }
-            v if matches!(&v, Var::Meta(_) | Var::Single(_) | Var::Twin(_, _)) => Term::Var(v, vec![]),
-            _ => unreachable!()
+            v => Term::Var(v, vec![]),
         }
     }
 }
@@ -165,6 +154,10 @@ mod tests {
     impl SubstCtx for MockSubstCtx {
         fn fresh_uid(&mut self) -> UID {
             self.uid.update(|x| x + 1)
+        }
+
+        fn next_fresh_uid(&mut self) -> UID {
+            self.uid.get()
         }
     }
 

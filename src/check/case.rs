@@ -1,7 +1,13 @@
+//! Paper: Cockx, J., & Abel, A. (2020). Elaborating dependent (co)pattern matching: No pattern left behind
+//! https://doi.org/10.1017/S0956796819000182
+
 use crate::check::meta::HasMeta;
 use crate::check::{Error, Result, TypeCheckState};
 use crate::syntax::abs::{Expr, Pat as PatA};
-use crate::syntax::core::{Boxed, Case, DataInfo, DeBruijn, Decl, Name, Pat, PrimSubst, SubstWith, Substitution, Term, Type, Var};
+use crate::syntax::core::{
+    Boxed, Case, DataInfo, DeBruijn, Decl, Name, Pat, PrimSubst, SubstWith, Substitution, Term,
+    Type, Var,
+};
 use crate::syntax::{ConHead, DBI, UID};
 use itertools::{EitherOrBoth, Itertools};
 use std::cmp::Ordering;
@@ -26,8 +32,8 @@ impl Constraint {
     /// Generate abstract substitution \[x := y\].
     pub fn gen_abs_subst(&self, tcs: &TypeCheckState) -> (UID, Expr) {
         match (&self.pat, &self.term) {
-            (PatA::Var(x), Term::Var(Var::Single(Name::Bound(y)), es)) if es.is_empty() => {
-                let x1 = tcs.lookup(*y);
+            (PatA::Var(x), v) if let Some(y) = v.dbi_view() => {
+                let x1 = tcs.lookup(y);
                 (*x, Expr::Var(x1.clone().ident(), x1.name))
             }
             (PatA::Var(x), Term::Cons(con, es)) => (
@@ -40,8 +46,11 @@ impl Constraint {
                         Vec1::try_from_vec(
                             es.iter()
                                 .map(|e| match e {
-                                    Term::Var(Var::Single(Name::Bound(y)), es) if es.is_empty() => {
-                                        let x1 = tcs.lookup(*y);
+                                    e if let Some(y) = e.dbi_view() => {
+                                        if e.is_twin_var() {
+                                            warn!("Twin var in a constraint: {} /? {}", self.term, self.pat);
+                                        }
+                                        let x1 = tcs.lookup(y);
                                         Expr::Var(x1.clone().ident(), x1.name)
                                     }
                                     Term::Cons(con, es) if es.is_empty() => {
@@ -545,7 +554,12 @@ impl LshProblem {
                 delta_tick_hat_i
                     .into_iter()
                     .map(|x| match x {
-                        Term::Var(Var::Single(Name::Bound(i)), _) => Pat::Var(i),
+                        x if let Some(y) = x.dbi_view() => {
+                            if x.is_twin_var() {
+                                warn!("Twin var in pat");
+                            }
+                            Pat::Var(y)
+                        }
                         _ => unreachable!(),
                     })
                     .collect(),

@@ -1,3 +1,5 @@
+//! Paper: Adam Gundry & Conor McBride (2012). A tutorial implementation of dynamic pattern unification (Draft)
+
 use crate::check::{Error, Result, TypeCheckState};
 use crate::syntax::core::{Bind, Binder, BoundFreeVars, Boxed, Closure, Ctx, DeBruijn, Elim, Func, Lambda, Name, Pat, PrimSubst, Subst, SubstWith, Substitution, Tele, Term, Twin, Type, Unbind, ValData, Var};
 use crate::syntax::core::{Case, Decl as DataDecl};
@@ -15,6 +17,7 @@ use std::iter;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
+use crate::syntax::core::free_subst::SubstituteFreeVars;
 
 static UPD_CNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -1111,29 +1114,16 @@ impl Occurrence for Term {
                 a.go(depth, vars, f, in_flexible);
                 b.go(depth + 1, vars, f, in_flexible);
             }
-            Term::Var(var, es) if matches!(var, Var::Twin(..) | Var::Single(..)) && f != Metas => {
-                match var {
-                    Var::Single(v) => match v {
-                        Name::Free(i) => {
-                            add(v.clone());
+            Term::Var(var, es) if let Var::V(name, _) = var && f != Metas => {
+                match name {
+                    Name::Free(_) => {
+                        add(name.clone());
+                    }
+                    Name::Bound(v) => {
+                        if *v >= depth {
+                            add(Name::Bound(*v - depth));
                         }
-                        Name::Bound(v) => {
-                            if *v >= depth {
-                                add(Name::Bound(*v - depth));
-                            }
-                        }
-                    },
-                    Var::Twin(v, u) => match v {
-                        Name::Free(_) => {
-                            add(v.clone());
-                        }
-                        Name::Bound(v) => {
-                            if *v >= depth {
-                                add(Name::Bound(*v - depth));
-                            }
-                        }
-                    },
-                    _ => unreachable!(),
+                    }
                 }
                 for arg in es {
                     if let Elim::App(arg) = arg {
@@ -1232,28 +1222,15 @@ impl Occurrence for Var {
                 vars.insert(Name::Free(*alpha));
                 // vars.insert(Var::Meta(*alpha));
             }
-            (Vars | RigVars, x) if matches!(x, Var::Single(..) | Var::Twin(..)) => match x {
-                Var::Single(v) => match v {
-                    Name::Free(i) => {
-                        add(v.clone());
+            (Vars | RigVars, x)if let Var::V(name, _) = x => match name {
+                Name::Free(_) => {
+                    add(name.clone());
+                }
+                Name::Bound(v) => {
+                    if *v >= depth {
+                        add(Name::Bound(*v - depth));
                     }
-                    Name::Bound(v) => {
-                        if *v >= depth {
-                            add(Name::Bound(*v - depth));
-                        }
-                    }
-                },
-                Var::Twin(v, u) => match v {
-                    Name::Free(_) => {
-                        add(v.clone());
-                    }
-                    Name::Bound(v) => {
-                        if *v >= depth {
-                            add(Name::Bound(*v - depth));
-                        }
-                    }
-                },
-                _ => unreachable!(),
+                }
             },
             (Metas, _) => (),
             _ => (),
@@ -1518,8 +1495,8 @@ impl TypeCheckState {
                 )?;
                 info!(target: "additional", "Problem::All 3");
                 let x = self.fresh_name();
-                let tm1 = b1.instantiate_with(Term::Var(Var::Twin(x, Twin::Left), vec![]), self);
-                let tm2 = b2.instantiate_with(Term::Var(Var::Twin(x, Twin::Right), vec![]), self);
+                let tm1 = b1.instantiate_with(Term::Var(Var::V(x, Twin::Left), vec![]), self);
+                let tm2 = b2.instantiate_with(Term::Var(Var::V(x, Twin::Right), vec![]), self);
                 self.active(
                     id,
                     Problem::all(
@@ -1538,16 +1515,10 @@ impl TypeCheckState {
                 )?;
                 Ok(())
             }
-            (Term::Var(Var::Single(x), xs), Term::Var(Var::Single(y), ys)) if x == y => {
-                self.match_spine(x, None, &xs, y, None, &ys)?;
+            (Term::Var(Var::V(x, twin_x), xs), Term::Var(Var::V(y, twin_y), ys)) if x == y => {
+                self.match_spine(x, twin_x, &xs, y, twin_y, &ys)?;
                 Ok(())
             }
-            (Term::Var(Var::Twin(x, twin_x), xs), Term::Var(Var::Twin(y, twin_y), ys))
-            if x == y =>
-                {
-                    self.match_spine(x, Some(twin_x), &xs, y, Some(twin_y), &ys)?;
-                    Ok(())
-                }
             _ => {
                 if equation.orthogonal() {
                     Err(Error::RigidRigidMismatch)
@@ -1575,10 +1546,10 @@ impl TypeCheckState {
     fn match_spine(
         &mut self,
         x: Name,
-        w: Option<Twin>,
+        w: Twin,
         es1: &[Elim],
         y: Name,
-        z: Option<Twin>,
+        z: Twin,
         es2: &[Elim],
     ) -> Result<(Type, Type)> {
         let id = 0; // TODO
@@ -1709,7 +1680,7 @@ impl TypeCheckState {
                             mi_b.apply(
                                 tel.names()
                                     .into_iter()
-                                    .map(|x| Term::Var(Var::Single(x), vec![]))
+                                    .map(|x| Term::Var(Var::single(x), vec![]))
                                     .collect(),
                             ),
                         )
@@ -2025,7 +1996,7 @@ impl TypeCheckState {
                                 mi2.apply(
                                     vars.clone()
                                         .into_iter()
-                                        .map(|x| Term::Var(Var::Single(x), vec![]))
+                                        .map(|x| Term::Var(Var::single(x), vec![]))
                                         .collect(),
                                 ),
                             )
@@ -2213,8 +2184,7 @@ impl TypeCheckState {
 
     fn infer_(&self, var: &Var) -> Result<Type> {
         match var {
-            Var::Single(..) => Ok(self.lookup_var(var.name(), None)?.ty.clone()),
-            Var::Twin(_, twin) => Ok(self.lookup_var(var.name(), Some(*twin))?.ty.clone()),
+            Var::V(_, twin) => Ok(self.lookup_var(var.name(), *twin)?.ty.clone()),
             Var::Meta(mi) => self.lookup_meta_ctx(*mi),
             v => unimplemented!("infer_: {:?}", v),
         }
@@ -2611,7 +2581,7 @@ impl TypeCheckState {
         match p {
             Problem::Unify(q) => {
                 if self.is_reflexive(&q)? {
-                    println!("Solved {q}");
+                    info!(target: "unify", "Solved {q}");
                     Ok(())
                     // self.solved(id, q)
                 } else {
@@ -2675,7 +2645,9 @@ impl TypeCheckState {
                             // trace!(target: "unify", "here5 #{id}");
                             if c {
                                 trace!(target: "unify", "re-solving-2 #{id}");
-                                self.solver(id, Problem::all(p.map_term(|_| Param::P(s_ty)), q))
+                                let mut q_subst = q.clone();
+                                q_subst.subst_free_vars_with(&[(x.uid(), Term::var(x.clone()))].into(), self, 0);
+                                self.solver(id, Problem::all(p.map_term(|_| Param::P(s_ty)), q_subst))
                             } else {
                                 let mut ctx = self.gamma2.clone();
                                 // info!(target: "additional", "add to ctx 2");
@@ -2986,7 +2958,7 @@ impl TypeCheckState {
     }
 }
 
-fn to_names(params: Vec<Elim>) -> Option<Vec<(Name, Option<Twin>)>> {
+fn to_names(params: Vec<Elim>) -> Option<Vec<(Name, Twin)>> {
     params
         .into_iter()
         .map(|t| {
@@ -2994,14 +2966,17 @@ fn to_names(params: Vec<Elim>) -> Option<Vec<(Name, Option<Twin>)>> {
 
             match t {
                 Elim::App(b) => match b.eta_contract() {
-                    Term::Var(v, args) if args.is_empty() && matches!(v, Var::Single(..) | Var::Twin(..)) => {
-                        info!(target: "additional", "to_names: {}", v);
-                        Some((v.name(), v.twin()))
+                    Term::Var(v, args) if args.is_empty() => {
+                        if let Var::V(name, twin) = v {
+                            info!(target: "additional", "to_names: {}", v);
+                            return Some((name, twin));
+                        }
                     }
-                    _ => None,
+                    _ => (),
                 },
-                _ => None,
+                _ => (),
             }
+            None
         })
         .collect()
 }
@@ -3618,7 +3593,6 @@ fn test_all() -> eyre::Result<()> {
     };
 
     let tests = vec![
-        /*
         /*
         >           ( gal "A" SET
         >           : gal "B" SET
@@ -5274,10 +5248,8 @@ fn test_all() -> eyre::Result<()> {
                 ),
             ]
         }
-         */
     ];
     let stucks = vec![
-        /*
         // -- stuck 0: nonlinear
         // ( gal "A" ((C Bool) --> (C Bool) --> (C Bool) --> (C Bool))
         // : gal "B" ((C Bool) --> (C Bool))
@@ -5739,7 +5711,6 @@ fn test_all() -> eyre::Result<()> {
                 ),
             )
         },
-         */
         // -- stuck 12
         // , ( gal "B" ((C Bool) --> (C Bool))
         //   : gal "F" (if'' (C Set) (mv "B" $$ (C Tt)) (C Bool) (C Bool) --> (C Bool))
@@ -5828,7 +5799,10 @@ fn test_all() -> eyre::Result<()> {
         //     ),
         // ],
     ];
+    let mut i = 0;
     for t in tests {
+        i += 1;
+        info!("Running test {}", i);
         test(TestType::Succeed, t)?;
     }
     for t in stucks {

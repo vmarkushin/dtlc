@@ -17,9 +17,10 @@
     adt_const_params,
     trait_alias,
     let_chains,
-    exclusive_range_pattern
+    exclusive_range_pattern,
+    type_name_of_val,
+    if_let_guard,
 )]
-#![feature(type_name_of_val)]
 #[macro_use]
 extern crate log;
 

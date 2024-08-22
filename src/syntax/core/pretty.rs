@@ -120,10 +120,10 @@ impl Display for Name {
 impl Display for Var {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Var::Single(n) => {
-                write!(f, "{n}")
-            }
-            Var::Twin(n, b) => match *b {
+            Var::V(n, b) => match *b {
+                Twin::Only => {
+                    write!(f, "{n}")
+                }
                 Twin::Left => {
                     write!(f, "{} \u{0301}", n)
                 }
@@ -319,11 +319,11 @@ impl Display for Pretty<'_, Term> {
             Term::Var(v, args) => {
                 let args = args.iter().map(|x| pretty(x, s)).collect::<Vec<_>>();
                 let var = match v {
-                    Var::Single(Name::Bound(dbi)) => {
+                    Var::V(Name::Bound(dbi), Twin::Only) => {
                         let x = s.lookup(*dbi);
                         format!("{}", x.ident.text)
                     }
-                    Var::Single(Name::Free(uid)) => {
+                    Var::V(Name::Free(uid), Twin::Only) => {
                         if *uid < 26 {
                             let ci = (97 + *uid) as u8 as char;
                             format!("{}", ci)
@@ -331,8 +331,8 @@ impl Display for Pretty<'_, Term> {
                             format!("#{}", uid)
                         }
                     }
-                    Var::Twin(name, twin) => {
-                        let x = s.lookup_var(*name, Some(*twin)).map_err(|_| fmt::Error)?;
+                    Var::V(name, twin) => {
+                        let x = s.lookup_var(*name, *twin).map_err(|_| fmt::Error)?;
                         format!("{}", x.ident.text)
                     }
                     Var::Meta(_) => {

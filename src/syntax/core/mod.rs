@@ -1,7 +1,7 @@
 mod dbi;
 mod decl;
 mod fold;
-mod free_subst;
+pub(crate) mod free_subst;
 mod id;
 mod pats;
 mod pretty;

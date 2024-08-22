@@ -4,6 +4,7 @@ use crate::syntax::{DBI, UID};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::DerefMut;
+use crate::check::unification::{Param, Problem};
 
 pub trait SubstituteFreeVars<U = UID, T = Term, C = TypeCheckState, R = Term> {
     fn subst_free_vars_with(&mut self, subst: &HashMap<U, T>, state: &mut C, depth: usize);
@@ -86,16 +87,10 @@ impl<C> SubstituteFreeVars<BindSubst, DBI, C> for Var
     fn subst_free_vars_with(&mut self, _subst: &HashMap<BindSubst, DBI>, _state: &mut C, _depth: usize) {}
     fn subst_free_vars_with_to(&self, subst: &HashMap<BindSubst, DBI>, _state: &mut C, depth: usize) -> Option<Term> {
         match self {
-            Var::Single(Name::Free(uid))  if *uid != 0 => {
+            Var::V(Name::Free(uid), twin) if *uid != 0 => {
                 if let Some(dbi) = subst.get(&BindSubst(*uid)).cloned() {
                     let new_dbi = dbi + depth;
-                    return Some(Term::bound_var(new_dbi));
-                }
-            }
-            Var::Twin(Name::Free(uid), twin)  if *uid != 0 => {
-                if let Some(dbi) = subst.get(&BindSubst(*uid)).cloned() {
-                    let new_dbi = dbi + depth;
-                    return Some(Term::Var(Var::twin_bound(new_dbi, *twin), vec![]));
+                    return Some(Term::bound(new_dbi, *twin));
                 }
             }
             _ => (),
@@ -113,7 +108,7 @@ where
     fn subst_free_vars_with(&mut self, subst: &HashMap<U, Term>, state: &mut C, depth: usize) {}
     fn subst_free_vars_with_to(&self, subst: &HashMap<U, Term>, state: &mut C, depth: usize) -> Option<Term> {
         match self {
-            Var::Single(Name::Free(uid)) | Var::Twin(Name::Free(uid), _) if *uid != 0 => {
+            Var::V(Name::Free(uid), _) if *uid != 0 => {
                 if let Some(term) = subst.get(&U::from(*uid)).cloned() {
                     // let new_dbi = *ix + depth;
                     // *var = Var::bound(new_dbi);
@@ -151,7 +146,11 @@ where
             }
             Term::Var(var, args) => {
                 args.subst_free_vars_with(subst, state, depth);
-                var.subst_free_vars_with(subst, state, depth);
+                if let Some(term) = var.subst_free_vars_with_to(subst, state, depth) {
+                    *self = term.apply_elim(args.clone());
+                } else {
+                    var.subst_free_vars_with(subst, state, depth);
+                }
             }
             Term::Redex(Func::Lam(lam), _, args) => {
                 lam.0.subst_free_vars_with(subst, state, depth);
@@ -227,6 +226,54 @@ where
         self.into_iter()
             .map(|e| e.subst_free_vars_with(subst, state, depth))
             .collect()
+    }
+}
+impl<U, C> SubstituteFreeVars<U, Term, C> for Param
+where
+    C: SubstCtx,
+    U: Eq + PartialEq + Hash + From<UID> + Into<UID> + Copy,
+{
+    fn subst_free_vars_with(
+        &mut self,
+        subst: &HashMap<U, Term>,
+        state: &mut C,
+        depth: usize,
+    ) {
+        match self {
+            Param::P(t) => {
+                t.subst_free_vars_with(subst, state, depth);
+            }
+            Param::Twins(l, r) => {
+                l.subst_free_vars_with(subst, state, depth);
+                r.subst_free_vars_with(subst, state, depth);
+            }
+        }
+    }
+}
+
+impl<U, C> SubstituteFreeVars<U, Term, C> for Problem
+where
+    C: SubstCtx,
+    U: Eq + PartialEq + Hash + From<UID> + Into<UID> + Copy,
+{
+    fn subst_free_vars_with(
+        &mut self,
+        subst: &HashMap<U, Term>,
+        state: &mut C,
+        depth: usize,
+    ) {
+        match self {
+            Problem::Unify(eq) => {
+                eq.tm1.subst_free_vars_with(subst, state, depth);
+                eq.tm2.subst_free_vars_with(subst, state, depth);
+                eq.ty1.subst_free_vars_with(subst, state, depth);
+                eq.ty2.subst_free_vars_with(subst, state, depth);
+            }
+            Problem::All(b, p) => {
+                b.subst_free_vars_with(subst, state, depth);
+                p.subst_free_vars_with(subst, state, depth + 1);
+            }
+        }
     }
 }
 
