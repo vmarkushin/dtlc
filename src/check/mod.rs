@@ -72,12 +72,8 @@ pub enum Error {
     NotRefl(Box<Term>, Loc),
     #[error("Different telescope lengths: `{0}` and `{1}`")]
     DifferentTeleLen(usize, usize),
-    #[error("RigidRigidMismatch")]
-    RigidRigidMismatch,
-    #[error("SpineMismatch")]
-    SpineMismatch,
-    #[error("Occurrence")]
-    Occurrence,
+    #[error("{0}")]
+    Unification(#[from] unification::Error),
     #[error("{0}")]
     Other(String),
 }

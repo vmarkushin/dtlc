@@ -1,7 +1,11 @@
 //! Paper: Adam Gundry & Conor McBride (2012). A tutorial implementation of dynamic pattern unification (Draft)
 
-use crate::check::{Error, Result, TypeCheckState};
-use crate::syntax::core::{Bind, Binder, BoundFreeVars, Boxed, Closure, Ctx, DeBruijn, Elim, Func, Lambda, Name, Pat, PrimSubst, Subst, SubstWith, Substitution, Tele, Term, Twin, Type, Unbind, ValData, Var};
+use crate::check::{Error as CheckError, Result, TypeCheckState};
+use crate::syntax::core::free_subst::SubstituteFreeVars;
+use crate::syntax::core::{
+    Bind, Binder, BoundFreeVars, Boxed, Closure, Ctx, DeBruijn, Elim, Func, Lambda, Name, Pat,
+    PrimSubst, Subst, SubstWith, Substitution, Tele, Term, Twin, Type, Unbind, ValData, Var,
+};
 use crate::syntax::core::{Case, Decl as DataDecl};
 use crate::syntax::desugar::desugar_prog;
 use crate::syntax::parser::Parser;
@@ -17,9 +21,21 @@ use std::iter;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
-use crate::syntax::core::free_subst::SubstituteFreeVars;
 
 static UPD_CNT: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg_attr(test, derive(PartialEq, Eq))]
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("RigidRigidMismatch")]
+    RigidRigidMismatch,
+    #[error("SpineMismatch")]
+    SpineMismatch,
+    #[error("Occurrence")]
+    Occurrence,
+    #[error("pruning error {0:?} not contains {1:?}")]
+    PruningError(HashSet<Name>, Var),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decl {
@@ -204,11 +220,25 @@ impl Equation {
         let Equation { ty1, tm1, ty2, tm2 } = self;
         // TODO: add Cons, Data, etc.
 
-        matches!(
-            (ty1, tm1, ty2, tm2),
-            (Term::Universe(_), Term::Pi(..), _, Term::Var(..))
-                | (_, Term::Var(..), Term::Universe(_), Term::Pi(..))
-        )
+        match (ty1, tm1, ty2, tm2) {
+            (Term::Data(d1), Term::Cons(c1, _xs), Term::Data(d2), Term::Cons(c2, _ys))
+            if d1.def == d2.def =>
+                {
+                    c1.cons_gi != c2.cons_gi
+                }
+            #[rustfmt::skip]
+            _ => matches!(
+                (ty1, tm1, ty2, tm2),
+                (Term::Universe(_), Term::Pi(..), Term::Universe(_), Term::Data(..))
+                | (Term::Universe(_), Term::Data(..), Term::Universe(_), Term::Pi(..))
+                | (Term::Universe(_), Term::Pi(..), _, Term::Var(Var::V(..), ..))
+                | (Term::Universe(_), Term::Data(..), _, Term::Var(Var::V(..), ..))
+                | (Term::Data(..), Term::Cons(..), _, Term::Var(Var::V(..), ..))
+                | (_, Term::Var(Var::V(..), ..), Term::Universe(_), Term::Pi(..))
+                | (_, Term::Var(Var::V(..), ..), Term::Universe(_), Term::Data(..))
+                | (_, Term::Var(Var::V(..), ..), Term::Data(..), Term::Cons(..)),
+            ),
+        }
     }
 }
 
@@ -1114,23 +1144,26 @@ impl Occurrence for Term {
                 a.go(depth, vars, f, in_flexible);
                 b.go(depth + 1, vars, f, in_flexible);
             }
-            Term::Var(var, es) if let Var::V(name, _) = var && f != Metas => {
-                match name {
-                    Name::Free(_) => {
-                        add(name.clone());
+            Term::Var(var, es)
+            if let Var::V(name, _) = var
+                && f != Metas =>
+                {
+                    match name {
+                        Name::Free(_) => {
+                            add(name.clone());
+                        }
+                        Name::Bound(v) => {
+                            if *v >= depth {
+                                add(Name::Bound(*v - depth));
+                            }
+                        }
                     }
-                    Name::Bound(v) => {
-                        if *v >= depth {
-                            add(Name::Bound(*v - depth));
+                    for arg in es {
+                        if let Elim::App(arg) = arg {
+                            arg.go(depth, vars, f, in_flexible);
                         }
                     }
                 }
-                for arg in es {
-                    if let Elim::App(arg) = arg {
-                        arg.go(depth, vars, f, in_flexible);
-                    }
-                }
-            }
             // Term::Var(x, es) if f == RigVars && matches!(x, Var::Twin(..) | Var::Bound(..)) => es
             //     .free(f)
             //     .union(&vec![x.clone()].into_iter().collect())
@@ -1222,7 +1255,7 @@ impl Occurrence for Var {
                 vars.insert(Name::Free(*alpha));
                 // vars.insert(Var::Meta(*alpha));
             }
-            (Vars | RigVars, x)if let Var::V(name, _) = x => match name {
+            (Vars | RigVars, x) if let Var::V(name, _) = x => match name {
                 Name::Free(_) => {
                     add(name.clone());
                 }
@@ -1515,13 +1548,13 @@ impl TypeCheckState {
                 )?;
                 Ok(())
             }
-            (Term::Var(Var::V(x, twin_x), xs), Term::Var(Var::V(y, twin_y), ys)) if x == y => {
+            (Term::Var(Var::V(x, twin_x), xs), Term::Var(Var::V(y, twin_y), ys)) => {
                 self.match_spine(x, twin_x, &xs, y, twin_y, &ys)?;
                 Ok(())
             }
             _ => {
                 if equation.orthogonal() {
-                    Err(Error::RigidRigidMismatch)
+                    Err(Error::RigidRigidMismatch.into())
                 } else {
                     self.block(id, Problem::Unify(equation))
                 }
@@ -1560,13 +1593,13 @@ impl TypeCheckState {
                     let ty2 = self.lookup_var(y, z)?.ty.clone();
                     return Ok((ty1, ty2));
                 } else {
-                    return Err(Error::RigidRigidMismatch);
+                    return Err(Error::RigidRigidMismatch.into());
                 }
             }
             ([es1 @ .., Elim::App(a1)], [es2 @ .., Elim::App(a2)]) => {
                 let (Term::Pi(xx, t), Term::Pi(yy, u)) = self.match_spine(x, w, es1, y, z, es2)?
                 else {
-                    return Err(Error::SpineMismatch);
+                    return Err(Error::SpineMismatch.into());
                 };
                 let a = *a1.clone();
                 let b = *a2.clone();
@@ -1585,7 +1618,7 @@ impl TypeCheckState {
             }
             _ => {}
         }
-        Err(Error::SpineMismatch)
+        Err(Error::SpineMismatch.into())
     }
 
     /*
@@ -1610,7 +1643,7 @@ impl TypeCheckState {
         let (mi_a, _) = equation
             .tm1
             .as_meta()
-            .ok_or_else(|| Error::Other("flex_rigid: tm1 is not a meta".to_string()))?;
+            .ok_or_else(|| CheckError::Other("flex_rigid: tm1 is not a meta".to_string()))?;
         //   println "flex_term: ctx = {}, alpha = {}, fvs = {}" (_Gam :> alpha :> (fmvs _Xi) :> ())
         info!(target: "unify", "flex_term: ctx = {} alpha = {}, fvs = {:?}, left = {}, eq = {equation}", ctx, mi_a, entries.fmvs(), e);
         match &e {
@@ -1798,7 +1831,7 @@ impl TypeCheckState {
 
         if occur_check(self, true, mi, t) {
             info!(target: "unify", "invert: occur check");
-            return Err(Error::Occurrence);
+            return Err(Error::Occurrence.into());
         }
 
         if let Some(xs) = to_names(es.to_vec()) {
@@ -1893,7 +1926,7 @@ impl TypeCheckState {
     >         []   -> return False
 
     */
-    fn try_prune(&mut self, id: Id, equation: Equation) -> Result<bool, Error> {
+    fn try_prune(&mut self, id: Id, equation: Equation) -> Result<bool> {
         let Equation {
             tm1: Term::Var(Var::Meta(mi), ds),
             ty1,
@@ -2096,7 +2129,7 @@ impl TypeCheckState {
                 if vs.contains(&z.name()) {
                     self.prune_elims(vs.clone(), es)
                 } else {
-                    panic!("pruning error {vs:?} not contains {z:?}");
+                    Err(Error::PruningError(vs, z).into())
                 }
             }
             Term::Redex(f, _, es) => {
@@ -2254,7 +2287,7 @@ impl TypeCheckState {
             // >                               ++ " and " ++ pp h' ++ " . " ++ pp e'
             // >                               ++ " not equal!"
             #[cfg(test)]
-            (v, es, v2, es2) => Err(Error::Other(format!(
+            (v, es, v2, es2) => Err(CheckError::Other(format!(
                 "Neutral terms {:?} . {:?} and {:?} . {:?} not equal!",
                 v, es, v2, es2
             ))),
@@ -2337,13 +2370,20 @@ impl TypeCheckState {
             (ty, Term::Data(data_a), Term::Data(data_b)) => {
                 if data_a.def == data_b.def && data_a.args.len() == data_b.args.len() {
                     let data_info = self.def(data_a.def).as_data();
-                    let data_tys = data_info.params.iter().map(|x| x.ty.clone()).collect::<Vec<_>>();
-                    for (p_ty, (a, b)) in data_tys.into_iter().zip(data_a.args.iter().zip(data_b.args.iter())) {
+                    let data_tys = data_info
+                        .params
+                        .iter()
+                        .map(|x| x.ty.clone())
+                        .collect::<Vec<_>>();
+                    for (p_ty, (a, b)) in data_tys
+                        .into_iter()
+                        .zip(data_a.args.iter().zip(data_b.args.iter()))
+                    {
                         self.equalise(&p_ty, a, b)?;
                     }
                     Ok(Term::Data(data_a.clone()))
                 } else {
-                    Err(Error::Other(format!(
+                    Err(CheckError::Other(format!(
                         "equalise: data constructors {:?} and {:?} not equal",
                         data_a, data_b
                     )))
@@ -2351,7 +2391,7 @@ impl TypeCheckState {
             }
             (ty, Term::Cons(h1, xs), Term::Cons(h2, ys)) => {
                 if h1 != h2 {
-                    return Err(Error::Other(format!(
+                    return Err(CheckError::Other(format!(
                         "equalise: cons heads {:?} and {:?} not equal",
                         h1, h2
                     )));
@@ -2368,7 +2408,8 @@ impl TypeCheckState {
 
                     // TODO: create constraints to check that `D1 xs[..L] == D2 ys[..L]`?
                     let data_ty = Type::Data(ValData::new(
-                        data_gi, xs.iter().cloned().take(data_def.params.len()).collect(),
+                        data_gi,
+                        xs.iter().cloned().take(data_def.params.len()).collect(),
                     ));
                     let z = self.equalise(&data_ty, x, y)?;
 
@@ -2384,7 +2425,7 @@ impl TypeCheckState {
                 let tt = self.equalise(&Type::universe(Universe(0)), ty1, ty2)?;
                 let t = self.equalise(&tt, t1, t2)?;
                 if cs1.len() != cs2.len() {
-                    return Err(Error::Other(format!(
+                    return Err(CheckError::Other(format!(
                         "equalise: match branches {:?} and {:?} not equal",
                         cs1, cs2
                     )));
@@ -2401,7 +2442,7 @@ impl TypeCheckState {
             // }
             (ty, t, u) => {
                 warn!(target: "unify", "equalise\n\tty: {}\n\tt:  {}\n\tu:  {}\n{}", ty, t, u, std::backtrace::Backtrace::capture());
-                Err(Error::Other(format!(
+                Err(CheckError::Other(format!(
                     "equalise: terms {} and {} not equal",
                     t, u
                 )))
@@ -2411,7 +2452,7 @@ impl TypeCheckState {
 
     fn equalise_case(&mut self, body_ty: &Type, c1: &Case, c2: &Case) -> Result<Case> {
         if c1.pattern != c2.pattern {
-            return Err(Error::Other(format!(
+            return Err(CheckError::Other(format!(
                 "equalise_case: patterns {:?} and {:?} not equal",
                 c1.pattern, c2.pattern
             )));
@@ -2432,7 +2473,7 @@ impl TypeCheckState {
         &mut self,
         x: Bind,
         b: Closure,
-        f: impl Fn(&mut Self, Name, &Term) -> Result<Term, Error>,
+        f: impl Fn(&mut Self, Name, &Term) -> Result<Term>,
     ) -> Result<Closure> {
         let x = x.unbind(self);
         self.gamma.push(x.clone());
@@ -2449,7 +2490,7 @@ impl TypeCheckState {
         &mut self,
         xs: Vec<Bind>,
         mut b: Term,
-        f: impl Fn(&mut Self, Vec<Name>, &Term) -> Result<Term, Error>,
+        f: impl Fn(&mut Self, Vec<Name>, &Term) -> Result<Term>,
     ) -> Result<Term> {
         let xs = xs.into_iter().map(|x| x.unbind(self)).collect::<Vec<_>>();
         for x in &xs {
@@ -2474,7 +2515,7 @@ impl TypeCheckState {
         xs: Vec<Bind>,
         mut b: Term,
         mut t: Term,
-        f: impl Fn(&mut Self, Vec<Name>, &Term, &Term) -> Result<Term, Error>,
+        f: impl Fn(&mut Self, Vec<Name>, &Term, &Term) -> Result<Term>,
     ) -> Result<Term> {
         let xs = xs.into_iter().map(|x| x.unbind(self)).collect::<Vec<_>>();
         for x in &xs {
@@ -2500,7 +2541,7 @@ impl TypeCheckState {
         x: Bind,
         b: Closure,
         t: Closure,
-        f: impl Fn(&mut Self, Name, &Term, &Term) -> Result<Term, Error>,
+        f: impl Fn(&mut Self, Name, &Term, &Term) -> Result<Term>,
     ) -> Result<Closure> {
         let x = x.unbind(self);
         self.gamma.push(x.clone());
@@ -2542,7 +2583,7 @@ impl TypeCheckState {
     > isReflexive (EQN _S s _T t) =  optional (equalise TYPE _S _T) >>=
     >                                    maybe (return False) (\ _U -> equal _U s t)
      */
-    fn is_reflexive(&mut self, eq: &Equation) -> Result<bool, Error> {
+    fn is_reflexive(&mut self, eq: &Equation) -> Result<bool> {
         trace!(target: "unify", "is_reflexive: {eq}");
         // let ty1 = self.simplify(eq.ty1.clone())?.eta_contract();
         // let ty2 = self.simplify(eq.ty2.clone())?.eta_contract();
@@ -2576,7 +2617,7 @@ impl TypeCheckState {
     >             if c  then  solver (allProb x _S (subst x (var x) q))
     >                   else  inScope x (Twins _S _T) $ solver q
      */
-    fn solver(&mut self, id: Id, p: Problem) -> Result<(), Error> {
+    fn solver(&mut self, id: Id, p: Problem) -> Result<()> {
         trace!(target: "unify", "solving #{} {}", id, p);
         match p {
             Problem::Unify(q) => {
@@ -2586,7 +2627,8 @@ impl TypeCheckState {
                     // self.solved(id, q)
                 } else {
                     if let Err(e) = self.unify(id, q.clone()) {
-                        panic!("failed: {:?}", q);
+                        warn!("failed: {:?}", q);
+                        return Err(e);
                         // self.failed(id, q)?;
                     }
                     Ok(())
@@ -2646,8 +2688,15 @@ impl TypeCheckState {
                             if c {
                                 trace!(target: "unify", "re-solving-2 #{id}");
                                 let mut q_subst = q.clone();
-                                q_subst.subst_free_vars_with(&[(x.uid(), Term::var(x.clone()))].into(), self, 0);
-                                self.solver(id, Problem::all(p.map_term(|_| Param::P(s_ty)), q_subst))
+                                q_subst.subst_free_vars_with(
+                                    &[(x.uid(), Term::var(x.clone()))].into(),
+                                    self,
+                                    0,
+                                );
+                                self.solver(
+                                    id,
+                                    Problem::all(p.map_term(|_| Param::P(s_ty)), q_subst),
+                                )
                             } else {
                                 let mut ctx = self.gamma2.clone();
                                 // info!(target: "additional", "add to ctx 2");
@@ -2690,7 +2739,7 @@ impl TypeCheckState {
     >
     > lower _Phi alpha _T = return False
      */
-    fn lower(&mut self, tele: Tele, mi: MI, term: Term) -> Result<bool, Error> {
+    fn lower(&mut self, tele: Tele, mi: MI, term: Term) -> Result<bool> {
         trace!(target: "unify", "lowering ?{} : {} in {}", mi, term, tele);
         match term {
             Term::Pi(a, b) => {
@@ -2776,7 +2825,7 @@ impl TypeCheckState {
     >                                       ambulando theta
 
      */
-    fn ambulando(&mut self, subst: MetaSubst) -> Result<(), Error> {
+    fn ambulando(&mut self, subst: MetaSubst) -> Result<()> {
         trace!(target: "unify", "\n\nambulando: {subst}");
         let Ok(x) = self.pop_r() else {
             return Ok(());
@@ -2869,14 +2918,14 @@ impl TypeCheckState {
         self.meta_ctx2
             .0
             .pop()
-            .ok_or_else(|| Error::Other("pop_l: out of context".to_string()))
+            .ok_or_else(|| CheckError::Other("pop_l: out of context".to_string()))
     }
 
     fn pop_r(&mut self) -> Result<Either<MetaSubst, Entry>> {
         self.meta_ctx2
             .1
             .pop()
-            .ok_or_else(|| Error::Other("pop_r: out of context".to_string()))
+            .ok_or_else(|| CheckError::Other("pop_r: out of context".to_string()))
     }
 
     fn postpone(&mut self, status: Status, problem: Problem) -> Result<()> {
@@ -3033,13 +3082,13 @@ impl TypeCheckState {
     //     &mut self,
     //     p: Bind<Param>,
     //     b: T,
-    //     f: impl FnOnce(&mut Self, T) -> Result<(), Error>,
+    //     f: impl FnOnce(&mut Self, T) -> Result<()>,
     // ) -> Result<()> {
     fn bind_in_scope_(
         &mut self,
         p: Bind<Param>,
         b: Problem,
-        f: impl FnOnce(&mut Self, Problem) -> Result<(), Error>,
+        f: impl FnOnce(&mut Self, Problem) -> Result<()>,
     ) -> Result<()> {
         let p = p.unbind(self);
         self.gamma2.push(p.clone());
@@ -3071,18 +3120,18 @@ impl TypeCheckState {
     >         if b then return ()
     >              else throwError $ "checkHolds: not reflexive: " ++ pp q
      */
-    fn check_hold(&mut self, prob: Problem) -> Result<(), Error> {
+    fn check_hold(&mut self, prob: Problem) -> Result<()> {
         match prob {
             Problem::All(param, b) => match &param.ty {
                 Param::P(_) => self.bind_in_scope_(param, *b, |tcs, t| tcs.check_hold(t)),
                 Param::Twins(s, t) => {
                     let b = self.equal(&Type::universe(Universe(0)), s, t)?;
                     if b {
-                        Err(Error::Other(
+                        Err(CheckError::Other(
                             "checkHolds: equal twins hanging around".into(),
                         ))
                     } else {
-                        Err(Error::Other("checkHolds: unequal twins".into()))
+                        Err(CheckError::Other("checkHolds: unequal twins".into()))
                     }
                 }
             },
@@ -3090,7 +3139,7 @@ impl TypeCheckState {
                 if self.is_reflexive(&q)? {
                     return Ok(());
                 } else {
-                    return Err(Error::Other("checkHolds: not reflexive".into()));
+                    return Err(CheckError::Other("checkHolds: not reflexive".into()));
                 }
             }
         }
@@ -3127,7 +3176,7 @@ impl TypeCheckState {
         >     checkParam p
         >     bindInScope_ p b (const checkProb)
     */
-    fn check_prob(&mut self, prob: Problem) -> Result<(), Error> {
+    fn check_prob(&mut self, prob: Problem) -> Result<()> {
         match prob {
             Problem::Unify(Equation { tm1, ty1, tm2, ty2 }) => {
                 self.check_(&Type::universe(Universe(0)), &ty1)?;
@@ -3183,13 +3232,13 @@ impl TypeCheckState {
     >                                                  validateCx _Del
     >     validateCx (_Del :< Q Active p)       = throwError $ "validate: found active problem " ++ pp p
      */
-    fn validate_cx(&mut self, mut ctx: Ctx<Entry>) -> Result<(), Error> {
+    fn validate_cx(&mut self, mut ctx: Ctx<Entry>) -> Result<()> {
         if ctx.is_empty() {
             return Ok(());
         }
         let e = ctx.pop().unwrap();
         match e {
-            Entry::E(x, ..) if Self::check_dependency(x, &ctx) => Err(Error::Other(format!(
+            Entry::E(x, ..) if Self::check_dependency(x, &ctx) => Err(CheckError::Other(format!(
                 "validate: dependency error: {} occurs before its declaration",
                 x
             ))),
@@ -3209,7 +3258,7 @@ impl TypeCheckState {
                 self.check_prob(p)?;
                 self.validate_cx(ctx)
             }
-            Entry::Q(Status::Active, p) => Err(Error::Other(format!(
+            Entry::Q(Status::Active, p) => Err(CheckError::Other(format!(
                 "validate: found active problem {}",
                 p
             ))),
@@ -3228,11 +3277,11 @@ impl TypeCheckState {
     fn validate(&mut self) -> Result<()> {
         let ctx_r = self.meta_ctx2.1.clone();
         if !ctx_r.is_empty() {
-            return Err(Error::Other(format!("validate: not at far right")));
+            return Err(CheckError::Other(format!("validate: not at far right")));
         }
         let ctx_l = self.meta_ctx2.0.clone();
         self.validate_cx(ctx_l.clone()).map_err(|e| {
-            Error::Other(format!("{}\nwhen validating\n({}, {:?})", e, ctx_l, ctx_r))
+            CheckError::Other(format!("{}\nwhen validating\n({}, {:?})", e, ctx_l, ctx_r))
         })?;
         self.meta_ctx2.0 = ctx_l;
         Ok(())
@@ -3316,7 +3365,7 @@ Initial context:
     tcs.gamma.clear();
     // info!(target: "additional", "gamma2 clear");
     tcs.gamma2.clear();
-    let r: Result<Context, Error> = try {
+    let r: Result<Context> = try {
         loop {
             if tcs.go_left().is_err() {
                 break;
@@ -3593,6 +3642,7 @@ fn test_all() -> eyre::Result<()> {
     };
 
     let tests = vec![
+        /*
         /*
         >           ( gal "A" SET
         >           : gal "B" SET
@@ -5248,8 +5298,10 @@ fn test_all() -> eyre::Result<()> {
                 ),
             ]
         }
+        */
     ];
     let stucks = vec![
+        /*
         // -- stuck 0: nonlinear
         // ( gal "A" ((C Bool) --> (C Bool) --> (C Bool) --> (C Bool))
         // : gal "B" ((C Bool) --> (C Bool))
@@ -5781,23 +5833,453 @@ fn test_all() -> eyre::Result<()> {
                 ),
             ]
         },
+        //  -- stuck 13: solve C with A despite B being in the way
+        // ( gal "A" (C Bool)
+        //  : gal "C" (C Bool)
+        //  : gal "B" ((C Bool) --> (C Bool))
+        //  : gal "F" (if'' (C Set) (mv "B" $$ (C Tt)) (C Bool) (C Bool) --> (C Bool))
+        //  : eq "p" (_PI "X" (if'' (C Set) (mv "B" $$ (C Tt)) (C Bool) (C Bool)) (if'' (C Set) (mv "F" $$ vv "X") (C Bool) (C Bool) --> (C Bool)))
+        //               (ll "X" (ll "x" (mv "A")))
+        //           (_PI "X" (C Bool) (if'' (C Set) (vv "X") (C Bool) (C Bool) --> (C Bool)))
+        //               (ll "X" (ll "x" (mv "C")))
+        //  : eq "q" (C Set) (_PI "X" (if'' (C Set) (mv "B" $$ (C Tt)) (C Bool) (C Bool)) (if'' (C Set) (mv "F" $$ vv "X") (C Bool) (C Bool) --> (C Bool))) (C Set) (_PI "X" (C Bool) (if'' (C Set) (vv "X") (C Bool) (C Bool) --> (C Bool)))
+        //  : [])
+        {
+            vec![
+                gal("A", bool_ty.clone()),
+                gal("C", bool_ty.clone()),
+                gal("B", Type::arrow(bool_ty.clone(), bool_ty.clone())),
+                gal(
+                    "F",
+                    Type::arrow(
+                        Term::Redex(
+                            if_fn.clone(),
+                            Ident::new("if"),
+                            vec![
+                                Elim::app(Term::lam(
+                                    Bind::unnamed(bool_ty.clone().boxed()),
+                                    Type::universe(Universe(0)),
+                                )),
+                                Elim::app(Term::meta(METAS.s2n("B")).apply(vec![true_val.clone()])),
+                                Elim::app(bool_ty.clone()),
+                                Elim::app(bool_ty.clone()),
+                            ],
+                        ),
+                        bool_ty.clone(),
+                    ),
+                ),
+                eq(
+                    "p",
+                    Type::pi(
+                        Bind::explicit(
+                            x.uid(),
+                            Term::Redex(
+                                if_fn.clone(),
+                                Ident::new("if"),
+                                vec![
+                                    Elim::app(Term::lam(
+                                        Bind::unnamed(bool_ty.clone().boxed()),
+                                        Type::universe(Universe(0)),
+                                    )),
+                                    Elim::app(Term::meta(METAS.s2n("B")).apply(vec![true_val.clone()])),
+                                    Elim::app(bool_ty.clone()),
+                                    Elim::app(bool_ty.clone()),
+                                ],
+                            )
+                                .boxed(),
+                            Ident::new("X"),
+                        ),
+                        Type::arrow(
+                            Term::Redex(
+                                if_fn.clone(),
+                                Ident::new("if"),
+                                vec![
+                                    Elim::app(Term::lam(
+                                        Bind::unnamed(bool_ty.clone().boxed()),
+                                        Type::universe(Universe(0)),
+                                    )),
+                                    Elim::app(Term::meta(METAS.s2n("F")).apply(vec![Term::var(x.clone())])),
+                                    Elim::app(bool_ty.clone()),
+                                    Elim::app(bool_ty.clone()),
+                                ],
+                            ),
+                            bool_ty.clone(),
+                        ),
+                    ),
+                    Term::lam(
+                        Bind::explicit(x.uid(), bool_ty.clone().boxed(), Ident::new("X")),
+                        Term::lam(
+                            Bind::explicit(y.uid(), bool_ty.clone().boxed(), Ident::new("x")),
+                            Term::meta(METAS.s2n("A")),
+                        ),
+                    ),
+                    Type::pi(
+                        Bind::explicit(x.uid(), bool_ty.clone().boxed(), Ident::new("X")),
+                        Type::arrow(
+                            Term::Redex(
+                                if_fn.clone(),
+                                Ident::new("if"),
+                                vec![
+                                    Elim::app(Term::lam(
+                                        Bind::unnamed(bool_ty.clone().boxed()),
+                                        Type::universe(Universe(0)),
+                                    )),
+                                    Elim::app(Term::var(x.clone())),
+                                    Elim::app(bool_ty.clone()),
+                                    Elim::app(bool_ty.clone()),
+                                ],
+                            ),
+                            bool_ty.clone(),
+                        ),
+                    ),
+                    Term::lam(
+                        Bind::explicit(x.uid(), bool_ty.clone().boxed(), Ident::new("X")),
+                        Term::lam(
+                            Bind::explicit(y.uid(), bool_ty.clone().boxed(), Ident::new("x")),
+                            Term::meta(METAS.s2n("C")),
+                        ),
+                    ),
+                ),
+                eq(
+                    "q",
+                    Type::universe(Universe(0)),
+                    Type::pi(
+                        Bind::explicit(
+                            x.uid(),
+                            Term::Redex(
+                                if_fn.clone(),
+                                Ident::new("if"),
+                                vec![
+                                    Elim::app(Term::lam(
+                                        Bind::unnamed(bool_ty.clone().boxed()),
+                                        Type::universe(Universe(0)),
+                                    )),
+                                    Elim::app(Term::meta(METAS.s2n("B")).apply(vec![true_val.clone()])),
+                                    Elim::app(bool_ty.clone()),
+                                    Elim::app(bool_ty.clone()),
+                                ],
+                            )
+                                .boxed(),
+                            Ident::new("X"),
+                        ),
+                        Type::arrow(
+                            Term::Redex(
+                                if_fn.clone(),
+                                Ident::new("if"),
+                                vec![
+                                    Elim::app(Term::lam(
+                                        Bind::unnamed(bool_ty.clone().boxed()),
+                                        Type::universe(Universe(0)),
+                                    )),
+                                    Elim::app(Term::meta(METAS.s2n("F")).apply(vec![Term::var(x.clone())])),
+                                    Elim::app(bool_ty.clone()),
+                                    Elim::app(bool_ty.clone()),
+                                ],
+                            ),
+                            bool_ty.clone(),
+                        ),
+                    ),
+                    Type::universe(Universe(0)),
+                    Type::pi(
+                        Bind::explicit(x.uid(), bool_ty.clone().boxed(), Ident::new("X")),
+                        Type::arrow(
+                            Term::Redex(
+                                if_fn.clone(),
+                                Ident::new("if"),
+                                vec![
+                                    Elim::app(Term::lam(
+                                        Bind::unnamed(bool_ty.clone().boxed()),
+                                        Type::universe(Universe(0)),
+                                    )),
+                                    Elim::app(Term::var(x.clone())),
+                                    Elim::app(bool_ty.clone()),
+                                    Elim::app(bool_ty.clone()),
+                                ],
+                            ),
+                            bool_ty.clone(),
+                        ),
+                    ),
+                ),
+            ]
+        },
+        //   -- stuck 14: solve with extensionality and refl
+        // , [ gal "A" (C Bool)
+        //   , eq "p" (if'' (C Set) (mv "A") (C Nat) (C Bool) --> (C Bool)) (ll "x" (C Tt))
+        //            ((C Nat) --> (C Bool)) (ll "x" (C Tt))
+        //   , eq "q" (C Set) (if'' (C Set) (mv "A") (C Nat) (C Bool)) (C Set) (C Nat)
+        //   ]
+        {
+            vec![
+                gal("A", bool_ty.clone()),
+                eq(
+                    "p",
+                    Type::arrow(
+                        Term::Redex(
+                            if_fn.clone(),
+                            Ident::new("if"),
+                            vec![
+                                Elim::app(Term::lam(
+                                    Bind::unnamed(bool_ty.clone().boxed()),
+                                    Type::universe(Universe(0)),
+                                )),
+                                Elim::app(Term::meta(METAS.s2n("A"))),
+                                Elim::app(nat_ty.clone()),
+                                Elim::app(bool_ty.clone()),
+                            ],
+                        ),
+                        bool_ty.clone(),
+                    ),
+                    Term::lam(
+                        Bind::explicit(x.uid(), bool_ty.clone().boxed(), Ident::new("x")),
+                        true_val.clone(),
+                    ),
+                    Type::arrow(nat_ty.clone(), bool_ty.clone()),
+                    Term::lam(
+                        Bind::explicit(x.uid(), nat_ty.clone().boxed(), Ident::new("x")),
+                        true_val.clone(),
+                    ),
+                ),
+                eq(
+                    "q",
+                    Type::universe(Universe(0)),
+                    Term::Redex(
+                        if_fn.clone(),
+                        Ident::new("if"),
+                        vec![
+                            Elim::app(Term::lam(
+                                Bind::unnamed(bool_ty.clone().boxed()),
+                                Type::universe(Universe(0)),
+                            )),
+                            Elim::app(Term::meta(METAS.s2n("A"))),
+                            Elim::app(nat_ty.clone()),
+                            Elim::app(bool_ty.clone()),
+                        ],
+                    ),
+                    Type::universe(Universe(0)),
+                    nat_ty.clone(),
+                ),
+            ]
+        }
+        */
     ];
     let fails = vec![
+        /*
         // -- fail 0: occur check failure (A occurs in suc A)
         // [ gal "A" (C Nat)
         // , eq "p" (C Nat) (mv "A") (C Nat) (C $ Su (mv "A"))
         // ]
         // ?A : Nat |- ?A : Nat = suc ?A : Nat
-        // vec![
-        //     gal("A", nat_ty.clone()),
-        //     eq(
-        //         "p",
-        //         nat_ty.clone(),
-        //         Term::meta(METAS.s2n("A")),
-        //         nat_ty.clone(),
-        //         Term::Cons(ConHead::new("succ", 6), vec![Term::meta(METAS.s2n("A"))]),
-        //     ),
-        // ],
+        {
+            let meta = gal("A", nat_ty.clone());
+            vec![
+                meta,
+                eq(
+                    "p",
+                    nat_ty.clone(),
+                    Term::meta(METAS.s2n("A")),
+                    nat_ty.clone(),
+                    nat_succ(Term::meta(METAS.s2n("A"))),
+                ),
+            ]
+        },
+        //   -- fail 1: flex-rigid fails because A cannot depend on X
+        // , ( gal "A" (C Bool)
+        //   : gal "B" (C Bool)
+        //   : boy "X" (C Bool)
+        //     ( eq "p" (C Bool) (mv "A") (C Bool) (vv "X" &&& mv "B")
+        //     : [])
+        //   )
+        {
+            vec![
+                gal("A", bool_ty.clone()),
+                gal("B", bool_ty.clone()),
+            ].cons(
+                boy(
+                    x,
+                    bool_ty.clone(),
+                    vec![eq(
+                        "p",
+                        bool_ty.clone(),
+                        Term::meta(METAS.s2n("A")),
+                        bool_ty.clone(),
+                        aaand(Term::var(x.clone()), Term::meta(METAS.s2n("B"))),
+                    )],
+                ),
+            )
+        },
+        // -- fail 2: rigid-rigid clash
+        // , ( boy "X" (C Bool)
+        //     ( boy "Y" (C Bool)
+        //       ( eq "p" (C Bool) (vv "X") (C Bool) (vv "Y")
+        //       : [])
+        //     )
+        //   )
+        {
+            boy(
+                x,
+                bool_ty.clone(),
+                boy(
+                    y,
+                    bool_ty.clone(),
+                    vec![
+                        eq(
+                            "p",
+                            bool_ty.clone(),
+                            Term::var(x.clone()),
+                            bool_ty.clone(),
+                            Term::var(y.clone()),
+                        )
+                    ],
+                )
+            )
+        },
+         */
+        //   -- fail 4: rigid-rigid constant clash
+        // , ( eq "p" (C Bool) (C Tt) (C Bool) (C Ff)
+        //   : [])
+        {
+            vec![eq(
+                "p",
+                bool_ty.clone(),
+                true_val.clone(),
+                bool_ty.clone(),
+                false_val.clone(),
+            )]
+        },
+        //   -- fail 5: spine mismatch
+        // , ( eq "p" ((C Bool) --> (C Bool)) (ll "x" (vv "x"))
+        //            (((C Bool) --> (C Bool)) --> (C Bool)) (ll "f" (vv "f" $$ (C Tt)))
+        //   : [])
+        {
+            vec![
+                eq(
+                    "p",
+                    Type::arrow(bool_ty.clone(), bool_ty.clone()),
+                    Term::lam(
+                        Bind::explicit(x.uid(), bool_ty.clone().boxed(), Ident::new("x")),
+                        Term::var(x.clone()),
+                    ),
+                    Type::arrow(
+                        Type::arrow(bool_ty.clone(), bool_ty.clone()),
+                        bool_ty.clone(),
+                    ),
+                    Term::lam(
+                        Bind::explicit(f.uid(), Type::arrow(bool_ty.clone(), bool_ty.clone()).boxed(), Ident::new("f")),
+                        Term::var(f.clone()).apply(vec![true_val.clone()]),
+                    ),
+                )
+            ]
+        },
+        //   -- fail 6
+        // , ( eq "p" (C Set) (C Bool) (C Set) ((C Bool) --> (C Bool))
+        //   : [])
+        {
+            vec![
+                eq(
+                    "p",
+                    Type::universe(Universe(0)),
+                    bool_ty.clone(),
+                    Type::universe(Universe(0)),
+                    Type::arrow(bool_ty.clone(), bool_ty.clone()),
+                )
+            ]
+        },
+        //   -- fail 7
+        // , ( gal "A" (C Set)
+        //   : boy "x" (mv "A")
+        //     ( boy "y" (mv "A")
+        //       ( eq "p" (mv "A") (vv "x") (mv "A") (vv "y")
+        //       : [])
+        //     )
+        //   )
+        {
+            vec![
+                gal("A", Type::universe(Universe(0))),
+            ].cons(
+                boy(
+                    x,
+                    Term::meta(METAS.s2n("A")),
+                    boy(
+                        y,
+                        Term::meta(METAS.s2n("A")),
+                        vec![
+                            eq(
+                                "p",
+                                Term::meta(METAS.s2n("A")),
+                                Term::var(x.clone()),
+                                Term::meta(METAS.s2n("A")),
+                                Term::var(y.clone()),
+                            )
+                        ],
+                    )
+                )
+            )
+        },
+        //   -- fail 8
+        // , ( gal "A" (C Set)
+        //   : boy "x" (mv "A")
+        //     ( eq "p" (mv "A") (vv "x") (C Bool) (C Tt)
+        //     : [])
+        //   )
+        {
+            vec![
+                gal("A", Type::universe(Universe(0))),
+            ].cons(
+                boy(
+                    x,
+                    Term::meta(METAS.s2n("A")),
+                    vec![
+                        eq(
+                            "p",
+                            Term::meta(METAS.s2n("A")),
+                            Term::var(x.clone()),
+                            bool_ty.clone(),
+                            true_val.clone(),
+                        )
+                    ],
+                )
+            )
+        },
+        //   -- fail 9: occur check
+        // , ( boy "f" ((C Bool) --> (C Bool))
+        //     ( gal "A" ((C Bool) --> (C Bool))
+        //     : boy "X" (C Bool)
+        //       ( boy "Y" (C Bool)
+        //         ( eq "p" (C Bool) (mv "A" $$ vv "X")
+        //                  (C Bool) (vv "f" $$ (mv "A" $$ vv "Y"))
+        //         : [])
+        //       )
+        //     )
+        //   )
+        {
+            boy(
+                f,
+                Type::arrow(bool_ty.clone(), bool_ty.clone()),
+                vec![
+                    gal("A", Type::arrow(bool_ty.clone(), bool_ty.clone())),
+                ].cons(
+                    boy(
+                        x,
+                        bool_ty.clone(),
+                        boy(
+                            y,
+                            bool_ty.clone(),
+                            vec![
+                                eq(
+                                    "p",
+                                    bool_ty.clone(),
+                                    Term::meta(METAS.s2n("A")).apply(vec![Term::var(x.clone())]),
+                                    bool_ty.clone(),
+                                    Term::var(f.clone()).apply(vec![
+                                        Term::meta(METAS.s2n("A")).apply(vec![Term::var(y.clone())])
+                                    ]),
+                                )
+                            ],
+                        )
+                    )
+                )
+            )
+        }
     ];
     let mut i = 0;
     for t in tests {

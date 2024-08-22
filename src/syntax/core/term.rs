@@ -245,6 +245,8 @@ pub enum Term {
     /// Pi-like types (dependent types), with parameter explicitly typed.
     /// Pi Bind, Closure.
     Pi(Bind<Box<Term>>, Closure),
+    /// Sigma-type (dependent pair).
+    // Sigma(Bind<Box<Term>>, Closure),
     /// Lambda.
     Lam(Lambda),
     /// Constructor invocation, fully applied.
