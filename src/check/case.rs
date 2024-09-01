@@ -1,7 +1,6 @@
 //! Paper: Cockx, J., & Abel, A. (2020). Elaborating dependent (co)pattern matching: No pattern left behind
 //! https://doi.org/10.1017/S0956796819000182
 
-use crate::check::meta::HasMeta;
 use crate::check::{Error, Result, TypeCheckState};
 use crate::syntax::abs::{Expr, Pat as PatA};
 use crate::syntax::core::{
@@ -218,25 +217,6 @@ impl CaseTree {
                     })
                     .collect::<Vec<_>>();
                 Term::match_case(i, i_ty, cases)
-            }
-        }
-    }
-}
-
-impl HasMeta for CaseTree {
-    fn inline_meta(self, tcs: &mut TypeCheckState) -> Result<Self> {
-        match self {
-            CaseTree::Leaf(t) => Ok(CaseTree::Leaf(t.inline_meta(tcs)?)),
-            CaseTree::Case(x, x_ty, cases) => {
-                let cases = cases
-                    .into_iter()
-                    .map(|(pat, tree)| {
-                        let pat = pat.inline_meta(tcs)?;
-                        let tree = tree.map(|x| x.inline_meta(tcs)).transpose()?;
-                        Ok((pat, tree))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(CaseTree::Case(x, x_ty, cases))
             }
         }
     }

@@ -1,13 +1,16 @@
-use crate::check::meta::MetaSol;
+// use crate::check::meta::MetaSol;
 use crate::check::state::TypeCheckState;
 use crate::check::{Error, Result};
 use crate::ensure;
-use crate::syntax::core::{Bind, Boxed, Tele, Var};
+use crate::syntax::core::{pretty, pretty_list, Bind, Boxed, DeBruijn, Subst, SubstCtx, Tele, Type, Var};
 use crate::syntax::core::{
     Case, Closure, Elim, FoldVal, Func, Lambda, Pat, SubstWith, Substitution, Term, ValData,
 };
 use crate::syntax::{DBI, GI, MI};
 use std::cmp::Ordering;
+use std::collections::HashSet;
+use chumsky::chain::Chain;
+use crate::check::unification::{Entry, Equation, MetaDecl, Param, Problem, Status};
 
 impl TypeCheckState {
     pub fn subtype(&mut self, sub: &Term, sup: &Term) -> Result<()> {
@@ -22,7 +25,7 @@ impl TypeCheckState {
             e
         })?;
         if self.current_checking_def.is_some() {
-            debug!("{}{} <= {} --> {}", depth_ws, sub, sup, self.meta_ctx());
+            debug!("{}{} <= {} --> {}", depth_ws, sub, sup,/* self.meta_ctx(else)*/ 0);
         } else {
             debug!("{}{} <= {}", depth_ws, sub, sup);
         }
@@ -31,7 +34,7 @@ impl TypeCheckState {
     }
 
     fn subtype_impl(&mut self, sub: &Term, sup: &Term) -> Result<()> {
-        use Term::*;
+        use Term::{Universe, Pi, Id};
         match (sub, sup) {
             (Universe(sub_l), Universe(sup_l)) if sub_l <= sup_l => Ok(()),
             (Pi(a, c0), Pi(b, c1)) if a.licit == b.licit => {
@@ -73,6 +76,56 @@ impl TypeCheckState {
                 };
                 self.unify_depth_dec(id_a.tele.len());
                 res
+            }
+            (t, u) if matches!(t, Term::Var(Var::Meta(_), ..)) | matches!(u, Term::Var(Var::Meta(_), ..)) => {
+                match (t, u) {
+                    (t, Term::Var(Var::Meta(mi), es)) | (Term::Var(Var::Meta(mi), es), t) => {
+                        let mut ctx = self.context().clone();
+
+                        let ty_ty = Term::universe(0); // TODO: self.type_of_decl(against);
+                        let mut t = t.clone();
+
+                        let applied_meta = if es.is_empty() {
+                            Term::meta(*mi).apply((0..ctx.len()).rev().map(Term::from_dbi).collect())
+                        } else {
+                            let mut es = es.clone();
+                            let dbi_iter = es.iter().map(|e| e.clone().into_app().dbi_view().unwrap());
+                            // if the spine vars are non-linear,an equation won't be added to the context, because it can't be solved using the method being used
+                            let is_linear = dbi_iter.clone().collect::<HashSet<_>>().len() == es.len();
+                            if !is_linear {
+                                debug!("Subtyping with applied metas with non-linear spine: ?{} {} in {ctx}", mi, pretty(&es, self));
+                                return Ok(());
+                            }
+
+                            if es.len() != ctx.len() {
+                                debug!("Subtyping with applied metas with different spine: ?{} {} in {ctx}", mi, pretty(&es, self));
+                                // assuming the meta is only applied to vars (?m v1 v2 ... vn) (TODO: add a check for that):
+                                // this value represents number of binders that are out of the context for the meta, so we need to prune them before creating an equation
+                                let num_out_binders = dbi_iter.min().unwrap();
+                                ctx.popn(num_out_binders);
+                                let strengthen = Substitution::strengthen(num_out_binders);
+                                es = es.subst(strengthen.clone());
+                                t = t.subst(strengthen);
+                            }
+                            Term::meta_with(*mi, es.clone())
+                        };
+
+                        let meta_ty = Term::pis(ctx.clone(), ty_ty.clone());
+                        self.push_l(Entry::E(*mi, meta_ty, MetaDecl::Hole))?;
+
+                        let problem = Problem::Unify(Equation {
+                            tm1: applied_meta,
+                            ty1: ty_ty.clone(),
+                            tm2: t.clone(),
+                            ty2: ty_ty.clone(),
+                        });
+                        self.push_l(Entry::Q(Status::Active, Problem::alls(ctx.0.clone().into_iter().map(|b| b.map_term(Param::P)).collect(), problem)))?;
+                        Ok(())
+                    }
+                    _ => {
+                        return Err(Error::Other("Subtyping with metas is not implemented".to_string()));
+                    }
+                }
             }
             (e, t) => Unify::unify(self, e, t),
         }
@@ -127,7 +180,6 @@ impl Unify for Case {
 
 impl Unify for Term {
     fn unify(tcs: &mut TypeCheckState, left: &Self, right: &Self) -> Result<()> {
-        debug!("{}Unify {} = {}", tcs.tc_depth_ws(), left, right);
         use Term::*;
         match (left, right) {
             (left, right) if left.is_whnf() && right.is_whnf() => tcs.unify_val(left, right),
@@ -314,7 +366,7 @@ impl TypeCheckState {
         // use crate::syntax::Var as V;
         use Term::*;
         match (left, right) {
-            (Universe(sub_l), Universe(sup_l)) if sub_l == sup_l => Ok(()),
+            (Universe(sub_l), Universe(sup_l)) if self.type_in_type || sub_l == sup_l => Ok(()),
             (Data(left), Data(right)) => Unify::unify(self, left, right),
             (Pi(a, c0), Pi(b, c1)) if a.licit == b.licit => {
                 Unify::unify(self, &a.ty, &b.ty)?;

@@ -1,5 +1,5 @@
 use super::Result;
-use crate::check::meta::HasMeta;
+// use crate::check::meta::HasMeta;
 use crate::check::state::TypeCheckState;
 use crate::check::Error;
 use crate::syntax::abs::{
@@ -11,6 +11,7 @@ use crate::syntax::core::{
 use crate::syntax::desugar::DesugarState;
 use crate::syntax::{LangItem, Universe, GI};
 use itertools::Either::*;
+use crate::check::unification::MetaSubstitution;
 
 impl TypeCheckState {
     pub fn check_prog(&mut self, desugar_state: DesugarState) -> Result<()> {
@@ -48,7 +49,7 @@ impl TypeCheckState {
 
     pub fn check_decls(
         &mut self,
-        decls: impl Iterator<Item = ADecl>,
+        decls: impl Iterator<Item=ADecl>,
         meta_ids: Vec<GI>,
     ) -> Result<()> {
         let curr_decl_len = self.sigma.len();
@@ -109,7 +110,7 @@ impl TypeCheckState {
                         &Term::universe(Universe(u32::MAX)), // TODO: this is Setω in Agda. Consider other ways for checking type here.
                     )?;
 
-                    let signature = signature.ast;
+                    let mut signature = signature.ast;
                     let partial_func = FuncInfo {
                         loc: f.id.loc,
                         name: f.id,
@@ -117,14 +118,23 @@ impl TypeCheckState {
                         body: None,
                     };
                     self.sigma.push(Decl::Func(partial_func));
-                    let body = self.check_lam(f.expr.unwrap(), signature.clone())?;
-                    let body = body.inline_meta(self)?;
-                    let term = signature.inline_meta(self)?;
+                    let mut body = self.check_lam(f.expr.unwrap(), signature.clone())?;
+
+                    self.run_unification()?;
+                    let solutions = self.drain_solved_metas()?;
+
+                    signature.meta_subst(&solutions);
+                    body.meta_subst(&solutions);
+                    signature = self.normalize(signature)?;
+                    body = self.normalize(body)?;
+
                     let func = self.sigma.last_mut().unwrap().as_func_mut();
-                    func.signature = term;
+
+                    func.signature = signature;
                     func.body = Some(body);
                 }
             }
+
             self.exit_def();
             self.sanity_check();
         }
@@ -241,6 +251,7 @@ impl TypeCheckState {
 
     fn check_lam(&mut self, body: Expr, against: Term) -> Result<Term> {
         let against_val = against;
+        info!("Checking lambda {body} against: {}", against_val);
         let body_ch = self.check(&body, &against_val)?.ast;
         Ok(body_ch)
     }

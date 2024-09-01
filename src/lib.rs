@@ -3,7 +3,7 @@
     confusable_idents,
     mixed_script_confusables,
     dead_code,
-    incomplete_features
+    incomplete_features,
 )]
 #![feature(
     lazy_cell,

@@ -1,8 +1,9 @@
 use crate::check::state::TypeCheckState;
 use crate::check::{Clause, Error, LshProblem, Result};
+use crate::check::unification::{Entry, Equation, MetaDecl, Param, Problem, Status};
 use crate::ensure;
 use crate::syntax::abs::{AppView, Expr, Match};
-use crate::syntax::core::{self, Boxed, Closure, DeBruijn, Name, Tele, Type};
+use crate::syntax::core::{self, Boxed, Closure, Ctx, DeBruijn, Name, SubstCtx, Tele, Type};
 use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, ValData, Var};
 use crate::syntax::surf::{nat_to_term, Literal};
 use crate::syntax::{abs, ConHead, Ident, LangItem, Loc, Universe, GI};
@@ -257,8 +258,11 @@ impl TypeCheckState {
                 Ok((lb.val.at(loc.loc), lb.bind.ty))
             }
             Meta(ident, mi) => {
-                let ty = Term::meta_with(*mi, vec![]);
-                let tyty = self.fresh_meta();
+                let ctx = self.context().clone();
+                let apply_ctx = |t: Term| t.apply((0..ctx.len()).rev().map(Term::from_dbi).collect());
+                let tyty = apply_ctx(self.fresh_meta());
+                let ty = apply_ctx(self.fresh_meta()); // Term::meta_with(*mi, vec![]);
+
                 Ok((ty.at(ident.loc), tyty))
             }
             Id(loc, id) => {
@@ -408,7 +412,7 @@ impl TypeCheckState {
         match (abs, against) {
             (Expr::Universe(info, lower), Term::Universe(upper)) => {
                 if self.type_in_type {
-                    Ok(Term::universe(*lower).at(*info))
+                    Ok(Term::universe(lower.0.max(upper.0)).at(*info))
                 } else {
                     if upper > lower {
                         Ok(Term::universe(*lower).at(*info))
@@ -444,6 +448,29 @@ impl TypeCheckState {
                 Ok(Term::lam(bind_new.boxed(), body.ast).at(bind_ty.loc))
             }
             (Expr::Match(m), against) => self.check_match(m, against.clone()),
+            (Expr::Meta(ident, mi), against) => {
+                let ctx = self.context().clone();
+                let apply_ctx = |t: Term| t.apply((0..ctx.len()).rev().map(Term::from_dbi).collect());
+                let mi_ty = self.fresh_uid();
+                let mi = self.fresh_uid();
+                let ty = Term::meta(mi_ty);
+
+                let applied_ty = apply_ctx(ty);
+
+                let ty_ty = Term::universe(0); // TODO: self.type_of_decl(against);
+                self.push_l(Entry::E(mi_ty, Term::pis(ctx.clone(), ty_ty.clone()), MetaDecl::Hole))?;
+                self.push_l(Entry::E(mi, Term::pis(ctx.clone(), applied_ty.clone()), MetaDecl::Hole))?;
+                let problem = Problem::Unify(Equation {
+                    tm1: applied_ty,
+                    ty1: ty_ty.clone(),
+                    tm2: against.clone(),
+                    ty2: ty_ty.clone(),
+                });
+                self.push_l(Entry::Q(Status::Active, Problem::alls(ctx.0.clone().into_iter().map(|b| b.map_term(Param::P)).collect(), problem)))?;
+
+                let applied_meta = apply_ctx(Term::meta(mi));
+                Ok(applied_meta.at(ident.loc))
+            }
             (expr, anything) => self.check_fallback(expr.clone(), anything),
         }
     }
@@ -483,10 +510,15 @@ impl TypeCheckState {
             .map_err(|e| e.wrap(expr.loc()))?;
         Ok(evaluated)
     }
+
+    pub(crate) fn context(&self) -> &Ctx {
+        &self.gamma
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
     use super::*;
     use crate::syntax::parser::Parser;
 
@@ -541,6 +573,48 @@ mod tests {
                 Term::Data(ValData::new(0, vec![])).boxed()
             )
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_infer_meta() -> eyre::Result<()> {
+        let _ = env_logger::try_init();
+        let mut p = Parser::default();
+        let mut env = TypeCheckState::default();
+        let mut des = desugar_prog(p.parse_prog(
+            r#"
+            data Bool : Type
+               | true
+               | false
+
+            fn fmap (A : Type) (B : Type) (f : A -> B) (x : A) : B := f x
+            fn bool_id (b : Bool) := b
+            fn id (A : Type) (a : A) := a
+            fn id' (A : Type) : A -> A := (lam (a : _) => a)
+            fn bool := true
+            fn idb := id _ bool
+            fn deep (x : Bool) : _ := (lam (y : _) => y) x
+            fn deep' (f : (A : Type) -> A -> A) (x : Bool) : Bool := (lam (y : Bool) => f _ y) x
+            fn deep'' (f : (A : Type) -> A -> A) (x : Bool) : Bool := (lam (y : _) => f _ y) x
+            fn deep''' (f : (A : Type) -> A -> A -> A) (x : Bool) := (lam (y : _) => f _ y x) x
+            fn deep'''' (f : (A : Type) -> A -> A -> A) (x : Bool) := (lam (y : _) => f _ x y) x
+       "#,
+        )?)?;
+
+        env.trace_tc = true;
+        env.check_prog(des.clone())?;
+
+        let print_def = |id| match env.sigma.get(id) {
+            Some(Decl::Func(f)) => {
+                println!("fn {} : {} := {}", f.name, f.signature,
+                         f.body.as_ref().unwrap())
+            }
+            _ => ()
+        };
+        for i in 3..20 {
+            print_def(i);
+        }
 
         Ok(())
     }

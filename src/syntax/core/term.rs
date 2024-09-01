@@ -773,6 +773,14 @@ impl Term {
         }
     }
 
+
+    pub fn as_single_meta(&self) -> Option<MI> {
+        match self {
+            Term::Var(Var::Meta(i), elims) if elims.is_empty() => Some(*i),
+            _ => None,
+        }
+    }
+
     pub fn fun_app(gi: GI, name: impl Into<Ident>, args: impl IntoIterator<Item=Term>) -> Term {
         Term::Redex(
             Func::Index(gi),

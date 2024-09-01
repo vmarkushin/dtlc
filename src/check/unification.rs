@@ -38,17 +38,18 @@ pub enum Error {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Decl {
+pub enum MetaDecl {
+    /// A hole
     Hole,
-    // A solution?
+    /// A solution
     Defn(Term),
 }
 
-impl Occurrence for Decl {
+impl Occurrence for MetaDecl {
     fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         match self {
-            Decl::Hole => (),
-            Decl::Defn(t) => t.go(depth, vars, kind, in_flexible),
+            MetaDecl::Hole => (),
+            MetaDecl::Defn(t) => t.go(depth, vars, kind, in_flexible),
         }
     }
 }
@@ -431,9 +432,32 @@ pub type Context = (Ctx<Entry>, Tele<Either<MetaSubst, Entry>>);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Entry {
     // Meta Entry
-    E(MI, Type, Decl),
+    E(MI, Type, MetaDecl),
     // Question
     Q(Status, Problem),
+}
+
+impl Ord for Entry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
+impl PartialOrd for Entry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (Entry::E(mi1, ..), Entry::E(mi2, ..)) => {
+                mi1.partial_cmp(mi2)
+            }
+            (Entry::E(..), Entry::Q(..)) => {
+                Some(std::cmp::Ordering::Less)
+            }
+            (Entry::Q(..), Entry::E(..)) => {
+                Some(std::cmp::Ordering::Greater)
+            }
+            _ => Some(std::cmp::Ordering::Equal)
+        }
+    }
 }
 
 impl Occurrence for Entry {
@@ -448,8 +472,8 @@ impl Occurrence for Entry {
 impl Display for Entry {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Entry::E(x, ty, Decl::Hole) => write!(f, "?{x} : {ty}"),
-            Entry::E(x, ty, Decl::Defn(v)) => write!(f, "?{x} : {ty} := {v}"),
+            Entry::E(x, ty, MetaDecl::Hole) => write!(f, "?{x} : {ty}"),
+            Entry::E(x, ty, MetaDecl::Defn(v)) => write!(f, "?{x} : {ty} := {v}"),
             Entry::Q(s, p) => write!(f, "?{s:?} {p}"),
         }
     }
@@ -639,8 +663,8 @@ impl MetaSubstitution for Entry {
             Entry::E(_, ty, decl) => {
                 ty.meta_subst(subst);
                 match decl {
-                    Decl::Hole => {}
-                    Decl::Defn(v) => v.meta_subst(subst),
+                    MetaDecl::Hole => {}
+                    MetaDecl::Defn(v) => v.meta_subst(subst),
                 }
             }
             Entry::Q(_, prob) => prob.meta_subst(subst),
@@ -1382,6 +1406,7 @@ fn occur_check(tcs: &mut TypeCheckState, is_strong_rigid: bool, x: MI, t: &Term)
             })
         }
         Term::Cons(_c, args) => args.iter().any(|t| occur_check(tcs, is_strong_rigid, x, t)),
+        Term::Universe(_) => false,
         t => {
             panic!("occur_check: {:?}", t);
         }
@@ -1391,6 +1416,44 @@ fn occur_check(tcs: &mut TypeCheckState, is_strong_rigid: bool, x: MI, t: &Term)
 type Id = u32;
 
 impl TypeCheckState {
+    pub fn drain_solved_metas(&mut self) -> Result<MetaSubst> {
+        let hash_map = self.meta_ctx2.0.0.drain(..).map(|e| match e {
+            Entry::E(x, _, MetaDecl::Defn(t)) => (x, t),
+            e => panic!("Expected a solved meta, got {e}"),
+        }).collect();
+        Ok(MetaSubst(hash_map, 0))
+    }
+
+    pub fn run_unification(&mut self) -> Result<()> {
+        let probs = self.meta_ctx2.0.iter().fold(Vec::new(), |mut acc, e| match e {
+            Entry::E(..) => acc,
+            Entry::Q(_, p) => {
+                acc.push(p.clone());
+                acc
+            }
+        });
+
+        self.meta_ctx2.0.0.sort();
+
+        info!("init meta ctx:\n\t{}", self.meta_ctx2.0.iter().join("\n    "));
+        loop {
+            if self.go_left().is_err() {
+                break;
+            }
+        }
+
+        info!("ambulando start");
+        self.ambulando(Default::default())?;
+        info!("ambulando done");
+        debug!(target: "unify", "{}", self.meta_ctx2.0.iter().join("\n    "));
+        self.validate()?;
+        info!("validation done");
+        self.check_holds(probs)?;
+        info!("fin meta ctx:\n\t{}", self.meta_ctx2.0.iter().join("\n    "));
+
+        Ok(())
+    }
+
     /*
     > unify (EQN (Pi _A _B) f (Pi _S _T) g) = do
     >     x <- fresh (s2n "x")
@@ -1647,7 +1710,7 @@ impl TypeCheckState {
         //   println "flex_term: ctx = {}, alpha = {}, fvs = {}" (_Gam :> alpha :> (fmvs _Xi) :> ())
         info!(target: "unify", "flex_term: ctx = {} alpha = {}, fvs = {:?}, left = {}, eq = {equation}", ctx, mi_a, entries.fmvs(), e);
         match &e {
-            Entry::E(mi_b, t, Decl::Hole) => {
+            Entry::E(mi_b, t, MetaDecl::Hole) => {
                 info!(target: "unify", "flex_term: beta = {}", mi_b);
 
                 if mi_a == *mi_b {
@@ -1753,7 +1816,7 @@ impl TypeCheckState {
         info!(target: "unify", "flex_flex: {:?} {}, {}", entries, equation, self.meta_ctx2.0);
         let e = self.pop_l()?;
         match e.clone() {
-            Entry::E(mi_c, _ty, Decl::Hole)
+            Entry::E(mi_c, _ty, MetaDecl::Hole)
             if [mi_a, mi_b].contains(&mi_c) && entries.fmvs().contains(&mi_c) =>
                 {
                     info!(target: "unify", "1");
@@ -1761,7 +1824,7 @@ impl TypeCheckState {
                     self.push_ls(entries)?;
                     self.block(id, Problem::Unify(equation))
                 }
-            Entry::E(mi_c, ty, Decl::Hole) if mi_c == mi_a => {
+            Entry::E(mi_c, ty, MetaDecl::Hole) if mi_c == mi_a => {
                 info!(target: "unify", "2");
                 self.push_ls(entries)?;
                 if !self.try_invert(id, equation.clone(), ty)? {
@@ -1769,7 +1832,7 @@ impl TypeCheckState {
                 }
                 Ok(())
             }
-            Entry::E(mi_c, ty, Decl::Hole) if mi_c == mi_b => {
+            Entry::E(mi_c, ty, MetaDecl::Hole) if mi_c == mi_b => {
                 info!(target: "unify", "3");
                 self.push_ls(entries)?;
                 if !self.try_invert(id, equation.clone().sym(), ty)? {
@@ -1777,7 +1840,7 @@ impl TypeCheckState {
                 }
                 Ok(())
             }
-            Entry::E(mi_c, _ty, Decl::Hole)
+            Entry::E(mi_c, _ty, MetaDecl::Hole)
             if (&(&ctx.fmvs() | &entries.fmvs()) | &equation.fmvs()).contains(&mi_c) =>
                 {
                     info!(target: "unify", "4");
@@ -2200,10 +2263,10 @@ impl TypeCheckState {
 
 
      */
-    fn instantiate(&mut self, (mi, ty, f): Instantiation) -> Result<()> {
+    pub(crate) fn instantiate(&mut self, (mi, ty, f): Instantiation) -> Result<()> {
         let e = self.pop_l()?;
         match e {
-            Entry::E(mi2, ty2, Decl::Hole) if mi == mi2 => {
+            Entry::E(mi2, ty2, MetaDecl::Hole) if mi == mi2 => {
                 self.hole(Default::default(), ty, |tcs, t| {
                     tcs.define(Default::default(), mi2, ty2, f(t))
                 })
@@ -2329,7 +2392,7 @@ impl TypeCheckState {
         trace!(target: "unify", "ctx: {}", self.gamma2);
 
         match (ty, s, t) {
-            (Term::Universe(_), Term::Universe(_), Term::Universe(_)) => {
+            (Term::Universe(_), Term::Universe(_), Term::Universe(_)) if self.type_in_type => {
                 Ok(Term::Universe(Universe(0)))
             }
             (Term::Universe(_), Term::Pi(a, b), Term::Pi(s, t)) => {
@@ -2389,7 +2452,7 @@ impl TypeCheckState {
                     )))
                 }
             }
-            (ty, Term::Cons(h1, xs), Term::Cons(h2, ys)) => {
+            (Term::Data(..), Term::Cons(h1, xs), Term::Cons(h2, ys)) => {
                 if h1 != h2 {
                     return Err(CheckError::Other(format!(
                         "equalise: cons heads {:?} and {:?} not equal",
@@ -2719,7 +2782,7 @@ impl TypeCheckState {
                 _ => None,
             })
             .next()
-            .ok_or_else(|| panic!())
+            .ok_or_else(|| panic!("lookup_meta_ctx: not found: {:?}", x))
     }
 
     /*
@@ -2825,7 +2888,7 @@ impl TypeCheckState {
     >                                       ambulando theta
 
      */
-    fn ambulando(&mut self, subst: MetaSubst) -> Result<()> {
+    pub(crate) fn ambulando(&mut self, subst: MetaSubst) -> Result<()> {
         trace!(target: "unify", "\n\nambulando: {subst}");
         let Ok(x) = self.pop_r() else {
             return Ok(());
@@ -2839,11 +2902,11 @@ impl TypeCheckState {
                 self.ambulando(composed)
             }
             Right(e) => match self.update(subst.clone(), e) {
-                Entry::E(mi, term, Decl::Hole) => {
+                Entry::E(mi, term, MetaDecl::Hole) => {
                     let term = self.normalize(term)?;
                     trace!(target: "unify", "ambulando-2");
                     if !self.lower(Tele::default(), mi, term.clone())? {
-                        self.push_l(Entry::E(mi, term, Decl::Hole))?;
+                        self.push_l(Entry::E(mi, term, MetaDecl::Hole))?;
                     }
                     self.ambulando(subst)
                 }
@@ -2893,9 +2956,39 @@ impl TypeCheckState {
         }
     }
 
-    fn push_l(&mut self, e: Entry) -> Result<()> {
+    pub(crate) fn push_l(&mut self, e: Entry) -> Result<()> {
+        match &e {
+            Entry::E(mi, ty, decl) => {
+                // check if the meta is already in context
+                let maybe_meta = self.meta_ctx2.0.iter().find(|e| match e {
+                    Entry::E(mi2, _, _) if mi2 == mi => {
+                        true
+                    }
+                    _ => false
+                });
+                if let Some(other) = maybe_meta {
+                    let Entry::E(_, ty2, decl2) = other else {
+                        unreachable!("we've just matched on the variant")
+                    };
+
+                    if ty != ty2 {
+                        // if types are different, add a new equation for them
+                        // TODO: maybe add more context?
+                        let eq = Equation::new(ty.clone(), Term::universe(0), ty2.clone(), Term::universe(0));
+                        info!(target: "additional", "push_l (dup) adding equation {}, mctx = {}", eq, self.meta_ctx2.0);
+                        let additional_entry = Entry::Q(Status::Active, Problem::Unify(eq));
+                        self.push_l(additional_entry)?;
+                    }
+
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+
         self.meta_ctx2.0.push(e.clone());
         info!(target: "additional", "push_l {}, mctx = {}", e, self.meta_ctx2.0);
+
         Ok(())
     }
 
@@ -2966,7 +3059,7 @@ impl TypeCheckState {
     ) -> Result<T> {
         let alpha = self.fresh_name().uid();
         info!(target: "unify", "issued new meta {alpha}");
-        self.push_l(Entry::E(alpha, Term::pis(tele.clone(), ty), Decl::Hole))?;
+        self.push_l(Entry::E(alpha, Term::pis(tele.clone(), ty), MetaDecl::Hole))?;
         let r = f(self, Term::meta_with(alpha, tele.to_elims()))?;
         self.go_left()?;
         Ok(r)
@@ -2987,7 +3080,7 @@ impl TypeCheckState {
             vec![(alpha, t.clone())].into_iter().collect(),
             0,
         )))?;
-        self.push_r(Right(Entry::E(alpha, tt, Decl::Defn(t))))?;
+        self.push_r(Right(Entry::E(alpha, tt, MetaDecl::Defn(t))))?;
         Ok(())
     }
 
@@ -2995,7 +3088,7 @@ impl TypeCheckState {
     > goLeft :: Contextual ()
     > goLeft = popL >>= pushR `o` Right
      */
-    fn go_left(&mut self) -> Result<()> {
+    pub(crate) fn go_left(&mut self) -> Result<()> {
         let e = self.pop_l()?;
         self.push_r(Right(e))
     }
@@ -3043,7 +3136,7 @@ fn is_subset_of(a: HashSet<Name>, b: HashSet<Name>) -> bool {
 >     isBlocked (Q Active p)   = error "active problem left"
 >     isBlocked (E _ _)        = False
  */
-fn any_blocked(mctx: &Ctx<Entry>) -> bool {
+pub fn any_blocked(mctx: &Ctx<Entry>) -> bool {
     mctx.iter().any(|e| match e {
         Entry::Q(Status::Blocked, _) => true,
         Entry::Q(Status::Active, _) => panic!("active problem left"),
@@ -3062,7 +3155,7 @@ fn mcx_to_subs(mctx: &Ctx<Entry>) -> MetaSubst {
     MetaSubst(
         mctx.iter()
             .filter_map(|e| match e {
-                Entry::E(alpha, _, Decl::Defn(t)) => Some((*alpha, t.clone())),
+                Entry::E(alpha, _, MetaDecl::Defn(t)) => Some((*alpha, t.clone())),
                 _ => None,
             })
             .collect(),
@@ -3145,7 +3238,7 @@ impl TypeCheckState {
         }
     }
 
-    fn check_holds(&mut self, ps: Vec<Problem>) -> Result<()> {
+    pub(crate) fn check_holds(&mut self, ps: Vec<Problem>) -> Result<()> {
         let mcx = self.meta_ctx2.0.clone();
         if any_blocked(&mcx) {
             return Ok(());
@@ -3242,12 +3335,12 @@ impl TypeCheckState {
                 "validate: dependency error: {} occurs before its declaration",
                 x
             ))),
-            Entry::E(_, ty, Decl::Hole) => {
+            Entry::E(_, ty, MetaDecl::Hole) => {
                 self.meta_ctx2.0 = ctx.clone();
                 self.check_(&Type::universe(Universe(0)), &ty)?;
                 self.validate_cx(ctx)
             }
-            Entry::E(_, ty, Decl::Defn(v)) => {
+            Entry::E(_, ty, MetaDecl::Defn(v)) => {
                 self.meta_ctx2.0 = ctx.clone();
                 self.check_(&Type::universe(Universe(0)), &ty)?;
                 self.check_(&ty, &v)?;
@@ -3274,7 +3367,7 @@ impl TypeCheckState {
     >     validateCx _Del `catchError` (error . (++ ("\nwhen validating\n" ++ pp (_Del, _Del'))))
     >     putL _Del
      */
-    fn validate(&mut self) -> Result<()> {
+    pub(crate) fn validate(&mut self) -> Result<()> {
         let ctx_r = self.meta_ctx2.1.clone();
         if !ctx_r.is_empty() {
             return Err(CheckError::Other(format!("validate: not at far right")));
@@ -3351,13 +3444,6 @@ Initial context:
     )?)?;
     tcs.check_prog(des.clone())?;
 
-    let probs = ezs.iter().fold(Vec::new(), |mut acc, e| match e {
-        Entry::E(..) => acc,
-        Entry::Q(_, p) => {
-            acc.push(p.clone());
-            acc
-        }
-    });
     tcs.meta_ctx2.0 = Ctx(ezs);
     tcs.fresh_meta();
     tcs.next_uid
@@ -3366,17 +3452,7 @@ Initial context:
     // info!(target: "additional", "gamma2 clear");
     tcs.gamma2.clear();
     let r: Result<Context> = try {
-        loop {
-            if tcs.go_left().is_err() {
-                break;
-            }
-        }
-        tcs.ambulando(Default::default())?;
-        trace!(target: "unify", "ambulando done");
-        trace!(target: "unify", "{}", tcs.meta_ctx2.0.iter().join("\n    "));
-        tcs.validate()?;
-        trace!(target: "unify", "validation done");
-        tcs.check_holds(probs)?;
+        tcs.run_unification()?;
         tcs.meta_ctx2
     };
 
@@ -3588,7 +3664,7 @@ fn test_all() -> eyre::Result<()> {
 
     let lifted = |x: Name, t: Type, es: Vec<Entry>| lift(x, t, es, MetaSubst::default());
 
-    let gal = |x: &str, t: Type| Entry::E(METAS.fresh(x), t, Decl::Hole);
+    let gal = |x: &str, t: Type| Entry::E(METAS.fresh(x), t, MetaDecl::Hole);
     let eq = |x: &str, s: Type, s_: Term, t: Type, t_: Term| {
         Entry::Q(Status::Active, Problem::Unify(Equation::new(s_, s, t_, t)))
     };
@@ -3642,7 +3718,6 @@ fn test_all() -> eyre::Result<()> {
     };
 
     let tests = vec![
-        /*
         /*
         >           ( gal "A" SET
         >           : gal "B" SET
@@ -5298,10 +5373,8 @@ fn test_all() -> eyre::Result<()> {
                 ),
             ]
         }
-        */
     ];
     let stucks = vec![
-        /*
         // -- stuck 0: nonlinear
         // ( gal "A" ((C Bool) --> (C Bool) --> (C Bool) --> (C Bool))
         // : gal "B" ((C Bool) --> (C Bool))
@@ -6060,10 +6133,8 @@ fn test_all() -> eyre::Result<()> {
                 ),
             ]
         }
-        */
     ];
     let fails = vec![
-        /*
         // -- fail 0: occur check failure (A occurs in suc A)
         // [ gal "A" (C Nat)
         // , eq "p" (C Nat) (mv "A") (C Nat) (C $ Su (mv "A"))
@@ -6133,7 +6204,6 @@ fn test_all() -> eyre::Result<()> {
                 )
             )
         },
-         */
         //   -- fail 4: rigid-rigid constant clash
         // , ( eq "p" (C Bool) (C Tt) (C Bool) (C Ff)
         //   : [])
@@ -6421,9 +6491,8 @@ trait Cons {
 }
 
 impl<T> Cons for Vec<T> {
-    fn cons(self, other: Self) -> Self {
-        let mut v = self;
-        v.extend(other);
-        v
+    fn cons(mut self, other: Self) -> Self {
+        self.extend(other);
+        self
     }
 }

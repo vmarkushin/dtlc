@@ -292,7 +292,6 @@ pub fn run_repl(
             .map(|x| x.1)
             .wrap_err("Failed to infer type for the expression");
         env.exit_def();
-        env.meta_ctx.pop();
         des.cur_meta_id.pop();
         let t = res?;
         println!("{}", t);
@@ -331,14 +330,14 @@ mod tests {
             &mut helper.env,
             "data Nat : Type | O Type1",
         )
-        .is_err());
+            .is_err());
         assert!(run_repl(
             &mut helper.parser,
             &mut helper.des,
             &mut helper.env,
             "data Nat : Type | O Type2",
         )
-        .is_err());
+            .is_err());
         run_repl(
             &mut helper.parser,
             &mut helper.des,
@@ -357,14 +356,14 @@ mod tests {
             &mut helper.env,
             "id t _",
         )
-        .is_err());
+            .is_err());
         assert!(run_repl(
             &mut helper.parser,
             &mut helper.des,
             &mut helper.env,
             "id Type1 _",
         )
-        .is_err());
+            .is_err());
         Ok(())
     }
 }

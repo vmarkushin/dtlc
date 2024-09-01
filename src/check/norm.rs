@@ -161,7 +161,7 @@ impl TypeCheckState {
                     trace!(target: "reduce", "normalizing neutral term: {}", t);
                     self.normalize_neutral(t)
                 }
-            },
+            }
             Term::Redex(f, id, elims) => match f {
                 Func::Index(def) => match self.def(def) {
                     // TODO: make a separate function for each data and constructor
@@ -180,60 +180,60 @@ impl TypeCheckState {
                         )?;
                         info!("unfolded {simp:?}, {term}");
                         // Ok((simp, term)) =>{
-                            match simp {
-                                Simpl::Yes => {
-                                    self.simplify_blocked(term, shallow).map(|t| {
-                                        info!("simplified term: {}", &t);
-                                        t
-                                    })
-                                }
-                                Simpl::No => {
-                                    Ok(Term::Redex(
-                                        f,
-                                        id,
-                                        elims
-                                            .into_iter()
-                                            .map(|e| match e {
-                                                Elim::App(t) => {
-                                                    Ok(Elim::App(self.reduce(*t, shallow)?.boxed()))
-                                                }
-                                                e => Ok(e),
-                                            })
-                                            .collect::<Result<_>>()?,
-                                    ))
-                                }
+                        match simp {
+                            Simpl::Yes => {
+                                self.simplify_blocked(term, shallow).map(|t| {
+                                    info!("simplified term: {}", &t);
+                                    t
+                                })
                             }
-                            // self.reduce(term)
-                        // }
-                        // {
-                            /*
-                            Ok((simp, term)) => match simp {
-                                Simpl::Yes => self.simplify_blocking(term),
-                                Simpl::No => Ok(Term::Redex(
+                            Simpl::No => {
+                                Ok(Term::Redex(
                                     f,
                                     id,
                                     elims
                                         .into_iter()
                                         .map(|e| match e {
                                             Elim::App(t) => {
-                                                Ok(Elim::App(self.simplify_blocking(*t)?.boxed()))
+                                                Ok(Elim::App(self.reduce(*t, shallow)?.boxed()))
                                             }
                                             e => Ok(e),
                                         })
                                         .collect::<Result<_>>()?,
-                                )),
-                            },
-                             */
+                                ))
+                            }
+                        }
+                        // self.reduce(term)
+                        // }
+                        // {
+                        /*
+                        Ok((simp, term)) => match simp {
+                            Simpl::Yes => self.simplify_blocking(term),
+                            Simpl::No => Ok(Term::Redex(
+                                f,
+                                id,
+                                elims
+                                    .into_iter()
+                                    .map(|e| match e {
+                                        Elim::App(t) => {
+                                            Ok(Elim::App(self.simplify_blocking(*t)?.boxed()))
+                                        }
+                                        e => Ok(e),
+                                    })
+                                    .collect::<Result<_>>()?,
+                            )),
+                        },
+                         */
 
-                            // Err(blockage) => match blockage.stuck {
-                            //     NotBlocked::NotBlocked => self.reduce(blockage.anyway),
-                            //     NotBlocked::OnElim(e) => {
-                            //         trace!("stuck on elim: {}", e);
-                            //         // TODO: simplify elims?
-                            //         Ok(Term::Redex(f, id, elims))
-                            //     }
-                            //     _ => Err(Error::Blocked(box blockage)),
-                            // },
+                        // Err(blockage) => match blockage.stuck {
+                        //     NotBlocked::NotBlocked => self.reduce(blockage.anyway),
+                        //     NotBlocked::OnElim(e) => {
+                        //         trace!("stuck on elim: {}", e);
+                        //         // TODO: simplify elims?
+                        //         Ok(Term::Redex(f, id, elims))
+                        //     }
+                        //     _ => Err(Error::Blocked(box blockage)),
+                        // },
                         // }
                     }
                 },
@@ -292,9 +292,9 @@ impl TypeCheckState {
                         self.reduce(term1, shallow)
                     }
                     None => {
-                    // TODO: simplify cases?
+                        // TODO: simplify cases?
                         Ok(Term::Match(simplified.boxed(), self.reduce(*ty, shallow)?.boxed(), cs))
-                    },
+                    }
                     /*
                     None => Err(Error::Blocked(box Blocked::new(
                         NotBlocked::OnElim(Elim::App(x.clone())),
@@ -433,7 +433,7 @@ mod tests {
             [Bind::unnamed(Term::meta(0)), Bind::unnamed(Term::meta(0))],
             Term::meta(1).apply(vec![Term::from_dbi(1), Term::from_dbi(1)]),
         )
-        .apply(vec![Term::from_dbi(1)]);
+            .apply(vec![Term::from_dbi(1)]);
         // let ctx_len = term.lam_len() - 1;
         let fvs = term.fvs();
         println!("term = {}", term);
@@ -454,7 +454,7 @@ mod tests {
             [Bind::unnamed(Term::meta(0)), Bind::unnamed(Term::meta(0))],
             Term::meta(2).apply(vec![Term::from_dbi(0)]),
         )
-        .apply(vec![Term::from_dbi(1), Term::from_dbi(1)]);
+            .apply(vec![Term::from_dbi(1), Term::from_dbi(1)]);
         let fvs = term.fvs();
         println!("term = {}", term);
         let simp = env.simplify(term)?;

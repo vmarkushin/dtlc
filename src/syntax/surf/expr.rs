@@ -15,6 +15,8 @@ pub enum Expr {
     Lam(Vec1<Param>, Box<Self>),
     /// `f a b` represented as `App(f, [a, b])`
     App(Box<Self>, Vec1<Self>),
+    /// `{e}`
+    Braced(Box<Expr>),
     Universe(Loc, Universe),
     /// `A -> B -> C` represented as `Pi([A, B], C)`.
     Pi(Vec1<Param>, Box<Self>),
@@ -49,7 +51,7 @@ impl Expr {
         (params, expr)
     }
 
-    pub fn app_many(f: impl Into<Expr>, args: impl IntoIterator<Item = impl Into<Expr>>) -> Expr {
+    pub fn app_many(f: impl Into<Expr>, args: impl IntoIterator<Item=impl Into<Expr>>) -> Expr {
         Expr::App(
             Box::new(f.into()),
             Vec1::try_from_vec(args.into_iter().map(Into::into).collect()).unwrap(),
@@ -58,7 +60,7 @@ impl Expr {
 
     pub fn lam_many(
         term: Expr,
-        params: impl Sized + DoubleEndedIterator<Item = (Ident, Type)>,
+        params: impl Sized + DoubleEndedIterator<Item=(Ident, Type)>,
     ) -> Expr {
         Expr::Lam(
             Vec1::try_from_vec(
@@ -66,13 +68,13 @@ impl Expr {
                     .map(|(ident, ty)| Param::new(ident, ty, Plicitness::Explicit))
                     .collect(),
             )
-            .unwrap(),
+                .unwrap(),
             Box::new(term),
         )
     }
 
     pub fn pi_many(
-        params: impl Sized + DoubleEndedIterator<Item = (Ident, Type)>,
+        params: impl Sized + DoubleEndedIterator<Item=(Ident, Type)>,
         term: Expr,
     ) -> Expr {
         Expr::Pi(
@@ -81,7 +83,7 @@ impl Expr {
                     .map(|(ident, ty)| Param::new(ident, ty, Plicitness::Explicit))
                     .collect(),
             )
-            .unwrap(),
+                .unwrap(),
             Box::new(term),
         )
     }
@@ -140,6 +142,9 @@ impl Display for Expr {
                 write!(f, "(")?;
                 pretty_list(f, es, ", ")?;
                 write!(f, ")")
+            }
+            Self::Braced(e) => {
+                write!(f, "{{{}}}", e)
             }
         }
     }

@@ -36,7 +36,6 @@ macro_rules! typeck {
         $e.enter_def($e.sigma.len(), *$d.cur_meta_id.last().unwrap());
         $e.check(&expr, &ty)?;
         $e.exit_def();
-        $e.meta_ctx.pop();
         $d.cur_meta_id.pop();
     }};
 }

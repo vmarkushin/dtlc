@@ -179,6 +179,7 @@ impl Expr {
             Expr::Tuple(_, _) => {
                 todo!()
             }
+            Expr::Braced(x) => x.subst_abs(subst),
         }
     }
 }
@@ -282,6 +283,7 @@ pub enum Expr {
     Id(Loc, Id),
     Ap(Loc, Tele, Vec<Expr>, Box<Expr>),
     Tuple(Loc, Vec<Expr>),
+    Braced(Box<Self>),
 }
 
 impl Expr {
@@ -350,6 +352,7 @@ impl Expr {
             Ap(loc, ..) => *loc,
             Match(m) => m.loc(),
             Tuple(loc, ..) => *loc,
+            Braced(e) => e.loc(),
         }
     }
 
@@ -503,6 +506,9 @@ impl Display for Expr {
             Var(ident, uid) => write!(f, "{}({})", uid, ident),
             Lam(_loc, bind, body) => write!(f, "λ{bind}. {body}"),
             App(ff, args) => display_application(f, ff, args),
+            Braced(e) => {
+                write!(f, "{{{}}}", e)
+            }
             Pi(_loc, bind, body) => write!(f, "Π{bind}, {body}"),
             Universe(_loc, universe) => write!(f, "{}", universe),
             Fn(ident, _) => write!(f, "{}", ident),

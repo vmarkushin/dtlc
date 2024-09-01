@@ -54,6 +54,7 @@ impl DesugarState {
             .and_then(|gi| self.decls.get(*gi).map(|decl| (decl, *gi)))
     }
 
+    // FIXME: the function is being called in wrong places, because it doesn't count the number of params in scope
     pub fn enter_local_scope(&mut self) {
         self.local.push(Default::default());
         self.local_count.push(Default::default());
@@ -376,6 +377,10 @@ impl DesugarState {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(ExprA::Tuple(loc, es))
             }
+            Expr::Braced(e) => {
+                let e = self.desugar_expr(*e)?;
+                Ok(ExprA::Braced(e.boxed()))
+            }
         }
     }
 
@@ -443,11 +448,11 @@ impl DesugarState {
         debug!(target: "desugar", "Desugaring decl: {}\n{:?}", decl.name(), &decl);
         match decl {
             Decl::Data(Data {
-                sig,
-                mut cons,
-                universe,
-                meta_attrs,
-            }) => {
+                           sig,
+                           mut cons,
+                           universe,
+                           meta_attrs,
+                       }) => {
                 self.decls.reserve(cons.len() + 1);
                 self.ensure_no_local_scopes();
                 self.enter_local_scope();
@@ -482,12 +487,12 @@ impl DesugarState {
                 Ok(data_decl)
             }
             Decl::Fn(Func {
-                name,
-                params,
-                ret_ty,
-                body,
-                meta_attrs,
-            }) => {
+                         name,
+                         params,
+                         ret_ty,
+                         body,
+                         meta_attrs,
+                     }) => {
                 let body_new = params.clone().to_lam(body);
                 let ty_new = if let Some(rt) = ret_ty {
                     params.to_pi_with(rt)
@@ -554,7 +559,7 @@ fn foo (p : Nat) := match p {
                 )
                 .unwrap(),
         )
-        .unwrap();
+            .unwrap();
         assert_eq!(
             state
                 .decls_map
@@ -594,7 +599,7 @@ fn foo (p : Nat) := match p {
                 (
                     "foo".to_owned(),
                     DeclA::Fn(FuncA::new(
-                        Ident::new("foo",),
+                        Ident::new("foo", ),
                         Some(ExprA::Lam(
                             Loc::default(),
                             Bind {
@@ -607,8 +612,8 @@ fn foo (p : Nat) := match p {
                                     },
                                     0
                                 ))
-                                .boxed(),
-                                ident: Ident::new("p",)
+                                    .boxed(),
+                                ident: Ident::new("p", )
                             },
                             Match(abs::Match::new(
                                 vec1![Var(
@@ -650,7 +655,7 @@ fn foo (p : Nat) := match p {
                                                                 },
                                                                 0
                                                             ))
-                                                            .boxed(),
+                                                                .boxed(),
                                                             ident: Ident::new("1")
                                                         },
                                                         Data(
@@ -660,9 +665,9 @@ fn foo (p : Nat) := match p {
                                                             },
                                                             0
                                                         )
-                                                        .boxed()
+                                                            .boxed()
                                                     ))
-                                                    .boxed(),
+                                                        .boxed(),
                                                     ident: Ident::new("f")
                                                 },
                                                 ExprA::App(
@@ -673,7 +678,7 @@ fn foo (p : Nat) := match p {
                                                         },
                                                         1
                                                     )
-                                                    .boxed(),
+                                                        .boxed(),
                                                     Vec1::new(ExprA::Var(
                                                         Ident {
                                                             loc: Loc::default(),
@@ -682,9 +687,9 @@ fn foo (p : Nat) := match p {
                                                         0
                                                     ))
                                                 )
-                                                .boxed()
+                                                    .boxed()
                                             )
-                                            .boxed(),
+                                                .boxed(),
                                             Vec1::new(ExprA::Lam(
                                                 Loc::default(),
                                                 Bind {
@@ -697,7 +702,7 @@ fn foo (p : Nat) := match p {
                                                         },
                                                         0
                                                     ))
-                                                    .boxed(),
+                                                        .boxed(),
                                                     ident: Ident::new("n")
                                                 },
                                                 ExprA::Var(
@@ -707,7 +712,7 @@ fn foo (p : Nat) := match p {
                                                     },
                                                     1
                                                 )
-                                                .boxed()
+                                                    .boxed()
                                             ))
                                         ))
                                     },
@@ -734,17 +739,17 @@ fn foo (p : Nat) := match p {
                                     }
                                 ]
                             ))
-                            .boxed()
+                                .boxed()
                         )),
                         Some(Pi(
                             Loc::new(50, 44),
                             Bind::identified(
                                 Explicit,
                                 0,
-                                Some(Data(Ident::new("Nat",), 0)).boxed(),
-                                Ident::new("p",)
+                                Some(Data(Ident::new("Nat", ), 0)).boxed(),
+                                Ident::new("p", )
                             ),
-                            Meta(Ident::new("hole0",), 0).boxed()
+                            Meta(Ident::new("hole0", ), 0).boxed()
                         )),
                     )),
                 )

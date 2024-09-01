@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use crate::syntax::core::{Tele, Term, TermInfo};
 use crate::syntax::{Ident, Loc, Universe, GI};
 
@@ -104,6 +105,17 @@ pub enum Decl {
     Proj(ProjInfo),
     /// Function definitions.
     Func(FuncInfo),
+}
+
+impl Display for Decl {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Decl::Data(d) => write!(f, "data {}", d.name),
+            Decl::Cons(c) => write!(f, "cons {}", c.name),
+            Decl::Proj(p) => write!(f, "proj {}", p.name),
+            Decl::Func(p) => write!(f, "fn {}", p.name),
+        }
+    }
 }
 
 impl Decl {

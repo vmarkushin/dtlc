@@ -1,4 +1,4 @@
-use crate::check::meta::MetaContext;
+// use crate::check::meta::MetaContext;
 use crate::check::unification::{Context, Param};
 use crate::check::Error;
 use crate::syntax::core::{Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, Name, SubstCtx, SubstWith, Substitution, Term, Twin, Type, Var};
@@ -31,7 +31,6 @@ pub struct TypeCheckState {
     /// Let bindings.
     pub lets: LetList,
     /// Meta variable context, scoped. Always global.
-    pub meta_ctx: Vec<MetaContext<Term>>,
     pub meta_ctx2: Context,
     pub next_uid: Arc<AtomicUsize>,
     // pub next_mi: MI,
@@ -52,13 +51,12 @@ impl Default for TypeCheckState {
             gamma: Default::default(),
             gamma2: Default::default(),
             lets: Default::default(),
-            meta_ctx: Default::default(),
             meta_ctx2: Default::default(),
             next_uid: Arc::new(AtomicUsize::new(1)),
             // next_mi: Default::default(),
             lang_items: Default::default(),
             lang_items_back: Default::default(),
-            type_in_type: Default::default(),
+            type_in_type: true,
         }
     }
 }
@@ -121,8 +119,6 @@ impl TypeCheckState {
 
     pub fn enter_def(&mut self, def: GI, metas_count: usize) {
         self.current_checking_def = Some(def);
-        self.meta_ctx.push(Default::default());
-        self.mut_meta_ctx().expand_with_fresh_meta(metas_count);
     }
 
     pub fn exit_def(&mut self) {
@@ -180,14 +176,12 @@ impl TypeCheckState {
     pub fn reserve_local_variables(&mut self, additional: usize) {
         self.gamma.0.reserve(additional);
         self.sigma.reserve(additional);
-        self.meta_ctx.reserve(additional);
     }
 
     /// Create a new valid but unsolved meta variable,
     /// used for generating fresh metas during elaboration.
     pub fn fresh_meta(&mut self) -> Term {
-        self.mut_meta_ctx()
-            .fresh_meta(|m| Term::meta_with(m, vec![]))
+        Term::meta(self.next_uid())
     }
 
     pub fn fresh_name(&self) -> Name {
@@ -240,16 +234,6 @@ impl TypeCheckState {
 
     pub fn mut_def(&mut self, ix: GI) -> &mut Decl {
         &mut self.sigma[ix]
-    }
-
-    pub fn meta_ctx(&self) -> &MetaContext<Term> {
-        let we_are_here = self.current_checking_def.unwrap();
-        &self.meta_ctx[we_are_here]
-    }
-
-    pub fn mut_meta_ctx(&mut self) -> &mut MetaContext<Term> {
-        let we_are_here = self.current_checking_def.unwrap();
-        &mut self.meta_ctx[we_are_here]
     }
 
     pub fn lang_item(&self, item: LangItem) -> Option<GI> {
