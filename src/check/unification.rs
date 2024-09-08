@@ -2,10 +2,7 @@
 
 use crate::check::{Error as CheckError, Result, TypeCheckState};
 use crate::syntax::core::free_subst::SubstituteFreeVars;
-use crate::syntax::core::{
-    Bind, Binder, BoundFreeVars, Boxed, Closure, Ctx, DeBruijn, Elim, Func, Lambda, Name, Pat,
-    PrimSubst, Subst, SubstWith, Substitution, Tele, Term, Twin, Type, Unbind, ValData, Var,
-};
+use crate::syntax::core::{Bind, Binder, BoundFreeVars, Boxed, Closure, Ctx, DeBruijn, Decl, Elim, Func, Lambda, Name, Pat, PrimSubst, Subst, SubstWith, Substitution, Tele, Term, Twin, Type, Unbind, ValData, Var};
 use crate::syntax::core::{Case, Decl as DataDecl};
 use crate::syntax::desugar::desugar_prog;
 use crate::syntax::parser::Parser;
@@ -553,7 +550,26 @@ impl MetaSubstitution for Term {
                 tt.meta_subst(subst);
                 clauses.meta_subst(subst);
             }
+            Term::Id(id) => {
+                id.meta_subst(subst);
+            }
             t => unimplemented!("meta_subst: {:?}", t),
+        }
+    }
+}
+
+impl<T: MetaSubstitution> MetaSubstitution for Bind<T> {
+    fn meta_subst(&mut self, subst: &MetaSubst) {
+        self.ty.meta_subst(subst)
+    }
+}
+
+impl MetaSubstitution for Tele {
+    fn meta_subst(&mut self, subst: &MetaSubst) {
+        let mut subst1 = subst.clone();
+        for bind in self.iter_mut() {
+            bind.meta_subst(&subst1);
+            subst1.1 += 1;
         }
     }
 }
@@ -590,12 +606,6 @@ impl MetaSubstitution for Bind<Box<Term>> {
 }
 
 impl MetaSubstitution for Bind<Box<Param>> {
-    fn meta_subst(&mut self, subst: &MetaSubst) {
-        self.ty.meta_subst(subst)
-    }
-}
-
-impl MetaSubstitution for Bind<Param> {
     fn meta_subst(&mut self, subst: &MetaSubst) {
         self.ty.meta_subst(subst)
     }
@@ -676,6 +686,34 @@ impl MetaSubstitution for MetaSubst {
     fn meta_subst(&mut self, subst: &MetaSubst) {
         for (_, t) in self.0.iter_mut() {
             t.meta_subst(subst);
+        }
+    }
+}
+
+impl<T: MetaSubstitution> MetaSubstitution for Option<T> {
+    fn meta_subst(&mut self, subst: &MetaSubst) {
+        if let Some(t) = self {
+            t.meta_subst(subst)
+        }
+    }
+}
+
+impl MetaSubstitution for Decl {
+    fn meta_subst(&mut self, subst: &MetaSubst) {
+        match self {
+            Decl::Func(func) => {
+                func.signature.meta_subst(&subst);
+                func.body.meta_subst(&subst);
+            }
+            Decl::Data(data) => {
+                data.signature.meta_subst(&subst);
+                data.params.meta_subst(&subst);
+            }
+            Decl::Cons(cons) => {
+                cons.signature.meta_subst(&subst);
+                cons.params.meta_subst(&subst);
+            }
+            Decl::Proj(_) => {}
         }
     }
 }
@@ -1221,6 +1259,9 @@ impl Occurrence for Term {
             }
             Term::Match(t, tt, cs) => {
                 (t, tt, cs).go(depth, vars, f, in_flexible);
+            }
+            Term::Id(id) => {
+                id.go(depth, vars, f, in_flexible);
             }
             t => panic!("[free] not implemented: {t:?}"),
         }
@@ -1919,6 +1960,31 @@ impl TypeCheckState {
                 }
                 info!(target: "unify", "invert 4");
             }
+        } else if self.generalize_metas {
+            let all_non_vars = es.iter().all(|e| match e {
+                Elim::App(t) => !t.is_var(),
+                _ => true,
+            });
+
+            if !all_non_vars {
+                return Ok(None);
+            }
+
+            let mut binds = vec![];
+            let (mut tele, _) = ty.clone().tele_view();
+            for _ in es.iter() {
+                let bind = tele.pop().expect("invert: tele is empty");
+                binds.push(bind);
+            }
+            info!(target: "unify", "invert: bind {binds:?}, {t:?}");
+            let lam = Term::lams(binds, t.clone());
+            info!(target: "unify", "invert: lam {lam}");
+            let b = self.under_ctx2(Ctx::default(), |tcs| tcs.type_check(ty, &lam))?;
+            if b {
+                info!(target: "unify", "invert 3");
+                return Ok(Some(lam));
+            }
+            info!(target: "unify", "invert 4");
         }
         Ok(None)
     }
@@ -2504,10 +2570,10 @@ impl TypeCheckState {
             // let h = self.equalise_fn(ty, f, g)?;
             // }
             (ty, t, u) => {
-                warn!(target: "unify", "equalise\n\tty: {}\n\tt:  {}\n\tu:  {}\n{}", ty, t, u, std::backtrace::Backtrace::capture());
+                warn!(target: "unify", "equalise\n\tty: {}\n\tt:  {}\n\tu:  {}", ty, t, u);
                 Err(CheckError::Other(format!(
-                    "equalise: terms {} and {} not equal",
-                    t, u
+                    "equalise: terms {} and {} of type {} not equal",
+                    t, u, ty
                 )))
             }
         }
@@ -2974,7 +3040,7 @@ impl TypeCheckState {
                     if ty != ty2 {
                         // if types are different, add a new equation for them
                         // TODO: maybe add more context?
-                        let eq = Equation::new(ty.clone(), Term::universe(0), ty2.clone(), Term::universe(0));
+                        let eq = Equation::new(ty2.clone(), Term::universe(0), ty.clone(), Term::universe(0));
                         info!(target: "additional", "push_l (dup) adding equation {}, mctx = {}", eq, self.meta_ctx2.0);
                         let additional_entry = Entry::Q(Status::Active, Problem::Unify(eq));
                         self.push_l(additional_entry)?;
@@ -3097,6 +3163,13 @@ impl TypeCheckState {
         // let f = self.def()
         // Term::Lam()
         todo!()
+    }
+
+    pub fn lookup_meta_ty(&self, mi: MI) -> Result<&Type> {
+        self.meta_ctx2.0.iter().find_map(|e| match e {
+            Entry::E(mi2, ty, _) if mi == *mi2 => Some(ty),
+            _ => None,
+        }).ok_or_else(|| CheckError::Other(format!("lookup_meta_ty: not found: {}", mi)))
     }
 }
 
@@ -6461,10 +6534,7 @@ mod tests {
         env.trace_tc = true;
         env.indentation_size(2);
 
-        let ty = pct!(p, des, env, "Option _");
-        env.check(&pe!(p, des, "some tt"), &ty)?;
-        // let ty = pct!(p, des, env, "T -> T");
-        // env.check(&pe!(p, des, "lam (y : Option _) => some tt"), &ty)?;
+        typeck!(p, des, env, "some _ tt", "Option _");
         Ok(())
     }
 

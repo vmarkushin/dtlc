@@ -143,7 +143,7 @@ impl Display for LshProblem {
 pub struct LshProblem {
     /// User patterns with constraints. P = {q_vec_i -> rhs_i | i = 1...n}.
     clauses: Vec<Clause>,
-    /// Variables referring to Γ or lets being matched on.
+    /// Variables referring to Γ or `let` expressions being matched on.
     vars: Vec<DBI>,
     /// Core patterns being refined.
     pats: Vec<Pat>,
@@ -163,8 +163,8 @@ impl Display for CaseTree {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             CaseTree::Leaf(t) => write!(f, "{}", t),
-            CaseTree::Case(t, _ty, cases) => {
-                write!(f, "case {} of", t)?;
+            CaseTree::Case(t, ty, cases) => {
+                write!(f, "case {} return {} of", t, ty)?;
                 for (pat, tree) in cases {
                     write!(f, " | {}", pat)?;
                     if let Some(tree) = tree {
@@ -342,8 +342,7 @@ impl LshProblem {
                         match tcs.def(data.def).clone() {
                             Decl::Data(data) => {
                                 if data.conses.is_empty() {
-                                    let x_ty = tcs.lookup(x).ty.clone();
-                                    return Self::split_empty(clause_1, ct, x, x_ty);
+                                    return Self::split_empty(clause_1, ct, x, self.target.clone());
                                 }
                                 self.split_con(tcs, ct, ct_idx, x, data_args, data)
                             }
@@ -394,6 +393,7 @@ impl LshProblem {
             .iter()
             .map(|c| tcs.def(*c).as_cons().clone())
             .collect::<Vec<_>>();
+        let mut ret_ty = None;
         for (cons_ix, cons) in conses.into_iter().enumerate() {
             trace!("");
             trace!("Splitting var {} with {}", ct.term, cons.name);
@@ -521,6 +521,9 @@ impl LshProblem {
             lhs_new.target = target_new;
             lhs_new.pats = pats_new;
             lhs_new.clauses = clauses_new;
+
+            ret_ty = Some(self.target.clone()); // TODO: maybe use cst.ty? And unify
+
             gamma1.extend(gamma2);
             let gamma_new = gamma1;
             let ct = tcs.under_ctx(gamma_new, |tcs| {
@@ -546,8 +549,7 @@ impl LshProblem {
             );
             ct_clauses.push((clause_pat, Some(ct)));
         }
-        let x_ty = tcs.lookup(x).ty.clone();
-        Ok(CaseTree::case(x, x_ty, ct_clauses))
+        Ok(CaseTree::case(x, ret_ty.take().unwrap().clone(), ct_clauses))
     }
 
     fn done(tcs: &mut TypeCheckState, clause_1: &Clause, target: Term) -> Result<CaseTree> {
@@ -576,7 +578,6 @@ impl LshProblem {
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,6 +589,7 @@ mod tests {
     use crate::syntax::pattern::Pat::{Cons as ConsPat, Var};
     use crate::syntax::Plicitness::Explicit;
     use crate::syntax::{Bind, ConHead, Ident, Loc};
+    use crate::syntax::core::Term::Data;
 
     #[test]
     fn test_fail_build_case_tree() -> eyre::Result<()> {
@@ -679,6 +681,7 @@ mod tests {
         }
        "#,
         )?)?;
+        env.trace_tc = true;
         env.check_prog(des.clone())?;
 
         let ct = env
@@ -699,8 +702,12 @@ mod tests {
             }
         }
          */
+
+        let nat_ty = Data(ValData::new(env.def_id_by_name("Nat"), vec![]));
+
         let cte = Term::match_elim(
             0,
+            nat_ty,
             [
                 Case {
                     pattern: ConsPat(
@@ -806,7 +813,7 @@ mod tests {
             .unwrap()
             .tele_view()
             .1;
-        let cte = Term::match_elim(0, []);
+        let cte = Term::match_elim(0, Term::from_dbi(1), []);
         assert_eq!(ct, cte);
 
         Ok(())
@@ -854,6 +861,7 @@ mod tests {
             .1;
         let cte = Term::match_elim(
             0,
+            Term::from_dbi(2),
             [Case {
                 pattern: ConsPat(
                     false,
@@ -881,6 +889,7 @@ mod tests {
             .1;
         let cte = Term::match_elim(
             0,
+            Term::from_dbi(1),
             [Case {
                 pattern: ConsPat(
                     false,
@@ -909,6 +918,7 @@ mod tests {
 
         let cte = Term::match_elim(
             1,
+            Term::from_dbi(2),
             [Case::new(
                 Pat::cons(ConHead::new("mkPair", 4), [2, 1].map(Var).to_vec()),
                 Term::from_dbi(0).apply(vec![Term::from_dbi(2)]),
@@ -955,8 +965,10 @@ mod tests {
             },
             cons_gi: 1,
         };
+        let nat_ty = Data(ValData::new(env.def_id_by_name("Nat"), vec![]));
         let cte = Term::match_elim(
             3,
+            nat_ty.clone(),
             [
                 Case {
                     pattern: ConsPat(false, zero_ch.clone(), vec![]),
@@ -1022,8 +1034,10 @@ mod tests {
             .unwrap()
             .tele_view()
             .1;
+        let nat_ty = Data(ValData::new(env.def_id_by_name("Nat"), vec![]));
         let cte = Term::match_elim(
             2,
+            nat_ty.clone(),
             [
                 Case {
                     pattern: ConsPat(
@@ -1115,8 +1129,10 @@ mod tests {
             .unwrap()
             .tele_view()
             .1;
+        let nat_ty = Data(ValData::new(env.def_id_by_name("Nat"), vec![]));
         let cte = Term::match_elim(
             0,
+            nat_ty.clone(),
             [
                 Case {
                     pattern: ConsPat(
@@ -1179,6 +1195,7 @@ mod tests {
             .1;
         let cte = Term::match_elim(
             1,
+            nat_ty.clone(),
             [
                 Case {
                     pattern: ConsPat(
@@ -1309,8 +1326,10 @@ mod tests {
             .tele_view()
             .1;
         println!("ct = {}", ct);
+        let nat_ty = Data(ValData::new(env.def_id_by_name("Nat"), vec![]));
         let _cte = Term::match_elim(
             0,
+            nat_ty.clone(),
             [
                 Case {
                     pattern: ConsPat(
@@ -1684,8 +1703,10 @@ mod tests {
          | (suc 0) => (sub @1 @0)
         }
          */
+        let nat_ty = Data(ValData::new(0, vec![]));
         let ct = Term::match_elim(
             0,
+            nat_ty.clone(),
             [
                 Case {
                     pattern: ConsPat(
@@ -1747,7 +1768,6 @@ mod tests {
             },
             vec![],
         ));
-        // .lift_by(1);
         let nct = ct.subst(subst);
         println!("{}", nct);
     }
@@ -1796,8 +1816,10 @@ mod tests {
          | (suc 0) => (sub @1 @0)
         }
          */
+        let nat_ty = Data(ValData::new(0, vec![]));
         let ct = Term::match_elim(
             0,
+            nat_ty.clone(),
             [
                 Case {
                     pattern: ConsPat(
@@ -1894,8 +1916,10 @@ mod tests {
         let pat_nil = Pat::cons(con_nil.clone(), Vec::new());
         let con_pair = ConHead::new("pair", 5);
         let pat_pair = |p1, p2| Pat::cons(con_pair.clone(), vec![Var(p1), Var(p2)]);
+        let nil_pair_ty = Data(ValData::new(env.def_id_by_name("NilPair"), vec![]));
         let ct = Term::match_elim(
             0,
+            nil_pair_ty.clone(),
             [
                 Case::new(
                     pat_nil.clone(),
@@ -1910,6 +1934,7 @@ mod tests {
 
         let nct = Term::match_elim(
             3,
+            nil_pair_ty.clone(),
             [
                 Case::new(
                     pat_nil.clone(),
@@ -1966,6 +1991,7 @@ mod tests {
          */
         let ct = Term::match_elim(
             0,
+            nil_pair_ty.clone(),
             [
                 Case::new(
                     pat_nil.clone(),
@@ -1979,6 +2005,7 @@ mod tests {
         );
         let nct = Term::match_elim(
             3,
+            nil_pair_ty.clone(),
             [
                 Case::new(
                     pat_nil.clone(),
@@ -2018,6 +2045,7 @@ mod tests {
         let pair_3_4 = Term::cons(con_pair.clone(), vec![Term::from_dbi(3), Term::from_dbi(4)]);
         let nct = Term::match_case(
             pair_3_4.clone(),
+            nil_pair_ty.clone(),
             [
                 Case::new(
                     pat_nil.clone(),
@@ -2038,6 +2066,7 @@ mod tests {
 
         let nct = Term::match_case(
             pair_3_4.clone(),
+            nil_pair_ty.clone(),
             [
                 Case::new(
                     pat_nil.clone(),
@@ -2075,6 +2104,7 @@ mod tests {
         let nil_term = pat_nil.clone().into_term();
         let nct = Term::match_case(
             Term::from_dbi(1),
+            nil_pair_ty.clone(),
             [
                 Case::new(
                     pat_nil.clone(),
@@ -2123,6 +2153,7 @@ mod tests {
 
         let nct = Term::match_case(
             pair_3_4.clone(),
+            nil_pair_ty.clone(),
             [
                 Case::new(
                     pat_nil.clone(),
@@ -2191,8 +2222,10 @@ mod tests {
         let pat_nil = Pat::cons(ConHead::new("nil", 4), Vec::new());
         let con_pair = ConHead::new("pair", 5);
         let pat_pair = |p1, p2| Pat::cons(con_pair.clone(), vec![Var(p1), Var(p2)]);
+        let nil_pair_ty = Data(ValData::new(env.def_id_by_name("NilPair"), vec![]));
         let ct = Term::match_elim(
             1,
+            nil_pair_ty.clone(),
             [
                 Case::new(
                     pat_nil.clone(),
@@ -2206,6 +2239,7 @@ mod tests {
         );
         let nct = Term::match_elim(
             0,
+            nil_pair_ty.clone(),
             [
                 Case::new(
                     pat_nil.clone(),
@@ -2226,6 +2260,7 @@ mod tests {
 
         let nct = Term::match_elim(
             4,
+            nil_pair_ty.clone(),
             [
                 Case::new(
                     pat_nil.clone(),
@@ -2247,6 +2282,7 @@ mod tests {
         let pair_3_4 = Term::cons(con_pair.clone(), vec![Term::from_dbi(3), Term::from_dbi(4)]);
         let nct = Term::match_case(
             Term::from_dbi(0),
+            nil_pair_ty.clone(),
             [
                 Case::new(
                     pat_nil.clone(),
@@ -2283,6 +2319,7 @@ mod tests {
 
         let nct = Term::match_case(
             Term::from_dbi(4),
+            nil_pair_ty.clone(),
             [
                 Case::new(
                     pat_nil.clone(),
@@ -2331,6 +2368,7 @@ mod tests {
 
         let nct = Term::match_case(
             pair_3_4.clone(),
+            nil_pair_ty.clone(),
             [
                 Case::new(
                     pat_nil.clone(),
@@ -2359,6 +2397,7 @@ mod tests {
 
         let nct = Term::match_case(
             pair_3_4.clone(),
+            nil_pair_ty.clone(),
             [
                 Case::new(
                     pat_nil.clone(),
@@ -2421,8 +2460,10 @@ mod tests {
         let pat_z = Cons(false, con_z.clone(), vec![]);
         let con_s = ConHead::new(Ident::new("S"), 1);
         let pat_s = |x: DBI| Cons(false, con_s.clone(), vec![Var(x)]);
+        let nat_ty = Data(ValData::new(2, vec![]));
         let ct_1 = Case(
             Term::from_dbi(1),
+            nat_ty.clone(),
             vec![(
                 // Γ = (n : Nat)
                 pat_z.clone(),
@@ -2432,12 +2473,14 @@ mod tests {
         // Γ = (m : Nat) (n : Nat)
         let ct_2 = Case(
             Term::from_dbi(1),
+            nat_ty.clone(),
             vec![
                 (
                     // Γ = (n : Nat)
                     pat_z.clone(),
                     Some(Case(
                         Term::from_dbi(0),
+                        nat_ty.clone(),
                         vec![(
                             // Γ = ε
                             pat_z.clone(),
@@ -2450,6 +2493,7 @@ mod tests {
                     pat_s(0),
                     Some(Case(
                         Term::from_dbi(1),
+                        nat_ty.clone(),
                         vec![(
                             // Γ = (p : Nat)
                             pat_z.clone(),
@@ -2462,11 +2506,13 @@ mod tests {
         // Γ = (m : Nat) (n : Nat)
         let ct_3 = Case(
             Term::from_dbi(1),
+            nat_ty.clone(),
             vec![(
                 // Γ = (n : Nat) (p : Nat)
                 pat_s(0),
                 Some(Case(
                     Term::from_dbi(1),
+                    nat_ty.clone(),
                     vec![(
                         // Γ = (p : Nat) (q : Nat)
                         pat_s(0),
@@ -2489,6 +2535,7 @@ mod tests {
 
         let ct_exp = Case(
             Term::from_dbi(1),
+            nat_ty.clone(),
             vec![
                 (
                     // Γ = (n : Nat)
@@ -2500,6 +2547,7 @@ mod tests {
                     pat_s(0),
                     Some(Case(
                         Term::from_dbi(1),
+                        nat_ty.clone(),
                         vec![
                             (
                                 // Γ = (p : Nat)
@@ -2532,4 +2580,3 @@ mod tests {
         assert_eq!(ct, ct_exp);
     }
 }
-*/

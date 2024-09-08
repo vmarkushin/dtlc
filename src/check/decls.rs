@@ -11,6 +11,7 @@ use crate::syntax::core::{
 use crate::syntax::desugar::DesugarState;
 use crate::syntax::{LangItem, Universe, GI};
 use itertools::Either::*;
+use crate::check::norm::Normalize;
 use crate::check::unification::MetaSubstitution;
 
 impl TypeCheckState {
@@ -90,19 +91,24 @@ impl TypeCheckState {
             }
             self.tc_reset_depth();
             debug!("Checking decl {}", decl.ident());
-            match decl {
+            let new_defs = match decl {
                 ADecl::Data(info) => {
-                    let cs = (info.conses.iter())
+                    let cs: Vec<_> = info.conses.iter()
                         .map(|j| match take(&mut decls, *j - curr_decl_len) {
                             ADecl::Cons(i) => i,
                             _ => unreachable!(),
                         })
                         .collect();
-                    // TODO: Inline meta??
+
+                    let cs_len = cs.len();
                     self.check_data(info, cs)?;
+
+                    let data_gi = self.sigma.len() - cs_len - 1;
+                    data_gi..cs_len + data_gi
                 }
                 ADecl::Cons(_) => {
                     // Cons is checked in the Data case above.
+                    0..0
                 }
                 ADecl::Fn(f) => {
                     let signature = self.check(
@@ -118,20 +124,24 @@ impl TypeCheckState {
                         body: None,
                     };
                     self.sigma.push(Decl::Func(partial_func));
-                    let mut body = self.check_lam(f.expr.unwrap(), signature.clone())?;
-
-                    self.run_unification()?;
-                    let solutions = self.drain_solved_metas()?;
-
-                    signature.meta_subst(&solutions);
-                    body.meta_subst(&solutions);
-                    signature = self.normalize(signature)?;
-                    body = self.normalize(body)?;
+                    let body = self.check_lam(f.expr.unwrap(), signature.clone())?;
 
                     let func = self.sigma.last_mut().unwrap().as_func_mut();
 
                     func.signature = signature;
                     func.body = Some(body);
+                    self.sigma.len() - 1..self.sigma.len()
+                }
+            };
+
+            if !new_defs.is_empty() {
+                self.run_unification()?;
+                let solutions = self.drain_solved_metas()?;
+                for gi in new_defs {
+                    let mut def = self.def(gi).clone();
+                    def.meta_subst(&solutions);
+                    def.normalize(self)?;
+                    self.sigma[gi] = def;
                 }
             }
 
@@ -205,6 +215,7 @@ impl TypeCheckState {
 
             self.sigma.push(Decl::Cons(cons));
         }
+        // debug_assert!(self.gamma.is_empty()); TODO
         self.gamma.clear();
         Ok(())
     }

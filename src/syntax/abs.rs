@@ -1,5 +1,5 @@
 use crate::syntax;
-use crate::syntax::core::{display_application, Boxed};
+use crate::syntax::core::{display_application, pretty_list, Boxed};
 use crate::syntax::surf::Literal;
 use crate::syntax::{pattern, Ident, Loc, Plicitness, Universe, GI, MI, UID};
 use itertools::Itertools;
@@ -298,6 +298,14 @@ impl Expr {
 pub struct AppView {
     pub fun: Expr,
     pub args: Vec<Expr>,
+}
+
+impl Display for AppView {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ", self.fun)?;
+        pretty_list(f, &self.args, " ")?;
+        Ok(())
+    }
 }
 
 impl AppView {

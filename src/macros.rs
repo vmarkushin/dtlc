@@ -10,8 +10,14 @@ macro_rules! pe {
 #[macro_export]
 macro_rules! pct {
     ($p:ident, $d:ident, $e:ident, $s:expr) => {{
+        use crate::check::unification::MetaSubstitution;
+        use crate::check::norm::Normalize;
         let term = $e.infer(&$crate::pe!($p, $d, $s))?.0.ast;
-        let val = $e.simplify(term)?;
+        let mut val = $e.simplify(term)?;
+        $e.run_unification()?;
+        let solutions = $e.drain_solved_metas()?;
+        val.meta_subst(&solutions);
+        val.normalize(&mut $e)?;
         val
     }};
 }
@@ -30,7 +36,8 @@ macro_rules! peit {
 #[macro_export]
 macro_rules! typeck {
     ($p:ident, $d:ident, $e:ident, $expr:expr, $ty:expr) => {{
-        let ty = pct!($p, $d, $e, $ty);
+        let term = $e.infer(&$crate::pe!($p, $d, $ty))?.0.ast;
+        let ty = $e.simplify(term)?;
         $d.cur_meta_id.push(Default::default());
         let expr = pe!($p, $d, $expr);
         $e.enter_def($e.sigma.len(), *$d.cur_meta_id.last().unwrap());

@@ -37,7 +37,22 @@ pub struct TypeCheckState {
     pub lang_items: HashMap<LangItem, GI>,
     pub lang_items_back: HashMap<GI, LangItem>,
     // pub cons_to_data_gi: HashMap<GI, GI>,
+    /// Don't check universe levels.
     pub type_in_type: bool,
+    /// If this flag is enabled, the most general solution will be generated for meta variables,
+    /// where more than 1 solution is possible (and if the general solution is possible).
+    ///
+    /// For example, if the flag is enabled, in the code
+    /// ```dtl
+    ///     data Sigma (A : Type) (B : A -> Type) : Type1
+    ///         | mkSigma (x : A) (y : B x)
+    ///
+    ///     fn main = mkSigma {_} {?m} zero true
+    /// ```
+    ///
+    /// the solution for `?m` will be `?m := lam _ => Bool`, although, multiple solutions are possible here,
+    /// because we can match on the argument, returning different types.
+    pub generalize_metas: bool,
 }
 
 impl Default for TypeCheckState {
@@ -57,6 +72,7 @@ impl Default for TypeCheckState {
             lang_items: Default::default(),
             lang_items_back: Default::default(),
             type_in_type: true,
+            generalize_metas: true,
         }
     }
 }
@@ -194,6 +210,23 @@ impl TypeCheckState {
 
     pub fn def(&self, ix: GI) -> &Decl {
         &self.sigma[ix]
+    }
+
+    pub fn def_mut(&mut self, ix: GI) -> &mut Decl {
+        &mut self.sigma[ix]
+    }
+
+    pub fn def_id_by_name(&self, name: &str) -> usize {
+        self.sigma
+            .iter()
+            .enumerate()
+            .find(|(i, d)| d.ident().text == name)
+            .map(|(i, _)| i)
+            .unwrap()
+    }
+
+    pub fn def_by_name(&self, name: &str) -> &Decl {
+        &self.sigma[self.def_id_by_name(name)]
     }
 
     pub fn cons_to_data_gi(&self, ix: GI) -> GI {

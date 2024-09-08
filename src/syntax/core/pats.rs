@@ -242,13 +242,13 @@ mod tests {
         let con_head = ConHead::new("cons", 0);
         let term = Term::cons(con_head.clone(), [2, 0].map(Term::from_dbi).to_vec());
         let mut tcs = TypeCheckState::default();
-        let fresh_uid = tcs.fresh_uid();
+        let fresh_uid = tcs.next_fresh_uid();
         let term_new = term.clone().pop_out_non_var(&mut tcs, 0, 0);
         assert_eq!(
             term_new,
             Term::cons(
                 con_head,
-                vec![Term::from_dbi(1), Term::Var(Var::free(0), vec![])]
+                vec![Term::from_dbi(1), Term::Var(Var::free(1), vec![])]
             )
         );
         assert_eq!(

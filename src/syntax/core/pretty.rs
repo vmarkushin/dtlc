@@ -56,8 +56,8 @@ impl Display for Term {
                 write!(f, "({})", lam)?;
                 display_application(f, &"".to_owned(), args)
             }
-            Match(term, _tt, cases) => {
-                writeln!(f, "match {} {{", term)?;
+            Match(term, tt, cases) => {
+                writeln!(f, "match {} returning {} {{", term, tt)?;
                 for Case { pattern, body } in cases {
                     writeln!(f, " | {} => {}", pattern, body)?;
                 }
@@ -175,7 +175,7 @@ pub fn pretty_list(
     } else {
         write!(f, "{}", a[0])?;
         for x in &a[1..] {
-            write!(f, "{}{}", x, delim)?;
+            write!(f, "{}{}", delim, x)?;
         }
         Ok(())
     }

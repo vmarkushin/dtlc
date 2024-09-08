@@ -2,13 +2,59 @@ use crate::check::block::{Blocked, NotBlocked};
 use crate::check::state::TypeCheckState;
 use crate::check::unification::{Equation, Param, Problem};
 use crate::check::{Error, Result};
-use crate::syntax::core::{
-    build_subst, Boxed, Case, Closure, Decl, Elim, Func, Lambda, Simpl, SubstWith, Substitution,
-    Term,
-};
+use crate::syntax::core::{build_subst, Boxed, Case, Closure, Decl, Elim, Func, Lambda, Simpl, SubstWith, Substitution, Tele, Term};
 use crate::syntax::{ConHead, Ident, Loc, GI};
 use std::collections::HashMap;
 use std::rc::Rc;
+
+pub trait Normalize {
+    fn normalize(&mut self, env: &mut TypeCheckState) -> Result<()>;
+}
+
+impl<T: Normalize> Normalize for Option<T> {
+    fn normalize(&mut self, env: &mut TypeCheckState) -> Result<()> {
+        if let Some(t) = self {
+            t.normalize(env)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Normalize for Term {
+    fn normalize(&mut self, env: &mut TypeCheckState) -> Result<()> {
+        *self = env.normalize(self.clone())?;
+        Ok(())
+    }
+}
+
+impl Normalize for Tele {
+    fn normalize(&mut self, env: &mut TypeCheckState) -> Result<()> {
+        *self = self.clone().into_iter().map(|b| b.try_map_term(|t| env.normalize(t))).collect::<Result<Tele>>()?;
+        Ok(())
+    }
+}
+
+impl Normalize for Decl {
+    fn normalize(&mut self, env: &mut TypeCheckState) -> Result<()> {
+        match self {
+            Decl::Data(data) => {
+                data.signature.normalize(env)?;
+                data.params.normalize(env)?;
+            }
+            Decl::Cons(cons) => {
+                cons.signature.normalize(env)?;
+                cons.params.normalize(env)?;
+            }
+            Decl::Func(func) => {
+                func.signature.normalize(env)?;
+                func.body.normalize(env)?;
+            }
+            Decl::Proj(_) => {}
+        }
+        Ok(())
+    }
+}
 
 fn elims_to_terms(elims: Vec<Elim>) -> Result<Vec<Term>> {
     elims

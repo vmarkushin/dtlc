@@ -328,7 +328,7 @@ mod tests {
             &mut helper.parser,
             &mut helper.des,
             &mut helper.env,
-            "data Nat : Type | O Type1",
+            "data Nat : Type | zero | succ zero",
         )
             .is_err());
         assert!(run_repl(

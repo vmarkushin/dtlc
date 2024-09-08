@@ -334,6 +334,10 @@ impl Term {
     pub(crate) fn bound(p0: DBI, p1: Twin) -> Term {
         Term::Var(Var::V(Name::Bound(p0), p1), Vec::new())
     }
+
+    pub fn is_var(&self) -> bool {
+        matches!(self, Term::Var(..))
+    }
 }
 
 impl From<Var> for Term {
@@ -810,6 +814,15 @@ pub enum Elim {
     Proj(String),
 }
 
+impl Elim {
+    pub(crate) fn as_app(&self) -> &Term {
+        match self {
+            Elim::App(t) => t,
+            _ => panic!("Expected application, got {:?}", self),
+        }
+    }
+}
+
 /// A closure with open terms.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Closure {
@@ -1048,7 +1061,7 @@ mod tests {
             bound_term,
             Term::lams(
                 [
-                    Bind::explicit(0, Term::meta(1), Ident::new("_")),
+                    Bind::explicit(2, Term::meta(1), Ident::new("_")),
                     Bind::explicit(1, Term::meta(0), Ident::new("_")),
                 ],
                 Term::meta(2).apply(vec![Term::from_dbi(1), Term::from_dbi(0)]),

@@ -14,7 +14,7 @@ mod case;
 mod decls;
 mod id;
 mod infer;
-mod norm;
+pub mod norm;
 mod state;
 pub mod unification;
 mod unify;

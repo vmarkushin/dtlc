@@ -77,55 +77,10 @@ impl TypeCheckState {
                 self.unify_depth_dec(id_a.tele.len());
                 res
             }
-            (t, u) if matches!(t, Term::Var(Var::Meta(_), ..)) | matches!(u, Term::Var(Var::Meta(_), ..)) => {
-                match (t, u) {
-                    (t, Term::Var(Var::Meta(mi), es)) | (Term::Var(Var::Meta(mi), es), t) => {
-                        let mut ctx = self.context().clone();
-
-                        let ty_ty = Term::universe(0); // TODO: self.type_of_decl(against);
-                        let mut t = t.clone();
-
-                        let applied_meta = if es.is_empty() {
-                            Term::meta(*mi).apply((0..ctx.len()).rev().map(Term::from_dbi).collect())
-                        } else {
-                            let mut es = es.clone();
-                            let dbi_iter = es.iter().map(|e| e.clone().into_app().dbi_view().unwrap());
-                            // if the spine vars are non-linear,an equation won't be added to the context, because it can't be solved using the method being used
-                            let is_linear = dbi_iter.clone().collect::<HashSet<_>>().len() == es.len();
-                            if !is_linear {
-                                debug!("Subtyping with applied metas with non-linear spine: ?{} {} in {ctx}", mi, pretty(&es, self));
-                                return Ok(());
-                            }
-
-                            if es.len() != ctx.len() {
-                                debug!("Subtyping with applied metas with different spine: ?{} {} in {ctx}", mi, pretty(&es, self));
-                                // assuming the meta is only applied to vars (?m v1 v2 ... vn) (TODO: add a check for that):
-                                // this value represents number of binders that are out of the context for the meta, so we need to prune them before creating an equation
-                                let num_out_binders = dbi_iter.min().unwrap();
-                                ctx.popn(num_out_binders);
-                                let strengthen = Substitution::strengthen(num_out_binders);
-                                es = es.subst(strengthen.clone());
-                                t = t.subst(strengthen);
-                            }
-                            Term::meta_with(*mi, es.clone())
-                        };
-
-                        let meta_ty = Term::pis(ctx.clone(), ty_ty.clone());
-                        self.push_l(Entry::E(*mi, meta_ty, MetaDecl::Hole))?;
-
-                        let problem = Problem::Unify(Equation {
-                            tm1: applied_meta,
-                            ty1: ty_ty.clone(),
-                            tm2: t.clone(),
-                            ty2: ty_ty.clone(),
-                        });
-                        self.push_l(Entry::Q(Status::Active, Problem::alls(ctx.0.clone().into_iter().map(|b| b.map_term(Param::P)).collect(), problem)))?;
-                        Ok(())
-                    }
-                    _ => {
-                        return Err(Error::Other("Subtyping with metas is not implemented".to_string()));
-                    }
-                }
+            (e, t) if !e.is_whnf() || !t.is_whnf() => {
+                let e_simp = self.simplify(e.clone())?;
+                let t_simp = self.simplify(t.clone())?;
+                self.subtype(&e_simp, &t_simp)
             }
             (e, t) => Unify::unify(self, e, t),
         }
@@ -363,7 +318,6 @@ impl TypeCheckState {
     fn unify_val(&mut self, left: &Term, right: &Term) -> Result<()> {
         debug!("{}Unify val {} = {}", self.tc_depth_ws(), left, right);
         use crate::syntax::core::Var::Meta;
-        // use crate::syntax::Var as V;
         use Term::*;
         match (left, right) {
             (Universe(sub_l), Universe(sup_l)) if self.type_in_type || sub_l == sup_l => Ok(()),
@@ -379,23 +333,88 @@ impl TypeCheckState {
             (Cons(c0, a), Cons(c1, b)) if c0.cons_gi == c1.cons_gi => {
                 Unify::unify(self, a.as_slice(), b.as_slice())
             }
-            (Var(Meta(i), a), Var(Meta(j), b)) => {
-                if i == j {
-                    Unify::unify(self, a.as_slice(), b.as_slice())
-                } else if a.is_empty() {
-                    self.unify_meta_with(right, *i)
-                } else if b.is_empty() {
-                    self.unify_meta_with(left, *j)
-                } else {
-                    unimplemented!()
+            (t, u) if matches!(t, Var(Meta(_), ..)) | matches!(u, Var(Meta(_), ..)) => {
+                match (t, u) {
+                    (t, Var(Meta(mi), es)) | (Var(Meta(mi), es), t) => {
+                        let mut ctx = self.context().clone();
+
+                        let t_ty = Term::universe(0); // TODO: self.type_of_decl(against);
+                        let mut m_ty = Term::universe(0); // TODO: self.type_of_decl(against);
+
+                        let mut t = t.clone();
+
+                        let applied_meta = if es.is_empty() {
+                            Term::meta(*mi).apply((0..ctx.len()).rev().map(Term::from_dbi).collect())
+                        } else {
+                            let mut es = es.clone();
+                            debug!("Subtyping with applied meta: ?{} {} in {ctx}", mi, pretty(&es, self));
+                            let is_vars_spine = es.iter().filter(|e| e.is_app()).all(|e| e.clone().into_app().dbi_view().is_some());
+                            if is_vars_spine {
+                                let dbi_iter = es.iter().map(|e| e.clone().into_app().dbi_view().unwrap());
+                                // if the spine vars are non-linear,an equation won't be added to the context, because it can't be solved using the method being used
+                                let is_linear = dbi_iter.clone().collect::<HashSet<_>>().len() == es.len();
+                                if !is_linear {
+                                    debug!("Subtyping with applied metas with non-linear spine: ?{} {} in {ctx}", mi, pretty(&es, self));
+                                    return Ok(());
+                                }
+
+                                if es.len() != ctx.len() {
+                                    debug!("Subtyping with applied metas with different spine: ?{} {} in {ctx}", mi, pretty(&es, self));
+                                    // assuming the meta is only applied to vars (?m v1 v2 ... vn) (TODO: add a check for that):
+                                    // then `num_out_binders` represents number of binders that are out of the context for the meta, so we need to prune them before creating an equation
+                                    let num_out_binders = dbi_iter.min().unwrap();
+                                    ctx.popn(num_out_binders);
+                                    let strengthen = Substitution::strengthen(num_out_binders);
+                                    es = es.subst(strengthen.clone());
+                                    t = t.subst(strengthen);
+                                }
+                                Term::meta_with(*mi, es.clone())
+                            } else {
+                                // we have a meta of form ?m t1 t2 ... tn, where some of the ti are not vars
+                                // TODO: add more context to the meta?
+
+                                let tys = es.iter().map(|e| self.type_of(&e.as_app())).collect::<Result<Vec<_>>>()?;
+                                m_ty = Term::pis(tys.into_iter().map(Bind::unnamed), m_ty.clone());
+
+                                Term::meta_with(*mi, es.clone())
+                            }
+                        };
+
+                        let meta_ty = Term::pis(ctx.clone(), m_ty.clone());
+                        self.push_l(Entry::E(*mi, meta_ty, MetaDecl::Hole))?;
+
+                        let problem = Problem::Unify(Equation {
+                            tm1: applied_meta,
+                            ty1: t_ty.clone(), // TODO: maybe different type for meta?
+                            tm2: t.clone(),
+                            ty2: t_ty.clone(),
+                        });
+                        self.push_l(Entry::Q(Status::Active, Problem::alls(ctx.0.clone().into_iter().map(|b| b.map_term(Param::P)).collect(), problem)))?;
+                        Ok(())
+                    }
+                    _ => {
+                        return Err(Error::Other("Subtyping with metas is not implemented".to_string()));
+                    }
                 }
             }
-            (Var(Meta(i), a), b) | (b, Var(Meta(i), a)) if a.is_empty() => {
-                self.unify_meta_with(b, *i)
-            }
-            (Var(Meta(_), a), _) | (_, Var(Meta(_), a)) if !a.is_empty() => {
-                // FIXME: figure out how to handle this case
-                Ok(())
+
+            (Var(Meta(i), a), Var(Meta(j), b)) if a.is_empty() && b.is_empty() => {
+                if i == j {
+                    // TODO: this is probably wrong, because the args need to be applied
+                    Unify::unify(self, a.as_slice(), b.as_slice())
+                } else {
+                    self.push_l(Entry::Q(Status::Active, Problem::Unify(
+                        Equation {
+                            tm1: Term::meta(*i),
+                            ty1: self.lookup_meta_ty(*i)?.clone(),
+                            tm2: Term::meta(*j),
+                            ty2: self.lookup_meta_ty(*j)?.clone(),
+                        }
+                    )))?;
+
+                    // TODO: this is probably wrong, because the args need to be applied
+                    Unify::unify(self, a.as_slice(), b.as_slice())
+                }
             }
             (Var(i, a), Var(j, b)) if i == j => Unify::unify(self, a.as_slice(), b.as_slice()),
             (Id(left), Id(right)) => {

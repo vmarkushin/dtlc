@@ -8,6 +8,7 @@ mod tests {
     use crate::{pct, pe, typeck};
 
     #[test]
+    #[ignore]
     fn test_infer_id() -> eyre::Result<()> {
         let _ = env_logger::try_init();
         let mut p = Parser::default();

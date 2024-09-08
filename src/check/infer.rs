@@ -3,7 +3,7 @@ use crate::check::{Clause, Error, LshProblem, Result};
 use crate::check::unification::{Entry, Equation, MetaDecl, Param, Problem, Status};
 use crate::ensure;
 use crate::syntax::abs::{AppView, Expr, Match};
-use crate::syntax::core::{self, Boxed, Closure, Ctx, DeBruijn, Name, SubstCtx, Tele, Type};
+use crate::syntax::core::{self, pretty, pretty_list, Boxed, Closure, Ctx, DeBruijn, Name, SubstCtx, Tele, Type};
 use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, ValData, Var};
 use crate::syntax::surf::{nat_to_term, Literal};
 use crate::syntax::{abs, ConHead, Ident, LangItem, Loc, Universe, GI};
@@ -161,37 +161,48 @@ impl TypeCheckState {
     pub fn type_of_decl(&self, decl: GI) -> Result<TermInfo> {
         let decl = self.def(decl);
         match decl {
-            Decl::Data(DataInfo {
-                           loc,
-                           params,
-                           universe: level,
-                           ..
-                       }) => Ok(Term::pi_from_tele(params.clone(), Term::universe(*level)).at(*loc)),
+            Decl::Data(data) => Ok(data.signature.clone().at(data.loc())),
             Decl::Cons(cons) => {
                 Ok(cons.signature.clone().at(cons.loc()))
-                // let params = &cons.params;
-                // let data = cons.data;
-                // let data_tele = match self.def(data) {
-                //     Decl::Data(i) => &i.params,
-                //     _ => unreachable!(),
-                // };
-                // let params_len = params.len();
-                // let range = params_len..params_len + data_tele.len();
-                // let tele = data_tele
-                //     .iter()
-                //     .cloned()
-                //     // .map(Bind::into_implicit)
-                //     .chain(params.iter().cloned())
-                //     .collect();
-                // let _ident = self.def(data).def_name().clone();
-                // let elims = range.rev().map(Term::from_dbi).collect();
-                // let ret = Term::data(ValData::new(data, elims));
-                // Ok(Term::pi_from_tele(tele, ret).at(cons.loc()))
             }
             Decl::Proj(_proj) => {
                 unimplemented!()
             }
             Decl::Func(func) => Ok(func.signature.clone().at(func.loc)),
+        }
+    }
+
+    pub fn pi_apply(&mut self, pi: &Term, args: &[Term]) -> Result<Type> {
+        let mut ty = pi.clone();
+        for arg in args {
+            let ty_val = ty;
+            let res: Result<_> = ty_val
+                .into_pi()
+                .map_left(|e| Error::Other(format!("Not a pi type: {}", e)))
+                .into();
+            let (_bind, clos) = res?;
+            // TODO: enable this check in debug build profile?
+            // let param_ty = *param.ty;
+            // let arg = self.check(arg, &param_ty)?;
+            ty = clos.instantiate_with(arg.clone(), self);
+        }
+        Ok(ty)
+    }
+
+    pub fn type_of(&mut self, term: &Term) -> Result<Type> {
+        match term {
+            Term::Universe(Universe(u)) => {
+                Ok(Term::universe(Universe(u + 1)))
+            }
+            Term::Cons(con, es) => {
+                let con_decl = self.def(con.cons_gi).as_cons();
+                let sig = &con_decl.signature.clone();
+                let applied_cons_ty = self.pi_apply(sig, es)?;
+                Ok(applied_cons_ty)
+            }
+            t => {
+                unimplemented!("type_of {t}")
+            }
         }
     }
 
@@ -392,23 +403,6 @@ impl TypeCheckState {
     }
 
     fn check_impl(&mut self, abs: &Expr, against: &Term) -> Result<TermInfo> {
-        if let Some(gi) = abs.get_gi() {
-            if let Some(decl) = self.sigma.get(gi).cloned() {
-                let ty = decl.def_type();
-                let ident = decl.ident();
-                let simplified = ty;
-                let loc = ident.loc;
-                // FIXME: check params
-                let res = match decl {
-                    Decl::Data(_) => Ok(Term::data(ValData::new(gi, vec![])).at(loc)),
-                    Decl::Cons(_) => Ok(Term::cons(ConHead::new(ident, gi), vec![]).at(loc)),
-                    _ => Ok(Term::def(gi, ident, vec![]).at(loc)),
-                };
-                self.subtype(&simplified, against)?;
-                return res;
-            }
-        }
-
         match (abs, against) {
             (Expr::Universe(info, lower), Term::Universe(upper)) => {
                 if self.type_in_type {
@@ -525,7 +519,7 @@ mod tests {
     use crate::syntax::core::ValData;
     use crate::syntax::desugar::desugar_prog;
     use crate::syntax::Loc;
-    use crate::{assert_err, assert_term_eq, pct, pe, typeck};
+    use crate::{assert_err, assert_term_eq, pct, pe, peit, typeck};
 
     #[test]
     fn test_check_basic() -> eyre::Result<()> {
@@ -560,10 +554,14 @@ mod tests {
         env.check(&pe!(p, des, "Type0"), &ty)?;
 
         let ty = pct!(p, des, env, "Type0");
-        assert_err!(
-            env.check(&pe!(p, des, "Type1"), &ty),
-            Error::DifferentUniverse(Loc::new(0, 5), Universe(2), Universe(0))
-        );
+        if env.type_in_type {
+            assert_eq!(ty, Term::universe(Universe(0)));
+        } else {
+            assert_err!(
+                env.check(&pe!(p, des, "Type1"), &ty),
+                Error::DifferentUniverse(Loc::new(0, 5), Universe(2), Universe(0))
+            );
+        }
 
         let ty = pct!(p, des, env, "T");
         assert_err!(
@@ -696,6 +694,8 @@ mod tests {
        "#,
         )?)?;
 
+        env.trace_tc = true;
+
         env.check_prog(des.clone())?;
         env.indentation_size(2);
 
@@ -746,6 +746,7 @@ mod tests {
         let mut p = Parser::default();
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
+        env.trace_tc = true;
         let mut des = desugar_prog(p.parse_prog(
             r#"
         data Nat : Type
@@ -766,6 +767,12 @@ mod tests {
 
         data Sigma (A : Type) (B : A -> Type) : Type1
             | mkSigma (x : A) (y : B x)
+
+        fn sigma_test1 : Sigma Nat (lam z : Nat => match z { | O => Nat | (S n) => Bool }) :=
+            mkSigma _ _ O O
+
+        -- fn sigma_test2 : Sigma Nat (lam z : Nat => match z { | O => Nat | (S n) => Bool }) :=
+        --     mkSigma _ _ (S O) true
        "#,
         )?)?;
         env.check_prog(des.clone())?;
@@ -781,8 +788,13 @@ mod tests {
             des,
             env,
             "mkSigma",
-            "(A : Type)->(B : A -> Type) -> (x : A) -> (y : B x) -> Sigma A B"
+            "(A : Type) -> (B : A -> Type) -> (x : A) -> (y : B x) -> Sigma A B"
         );
+
+        env.trace_tc = true;
+        // let t = pct!(p, des, env, "mkSigma Nat (lam (x : _) => _) O true");
+        // let t = pct!(p, des, env, "mkSigma Nat _ O true");
+        // let t = pct!(p, des, env, "mkSigma _ _ O true");
 
         typeck!(
             p,
@@ -808,7 +820,7 @@ mod tests {
         let mut env = TypeCheckState::default();
         env.indentation_size(2);
         env.trace_tc = true;
-        let mut des = desugar_prog(p.parse_prog_with_std(r#""#, None)?)?;
+        let mut des = desugar_prog(p.parse_prog_with_std("", None)?)?;
         let result: Result<(), Error> = try {
             env.check_prog(des.clone())?;
             env.trace_tc = true;
