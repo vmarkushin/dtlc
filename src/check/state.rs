@@ -72,7 +72,7 @@ impl Default for TypeCheckState {
             lang_items: Default::default(),
             lang_items_back: Default::default(),
             type_in_type: true,
-            generalize_metas: true,
+            generalize_metas: false,
         }
     }
 }

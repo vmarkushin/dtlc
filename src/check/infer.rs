@@ -1,9 +1,10 @@
+use std::ops::Deref;
 use crate::check::state::TypeCheckState;
 use crate::check::{Clause, Error, LshProblem, Result};
 use crate::check::unification::{Entry, Equation, MetaDecl, Param, Problem, Status};
 use crate::ensure;
 use crate::syntax::abs::{AppView, Expr, Match};
-use crate::syntax::core::{self, pretty, pretty_list, Boxed, Closure, Ctx, DeBruijn, Name, SubstCtx, Tele, Type};
+use crate::syntax::core::{self, pretty, pretty_list, Boxed, Closure, Ctx, DeBruijn, Lambda, Name, SubstCtx, Tele, Type};
 use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, ValData, Var};
 use crate::syntax::surf::{nat_to_term, Literal};
 use crate::syntax::{abs, ConHead, Ident, LangItem, Loc, Universe, GI};
@@ -184,7 +185,7 @@ impl TypeCheckState {
             // TODO: enable this check in debug build profile?
             // let param_ty = *param.ty;
             // let arg = self.check(arg, &param_ty)?;
-            ty = clos.instantiate_with(arg.clone(), self);
+            ty = clos.instantiate_with((*arg).clone(), self);
         }
         Ok(ty)
     }
@@ -199,6 +200,32 @@ impl TypeCheckState {
                 let sig = &con_decl.signature.clone();
                 let applied_cons_ty = self.pi_apply(sig, es)?;
                 Ok(applied_cons_ty)
+            }
+            Term::Data(data) => {
+                let data_decl = self.def(data.def).as_data();
+                let sig = &data_decl.signature.clone();
+                let applied_data_ty = self.pi_apply(sig, &data.args)?;
+                Ok(applied_data_ty)
+            }
+            Term::Var(Var::V(name, twin), es) => {
+                let args = es.iter().map(|e| e.clone().into_app()).collect::<Vec<_>>();
+                let pi = self.lookup_var(*name, *twin).map(|b| b.ty.clone())?;
+                self.pi_apply(&pi, &args)
+            }
+            Term::Lam(Lambda(bind, closure)) => {
+                let body_ty = self.type_of(closure.as_inner())?;
+                Ok(Term::pi(bind.clone(), body_ty))
+            }
+            Term::Match(_, ty, _) => Ok(*ty.clone()),
+            Term::Pi(bind, closure) => {
+                let bind_ty = self.type_of(&bind.ty)?;
+                self.gamma.push(bind.clone().map_term(|x| *x));
+                let body_ty = self.type_of(closure.as_inner())?;
+                self.gamma.pop().expect("Bad index");
+                let (Term::Universe(u), Term::Universe(v)) = (&bind_ty, &body_ty) else {
+                    return Err(Error::InvalidPi(bind_ty.boxed(), body_ty.boxed()));
+                };
+                Ok(Term::universe(Universe(u.0.max(v.0))))
             }
             t => {
                 unimplemented!("type_of {t}")
@@ -491,11 +518,16 @@ impl TypeCheckState {
             .iter()
             .map(|c| Clause::new(c.patterns.clone(), c.body.clone()))
             .collect::<Vec<_>>();
+        debug!("{}⊢ Checking tree against: {target}", self.indentation);
+
         let mut lhs = LshProblem::new(vars, clauses, target);
         lhs.init(self)?;
+        debug!("{}⊢ LHS init: {lhs}", self.indentation);
         let case_tree = lhs.check(self)?;
-        debug!("{}⊢ Checked case tree: {}", self.indentation, case_tree);
-        Ok(case_tree.into_term().at(Loc::default()))
+        debug!("{}⊢ Checked case tree: {:?} {case_tree}", self.indentation, case_tree);
+        let term = case_tree.into_term();
+        debug!("{}⊢ Checked case tree': {:?} {term}", self.indentation, term);
+        Ok(term.at(Loc::default()))
     }
 
     pub fn check_fallback(&mut self, expr: Expr, expected_type: &Term) -> Result<TermInfo> {
@@ -775,6 +807,11 @@ mod tests {
         --     mkSigma _ _ (S O) true
        "#,
         )?)?;
+
+        // mkSigma ?2 ?4 O O : Sigma Nat (lam (z : Nat) => match z { | O => Nat | (S n) => Bool })
+        // ?2 == Nat
+        // ?4 == lam (z : Nat) => match z { | O => Nat | (S n) => Bool }
+
         env.check_prog(des.clone())?;
 
         typeck!(p, des, env, "ok", "(T E : Type) -> T -> Result T E");
@@ -803,6 +840,35 @@ mod tests {
             "mkSigma _ _ (S O) false",
             "Sigma Nat (lam (x : Nat) => Bool)"
         );
+
+        /*
+        ?1 : Type0
+        ?2 : ?1
+        ?Active (?1 : Type0) == (Type1 : Type0)
+        ?3 : Type0
+        ?4 : ?3
+        ?Active (?3 : Type0) == ((?2 -> Type1) : Type0)
+        ?Active (?1 : Type0) == (Type0 : Type0)
+        ?Active (?2 : Type0) == (data0 : Type0)
+        ?Active (?3 : Type0) == ((data0 -> Type0) : Type0)
+        ?Active ((?4 O) : Type0) == (data0 : Type0)
+        ?Active (?1 : Type0) == (Type0 : Type0)
+        ?Active (?2 : Type0) == (data0 : Type0)
+        ?Active (?3 : Type0) == (Type0 : Type0)
+        ?Active (?4 : (data0 -> Type1)) == ((\z[-]:data0. match @0 returning Type1 {
+         | O => data0
+         | (S 0) => data3
+        }) : (data0 -> Type1))
+
+    	?1 : Type0 := Type1
+        ?2 : Type1 := data0
+        ?3 : Type0 := (data0 -> Type1)
+        ?4 : (data0 -> Type1) := (\1[t]:data0. match @0 returning Type1 {
+         | O => data0
+         | (S 0) => data3
+        })
+        ?Blocked ((data0 -> Type1) : Type0) == (Type0 : Type0)
+         */
         Ok(())
     }
 

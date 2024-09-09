@@ -338,8 +338,9 @@ impl TypeCheckState {
                     (t, Var(Meta(mi), es)) | (Var(Meta(mi), es), t) => {
                         let mut ctx = self.context().clone();
 
-                        let t_ty = Term::universe(0); // TODO: self.type_of_decl(against);
-                        let mut m_ty = Term::universe(0); // TODO: self.type_of_decl(against);
+                        let t_ty = self.type_of(t)?;
+                        let mut m_ty = Term::universe(0); // self.lookup_meta_ty(*mi).cloned().unwrap_or(Term::universe(0)); // TODO: self.type_of_decl(against);
+                        let mut other = self.lookup_meta_ty(*mi).cloned().unwrap_or(Term::universe(0));
 
                         let mut t = t.clone();
 
@@ -374,14 +375,19 @@ impl TypeCheckState {
                                 // TODO: add more context to the meta?
 
                                 let tys = es.iter().map(|e| self.type_of(&e.as_app())).collect::<Result<Vec<_>>>()?;
-                                m_ty = Term::pis(tys.into_iter().map(Bind::unnamed), m_ty.clone());
+                                m_ty = Term::pis(tys.clone().into_iter().map(Bind::unnamed), m_ty.clone());
+                                other = Term::pis(tys.into_iter().map(Bind::unnamed), other.clone());
 
                                 Term::meta_with(*mi, es.clone())
                             }
                         };
 
                         let meta_ty = Term::pis(ctx.clone(), m_ty.clone());
-                        self.push_l(Entry::E(*mi, meta_ty, MetaDecl::Hole))?;
+                        let other_meta_ty = Term::pis(ctx.clone(), other.clone());
+
+                        let mut other = self.lookup_meta_ty(*mi).cloned().unwrap_or(meta_ty.clone());
+                        info!("ADDING MTY {meta_ty}. BUT COULD {other_meta_ty}");
+                        self.push_l(Entry::E(*mi, other, MetaDecl::Hole))?;
 
                         let problem = Problem::Unify(Equation {
                             tm1: applied_meta,

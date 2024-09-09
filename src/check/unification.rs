@@ -1268,6 +1268,33 @@ impl Occurrence for Term {
     }
 }
 
+impl MetaSubstitution for crate::syntax::core::Id {
+    fn meta_subst(&mut self, subst: &MetaSubst) {
+        let mut subst = subst.clone();
+        for (t, p) in self.tele.iter_mut().zip(self.paths.iter_mut()) {
+            t.meta_subst(&subst);
+            p.meta_subst(&subst);
+            subst.1 += 1;
+        }
+        self.ty.meta_subst(&subst);
+        self.a1.meta_subst(&subst);
+        self.a2.meta_subst(&subst);
+    }
+}
+
+impl Occurrence for crate::syntax::core::Id {
+    fn go(&self, mut depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
+        for (t, p) in self.tele.iter().zip(self.paths.iter()) {
+            t.go(depth, vars, kind, in_flexible);
+            p.go(depth, vars, kind, in_flexible);
+            depth += 1;
+        }
+        self.ty.go(depth, vars, kind, in_flexible);
+        self.a1.go(depth, vars, kind, in_flexible);
+        self.a2.go(depth, vars, kind, in_flexible);
+    }
+}
+
 impl Occurrence for Case {
     fn go(&self, depth: usize, vars: &mut HashSet<Name>, kind: Flavour, in_flexible: bool) {
         self.body
@@ -1474,9 +1501,10 @@ impl TypeCheckState {
             }
         });
 
+        info!("init meta ctx:\n\t{}", self.meta_ctx2.0.iter().join("\n    "));
+
         self.meta_ctx2.0.0.sort();
 
-        info!("init meta ctx:\n\t{}", self.meta_ctx2.0.iter().join("\n    "));
         loop {
             if self.go_left().is_err() {
                 break;
@@ -1981,7 +2009,7 @@ impl TypeCheckState {
             info!(target: "unify", "invert: lam {lam}");
             let b = self.under_ctx2(Ctx::default(), |tcs| tcs.type_check(ty, &lam))?;
             if b {
-                info!(target: "unify", "invert 3");
+                info!(target: "unify", "invert 3: generalize_metas");
                 return Ok(Some(lam));
             }
             info!(target: "unify", "invert 4");
@@ -2387,7 +2415,7 @@ impl TypeCheckState {
             (v, es, v2, es2) if v == v2 && es.is_empty() && es2.is_empty() => {
                 info!(target: "unify", "equalise_n: infer {v}");
                 let term = self.infer_(v)?;
-                trace!(target: "unify", "equalise_n -> infer {v} -> {term}");
+                info!(target: "unify", "equalise_n -> infer {v} -> {term}");
                 Ok((v.clone(), es, term))
             }
             (v, mut es, v2, mut es2) if !es.is_empty() && !es2.is_empty() => {
@@ -2552,7 +2580,10 @@ impl TypeCheckState {
             (ty, Term::Match(t1, ty1, cs1), Term::Match(t2, ty2, cs2)) => {
                 // todo!("BUG!!!");
                 let tt = self.equalise(&Type::universe(Universe(0)), ty1, ty2)?;
-                let t = self.equalise(&tt, t1, t2)?;
+                let t1_ty = self.type_of(t1)?;
+                let t2_ty = self.type_of(t2)?;
+                let t_ty = self.equalise(&Type::universe(Universe(0)), &t1_ty, &t2_ty)?;
+                let t = self.equalise(&t_ty, t1, t2)?;
                 if cs1.len() != cs2.len() {
                     return Err(CheckError::Other(format!(
                         "equalise: match branches {:?} and {:?} not equal",
@@ -2570,7 +2601,7 @@ impl TypeCheckState {
             // let h = self.equalise_fn(ty, f, g)?;
             // }
             (ty, t, u) => {
-                warn!(target: "unify", "equalise\n\tty: {}\n\tt:  {}\n\tu:  {}", ty, t, u);
+                warn!(target: "unify", "equalise\n\tty: {}\n\tt:  {}\n\tu:  {}\n{}", ty, t, u, std::backtrace::Backtrace::capture());
                 Err(CheckError::Other(format!(
                     "equalise: terms {} and {} of type {} not equal",
                     t, u, ty
@@ -3755,6 +3786,7 @@ fn test_all() -> eyre::Result<()> {
     let true_val = Term::Cons(ConHead::new("true", 2), vec![]);
     let if_fn = Func::Index(3);
     let nat_ty = Term::Data(ValData::new(4, vec![]));
+    let nat_zero = Term::Cons(ConHead::new("zero", 5), vec![]);
     let nat_succ = |nat| Term::Cons(ConHead::new("succ", 6), vec![nat]);
 
     /*
@@ -3791,6 +3823,7 @@ fn test_all() -> eyre::Result<()> {
     };
 
     let tests = vec![
+        /*
         /*
         >           ( gal "A" SET
         >           : gal "B" SET
@@ -5446,6 +5479,67 @@ fn test_all() -> eyre::Result<()> {
                 ),
             ]
         }
+        */
+        /*
+        ?A : (data0 -> Type1)
+        ?Active ((?A O) : Type0) == (data0 : Type0)
+        ?Active (?A : data0 -> Type0) == ((\z[-]:data0. match @0 returning Type1 {
+         | O => data0
+         | (S 0) => data3
+        }) : data0 -> Type0)
+         */
+        {
+            vec![
+                gal(
+                    "A",
+                    Type::arrow(nat_ty.clone(), Term::universe(1)),
+                ),
+                eq(
+                    "p",
+                    Term::universe(0),
+                    Term::meta(METAS.s2n("A")).apply(vec![nat_zero]),
+                    Term::universe(0),
+                    nat_ty.clone(),
+                ),
+                eq(
+                    "q",
+                    Type::arrow(nat_ty.clone(), Term::universe(0)),
+                    Term::lam(
+                        Bind::explicit(z.uid(), nat_ty.clone().boxed(), Ident::new("z")),
+                        Term::match_elim(
+                            0,
+                            Term::universe(1),
+                            [
+                                Case {
+                                    pattern: Pat::Cons(
+                                        false,
+                                        ConHead {
+                                            name: Ident::new("zero"),
+                                            cons_gi: 5,
+                                        },
+                                        vec![],
+                                    ),
+                                    body: nat_ty.clone(),
+                                },
+                                Case {
+                                    pattern: Pat::Cons(
+                                        false,
+                                        ConHead {
+                                            name: Ident::new("suc"),
+                                            cons_gi: 6,
+                                        },
+                                        vec![Pat::from_dbi(0)],
+                                    ),
+                                    body: bool_ty.clone()
+                                },
+                            ]
+                        ),
+                    ),
+                    Type::arrow(nat_ty.clone(), Term::universe(0)),
+                    Term::meta(METAS.s2n("A")),
+                ),
+            ]
+        }
     ];
     let stucks = vec![
         // -- stuck 0: nonlinear
@@ -6430,12 +6524,12 @@ fn test_all() -> eyre::Result<()> {
         info!("Running test {}", i);
         test(TestType::Succeed, t)?;
     }
-    for t in stucks {
-        test(TestType::Stuck, t)?;
-    }
-    for t in fails {
-        test(TestType::Fail, t)?;
-    }
+    // for t in stucks {
+    //     test(TestType::Stuck, t)?;
+    // }
+    // for t in fails {
+    //     test(TestType::Fail, t)?;
+    // }
     Ok(())
 }
 

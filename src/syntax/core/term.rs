@@ -614,18 +614,19 @@ impl BoundFreeVars for Term {
                         // trace!(target: "unify", "bound free vars in case: {}", case.body);
                     } else {
                         let min = *case.pattern.vars().last().unwrap();
-                        let vars_new = vars
-                            .clone()
-                            .into_iter()
-                            .map(|(k, v)| {
-                                if k >= min {
-                                    (k, v + len)
-                                } else {
-                                    panic!("wtf")
-                                }
-                            })
-                            .collect();
-                        case.body.bound_free_vars(&vars_new, depth);
+                        let ctx_len = case.pattern.vars().len();
+                        // let vars_new = vars
+                        //     .clone()
+                        //     .into_iter()
+                        //     .map(|(k, v)| {
+                        //         if k >= min {
+                        //             (k, v + len)
+                        //         } else {
+                        //             panic!("wtf")
+                        //         }
+                        //     })
+                        //     .collect();
+                        case.body.bound_free_vars(&vars, depth + ctx_len);
                     }
                 }
             }
@@ -644,17 +645,28 @@ impl BoundFreeVars for Term {
             Term::Cons(_, args) => {
                 args.bound_free_vars(vars, depth);
             }
-            Term::Id(_id) => {
-                todo!("bound_free_vars for id")
+            Term::Id(id) => {
+                let mut depth = depth;
+                for (t, p) in id.tele.iter_mut().zip(id.paths.iter_mut()) {
+                    t.bound_free_vars(vars, depth);
+                    p.bound_free_vars(vars, depth);
+                    depth += 1;
+                }
+                id.ty.bound_free_vars(vars, depth);
+                id.a1.bound_free_vars(vars, depth);
+                id.a2.bound_free_vars(vars, depth);
             }
             Term::Refl(t) => {
                 t.bound_free_vars(vars, depth);
             }
-            Term::Ap(_tele, _ps, _t) => {
-                // tele.bound_free_vars(vars, depth);
-                // ps.bound_free_vars(vars, depth);
-                // t.bound_free_vars(vars, depth);
-                todo!("bound_free_vars for ap")
+            Term::Ap(tele, ps, t) => {
+                let mut depth = depth;
+                for (t, p) in tele.iter_mut().zip(ps.iter_mut()) {
+                    t.bound_free_vars(vars, depth);
+                    p.bound_free_vars(vars, depth);
+                    depth += 1;
+                }
+                t.bound_free_vars(vars, depth);
             }
         }
     }

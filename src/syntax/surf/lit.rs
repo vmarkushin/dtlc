@@ -2,6 +2,7 @@ use crate::syntax::core::Term;
 use crate::syntax::ConHead;
 use std::fmt::{Display, Formatter};
 
+// TODO: replace with bigint
 pub type Nat = usize;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
