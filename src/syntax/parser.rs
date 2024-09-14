@@ -8,6 +8,7 @@ use crate::syntax::{Plicitness, Universe};
 use ariadne::{Color, Fmt, Label, Report, ReportKind, Source};
 use chumsky::prelude::end;
 use chumsky::prelude::*;
+use chumsky::text::newline;
 use chumsky::Parser as _;
 use chumsky::Stream;
 use codespan_reporting::files::SimpleFile;
@@ -31,11 +32,11 @@ macro_rules! Parser {
     ($I:path, $O:path) => { impl chumsky::Parser<$I, $O, Error = Simple<$I, Loc>> };
 }
 
-type BoxedParser<I, O, E> = Box<dyn chumsky::Parser<I, O, Error=E>>;
+type BoxedParser<I, O, E> = Box<dyn chumsky::Parser<I, O, Error = E>>;
 
 #[inline]
 fn box_parser<I: Clone, O, E>(
-    p: impl chumsky::Parser<I, O, Error=E> + 'static,
+    p: impl chumsky::Parser<I, O, Error = E> + 'static,
 ) -> BoxedParser<I, O, E> {
     Box::new(p)
 }
@@ -79,6 +80,7 @@ fn err_to_static<'a>(e: ParseError<'a>) -> ParseError<'static> {
 }
 
 const FORBIDDEN: &str = "(){}, \n\t\r";
+const DEBUG_LEXER: bool = false;
 
 pub struct Parser {
     file: SimpleFile<String, String>,
@@ -89,7 +91,7 @@ pub struct Parser {
 impl Parser {
     fn parse_using<'inp, T: Display + Debug>(
         &self,
-        parser: impl chumsky::Parser<Token<'static>, T, Error=ParseError<'static>>,
+        parser: impl chumsky::Parser<Token<'static>, T, Error = ParseError<'static>>,
         input: &'inp str,
         lexer_ignore_idents: bool,
     ) -> Result<T, ParseError<'inp>> {
@@ -110,7 +112,11 @@ impl Parser {
             .collect::<HashSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let (tokens, les) = lexer(additional_tokens, lexer_ignore_idents).parse_recovery(stream);
+        let (tokens, les) = if DEBUG_LEXER {
+            lexer(additional_tokens, lexer_ignore_idents).parse_recovery_verbose(stream)
+        } else {
+            lexer(additional_tokens, lexer_ignore_idents).parse_recovery(stream)
+        };
         let mut out = None;
         let mut err = None;
         let es = if let Some(tokens) = tokens {
@@ -330,7 +336,7 @@ impl Parser {
                     }
                 }))
         })
-            .debug("expr")
+        .debug("expr")
     }
 
     pub fn decl(&self) -> Parser!(Decl:) {
@@ -364,24 +370,24 @@ impl Parser {
                 meta_attrs,
             })
         })
-            .or(
-                data.map(|((((meta_attrs, name), ty_params), universe), cons)| {
-                    Decl::from(Data {
-                        sig: NamedTele::new(name, ty_params.into()),
-                        universe,
-                        cons,
-                        meta_attrs,
-                    })
-                }),
-            )
-            .recover_with(skip_then_retry_until([
-                Token::Fn,
-                Token::Data,
-                Token::Codata,
-            ]))
+        .or(
+            data.map(|((((meta_attrs, name), ty_params), universe), cons)| {
+                Decl::from(Data {
+                    sig: NamedTele::new(name, ty_params.into()),
+                    universe,
+                    cons,
+                    meta_attrs,
+                })
+            }),
+        )
+        .recover_with(skip_then_retry_until([
+            Token::Fn,
+            Token::Data,
+            Token::Codata,
+        ]))
     }
 
-    pub fn prog(&self) -> impl chumsky::Parser<Token<'static>, Prog, Error=ParseError<'static>> {
+    pub fn prog(&self) -> impl chumsky::Parser<Token<'static>, Prog, Error = ParseError<'static>> {
         self.decl().repeated().map(Prog)
     }
 
@@ -591,7 +597,7 @@ fn prim_expr(expr: &(Parser!(Expr))) -> Parser!(Expr) {
             Token::Underscore, loc => Expr::Hole(loc),
             Token::MetaIdent(..), loc => Expr::Hole(loc),
         }
-            .debug("very prim expr");
+        .debug("very prim expr");
         universe
             .map_with_span(|uni, loc| Expr::Universe(loc, uni))
             .or(literal.map_with_span(|literal, loc| Expr::Lit(loc, literal)))
@@ -602,12 +608,11 @@ fn prim_expr(expr: &(Parser!(Expr))) -> Parser!(Expr) {
                 .delimited_by(just(Token::LParen), just(Token::RParen)))
             .or(expr
                 .clone()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)).map(|e| {
-                e
-            }))
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+                .map(|e| e))
             .or(very_prim_expr)
     }
-        .debug("prim_expr")
+    .debug("prim_expr")
 }
 
 pub fn lexer(
@@ -615,6 +620,7 @@ pub fn lexer(
     refine: bool,
 ) -> Parser!(char, Vec<(Token<'static>, Loc)>) {
     additional_tokens.sort_by(|a, b| b.len().cmp(&a.len()));
+
     let ident = none_of(FORBIDDEN)
         .repeated()
         .at_least(1)
@@ -659,6 +665,7 @@ pub fn lexer(
         .or(just("}").to(Token::RBrace))
         .or(just("[").to(Token::LBracket))
         .or(just("]").to(Token::RBracket))
+        .or(text::digits(10).map(|s| Token::Nat(s)))
         .or(braces);
 
     let token = if additional_tokens.is_empty() {
@@ -687,23 +694,134 @@ pub fn lexer(
     } else {
         box_parser(token)
     };
-    let token = token.or(text::digits(10).map(|s| Token::Nat(s)));
     let token = if refine {
         box_parser(token.or(ident.map(|x| Token::Ident(x))))
     } else {
         box_parser(token)
     };
-    let comment = just("--").then(take_until(just('\n'))).ignored().padded();
-    let block_comment = just("/*")
-        .then(take_until(just("*/")))
-        .then(just("*/"))
+    let span1 = token.map_with_span(|tok, span| (tok, span));
+    commented_parser(span1)
+}
+
+fn commented_parser(
+    inner: impl chumsky::Parser<char, (Token<'static>, Loc), Error = Simple<char, Loc>>,
+) -> Parser!(char, Vec<(Token<'static>, Loc)>) {
+    // Single-line comment
+    let comment = just("--")
+        .then(take_until(newline().or(end())))
+        .padded()
         .ignored()
-        .padded();
-    let whitespace = text::whitespace().at_least(1).ignored();
-    token
-        .map_with_span(|tok, span| (tok, span))
-        .padded_by(whitespace.or(comment).or(block_comment).repeated())
+        .debug("comment");
+
+    // Recursive block comment parser
+    let block_comment = recursive(|block_comment| {
+        just("/*")
+            .ignore_then(
+                none_of("*/")
+                    .or(just('*').then_ignore(none_of('/')))
+                    .or(just('/').then_ignore(none_of('*')))
+                    .or(block_comment.clone().map(|_| ' ')),
+            )
+            .repeated()
+            .then_ignore(just("*/"))
+            .padded()
+            .ignored()
+    })
+    .debug("block_comment");
+
+    // Whitespace
+    let whitespace = text::whitespace().at_least(1).ignored().debug("whitespace");
+
+    // Ignored elements (comments or whitespace)
+    let ignored = choice((comment, block_comment, whitespace)).repeated();
+
+    // Full parser
+    inner
+        .padded_by(ignored.clone())
         .repeated()
+        .collect()
+        .then_ignore(ignored)
+        .then_ignore(end().or_not().to(())) // Make the end optional
+}
+
+#[test]
+fn test_comments_parsing() {
+    fn create_parser() -> impl chumsky::Parser<char, Vec<String>, Error = Simple<char>> {
+        // Single-line comment
+        let comment = just("--")
+            .then(take_until(newline().or(end())))
+            .padded()
+            .ignored()
+            .debug("comment");
+
+        // Recursive block comment parser
+        let block_comment = recursive(|block_comment| {
+            just("/*")
+                .ignore_then(
+                    none_of("*/")
+                        .or(just('*').then_ignore(none_of('/')))
+                        .or(just('/').then_ignore(none_of('*')))
+                        .or(block_comment.clone().map(|_| ' ')),
+                )
+                .repeated()
+                .then_ignore(just("*/"))
+                .padded()
+                .ignored()
+        })
+        .debug("block_comment");
+
+        // Whitespace
+        let whitespace = text::whitespace().at_least(1).ignored().debug("whitespace");
+
+        // Identifier
+        let identifier = text::ident::<_, Simple<char>>().debug("identifier");
+
+        // Ignored elements (comments or whitespace)
+        let ignored = choice((comment, block_comment, whitespace)).repeated();
+
+        // Full parser
+        identifier
+            .padded_by(ignored.clone())
+            .repeated()
+            .collect()
+            .then_ignore(ignored)
+            .then_ignore(end().or_not().to(())) // Make the end optional
+    }
+
+    let parser = create_parser();
+
+    // Example usage
+    let input = "x y -- This is a comment\n z /* This is a \n block comment */ w";
+    match parser.parse(input) {
+        Ok(result) => println!("Parsed identifiers: {:?}", result),
+        Err(e) => println!("Error: {:?}", e),
+    }
+}
+
+#[test]
+fn tstst() {
+    let p2 = create_parser();
+    let parse = |text, expected| {
+        let (x, y) = p2.parse_recovery_verbose(text);
+        println!("{:?}", y);
+        assert_eq!(x, expected);
+    };
+
+    parse("hello", Some(vec!["hello".to_string()]));
+    parse("--hello\n", Some(vec![]));
+    parse("--hello", Some(vec![]));
+    parse("", Some(vec![]));
+    parse("--", Some(vec![]));
+    parse("/* /* sad */ */", Some(vec![]));
+    parse("hello -- asd", Some(vec!["hello".to_string()]));
+    parse(
+        "hello asd -- ",
+        Some(vec!["hello".to_string(), "asd".to_string()]),
+    );
+    parse(
+        "hello asd -- ",
+        Some(vec!["hello".to_string(), "asd".to_string()]),
+    );
 }
 
 fn ident_parser() -> Parser!(Ident) {
@@ -746,8 +864,8 @@ fn literal_parser() -> Parser!(Literal) {
 }
 
 fn params(
-    param_parser: &(impl chumsky::Parser<Token<'static>, Vec<Param>, Error=ParseError<'static>>
-    + Clone),
+    param_parser: &(impl chumsky::Parser<Token<'static>, Vec<Param>, Error = ParseError<'static>>
+          + Clone),
 ) -> Parser!(Vec<Param>) {
     param_parser
         .clone()
@@ -781,19 +899,19 @@ fn param(expr: &Parser!(Expr), prim_expr: &Parser!(Expr)) -> Parser!(Vec<Param>)
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen))
             .map(|(ps, ty)| build_params(ps, ty, Explicit)))
-            .or(params
-                .clone()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace))
-                .map(|(ps, ty)| build_params(ps, ty, Implicit)))
-            .or(prim_expr.clone().map(|e| {
-                let param = Param::from_type(e, Explicit);
-                // debug!(target: "parser", "parsed explicit param: {param}");
-                vec![param]
-            }))
-            .labelled("param_parser");
+        .or(params
+            .clone()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            .map(|(ps, ty)| build_params(ps, ty, Implicit)))
+        .or(prim_expr.clone().map(|e| {
+            let param = Param::from_type(e, Explicit);
+            // debug!(target: "parser", "parsed explicit param: {param}");
+            vec![param]
+        }))
+        .labelled("param_parser");
         paramss
     }
-        .debug("param_parser")
+    .debug("param_parser")
 }
 
 fn forall_params(expr: &Parser!(Expr)) -> Parser!(Vec1<Param>) {
@@ -811,10 +929,10 @@ fn forall_params(expr: &Parser!(Expr)) -> Parser!(Vec1<Param>) {
                         .map(|ident| Param::new(ident, ty.clone(), Explicit))
                         .collect(),
                 )
-                    .unwrap()
+                .unwrap()
             })
     }
-        .debug("forall params")
+    .debug("forall params")
 }
 
 fn case(expr: &Parser!(Expr), pattern: &(Parser!(Pat))) -> Parser!(Case) {
@@ -831,17 +949,17 @@ fn case(expr: &Parser!(Expr), pattern: &(Parser!(Pat))) -> Parser!(Case) {
 }
 
 fn pattern(
-    prim_expr: &(impl chumsky::Parser<Token<'static>, Expr, Error=ParseError<'static>>
-    + Clone
-    + 'static),
+    prim_expr: &(impl chumsky::Parser<Token<'static>, Expr, Error = ParseError<'static>>
+          + Clone
+          + 'static),
 ) -> Parser!(Pat: Clone + 'static) {
     fn pat_rest(
-        prim_expr: &(impl chumsky::Parser<Token<'static>, Expr, Error=ParseError<'static>>
-        + Clone
-        + 'static),
-        rec_pattern: &(impl chumsky::Parser<Token<'static>, Pat, Error=ParseError<'static>>
-        + Clone
-        + 'static),
+        prim_expr: &(impl chumsky::Parser<Token<'static>, Expr, Error = ParseError<'static>>
+              + Clone
+              + 'static),
+        rec_pattern: &(impl chumsky::Parser<Token<'static>, Pat, Error = ParseError<'static>>
+              + Clone
+              + 'static),
     ) -> Parser!(Pat: Clone + 'static) {
         just(Token::Underscore)
             .to(Pat::Wildcard)
@@ -872,7 +990,7 @@ fn pattern(
             .or(var_pat)
             .or(pat_rest(prim_expr, &top_pat))
     })
-        .debug("pattern")
+    .debug("pattern")
 }
 
 fn meta_attr() -> Parser!(MetaAttr) {
@@ -918,7 +1036,7 @@ fn meta_attr() -> Parser!(MetaAttr) {
 
 pub fn cons(
     params: &(Parser!(Vec<Param>)),
-) -> impl chumsky::Parser<Token<'static>, NamedTele, Error=ParseError<'static>> {
+) -> impl chumsky::Parser<Token<'static>, NamedTele, Error = ParseError<'static>> {
     let ident = ident_parser();
     just(Token::Pipe)
         .ignore_then(ident)
@@ -1156,7 +1274,7 @@ mod tests {
                     (Ident::new("U"), Expr::var("A")),
                     (Ident::new("V"), Expr::var("A")),
                 ]
-                    .into_iter(),
+                .into_iter(),
                 Expr::var("T"),
             )
         );
@@ -1169,7 +1287,7 @@ mod tests {
                     (Ident::new("U"), Expr::var("A")),
                     (Ident::new("V"), Expr::var("B")),
                 ]
-                    .into_iter(),
+                .into_iter(),
                 Expr::var("T"),
             )
         );
@@ -1221,7 +1339,7 @@ mod tests {
                     ("y".into(), Expr::var("T")),
                     ("z".into(), Expr::var("T")),
                 ]
-                    .into_iter(),
+                .into_iter(),
             )
         );
 
@@ -1234,7 +1352,7 @@ mod tests {
                     ("y".into(), Expr::var("T")),
                     ("z".into(), Expr::var("U"))
                 ]
-                    .into_iter(),
+                .into_iter(),
             )
         );
         assert!(parser.parse_expr("lam x y : T => x").is_ok());
