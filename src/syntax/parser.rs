@@ -948,19 +948,17 @@ fn case(expr: &Parser!(Expr), pattern: &(Parser!(Pat))) -> Parser!(Case) {
         .debug("case")
 }
 
-fn pattern(
-    prim_expr: &(impl chumsky::Parser<Token<'static>, Expr, Error = ParseError<'static>>
-          + Clone
-          + 'static),
-) -> Parser!(Pat: Clone + 'static) {
-    fn pat_rest(
-        prim_expr: &(impl chumsky::Parser<Token<'static>, Expr, Error = ParseError<'static>>
-              + Clone
-              + 'static),
-        rec_pattern: &(impl chumsky::Parser<Token<'static>, Pat, Error = ParseError<'static>>
-              + Clone
-              + 'static),
-    ) -> Parser!(Pat: Clone + 'static) {
+fn pattern<'a, 'b, 'c>(
+    prim_expr: &'b (impl chumsky::Parser<'a, TokenTreeInput<'a, 'c>, Expr, ParserExtra<'a>> + Clone + 'a),
+) -> Parser!('a, 'c, Pat: Clone + 'a) {
+    fn pat_rest<'a, 'b, 'c>(
+        prim_expr: &'b (impl chumsky::Parser<'a, TokenTreeInput<'a, 'c>, Expr, ParserExtra<'a>>
+        + Clone + 'a
+        ),
+        rec_pattern: &'b (impl chumsky::Parser<'a, TokenTreeInput<'a, 'c>, Pat, ParserExtra<'a>>
+        + Clone + 'a
+        ),
+    ) -> Parser!('a, 'c, Pat: Clone + 'a) {
         just(Token::Underscore)
             .to(Pat::Wildcard)
             .or(rec_pattern
