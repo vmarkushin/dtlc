@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 chumsky = { git = "https://github.com/zesterer/chumsky", rev = "9031baf", features = ["label", "nightly"] }
-ariadne = "0.1.2"
+ariadne = "0.4.1"
 regex = "1"
 codespan = "0.11.1"
 codespan-reporting = "0.11.1"
@@ -17,7 +17,7 @@ thiserror = "1.0.30"
 #anyhow = "1.0.89"
 eyre = "0.6.12"
 log = "0.4.14"
-env_logger = "0.9.0"
+env_logger = "0.11.5"
 itertools = "0.13.0"
 home = "0.5.5"
 
