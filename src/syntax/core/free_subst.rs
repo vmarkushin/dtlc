@@ -1,29 +1,32 @@
+use crate::check::unification::{Param, Problem};
 use crate::check::TypeCheckState;
-use crate::syntax::core::{Bind, Closure, Elim, Func, Name, SubstCtx, SubstWith, Substitution, Term, Var};
+use crate::syntax::core::{
+    Bind, Closure, Elim, Func, Name, SubstCtx, SubstWith, Substitution, Term, Var,
+};
 use crate::syntax::{DBI, UID};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::DerefMut;
-use crate::check::unification::{Param, Problem};
 
 pub trait SubstituteFreeVars<U = UID, T = Term, C = TypeCheckState, R = Term> {
     fn subst_free_vars_with(&mut self, subst: &HashMap<U, T>, state: &mut C, depth: usize);
 
     // Used for variables
-    fn subst_free_vars_with_to(&self, subst: &HashMap<U, T>, state: &mut C, depth: usize) -> Option<R> { None }
+    fn subst_free_vars_with_to(
+        &self,
+        subst: &HashMap<U, T>,
+        state: &mut C,
+        depth: usize,
+    ) -> Option<R> {
+        None
+    }
 }
 
-impl<C, T, UID, Term> SubstituteFreeVars<UID, Term, C>
-for Box<T>
+impl<C, T, UID, Term> SubstituteFreeVars<UID, Term, C> for Box<T>
 where
     T: SubstituteFreeVars<UID, Term, C>,
 {
-    fn subst_free_vars_with(
-        &mut self,
-        subst: &HashMap<UID, Term>,
-        state: &mut C,
-        depth: usize,
-    ) {
+    fn subst_free_vars_with(&mut self, subst: &HashMap<UID, Term>, state: &mut C, depth: usize) {
         self.as_mut().subst_free_vars_with(subst, state, depth);
     }
 }
@@ -33,12 +36,7 @@ where
     U: Eq + PartialEq + Hash + From<UID> + Into<UID> + Copy,
     T: SubstituteFreeVars<U, Term, C>,
 {
-    fn subst_free_vars_with(
-        &mut self,
-        subst: &HashMap<U, Term>,
-        state: &mut C,
-        depth: usize,
-    ) {
+    fn subst_free_vars_with(&mut self, subst: &HashMap<U, Term>, state: &mut C, depth: usize) {
         self.ty.subst_free_vars_with(subst, state, depth);
         if subst.contains_key(&U::from(self.name)) {
             self.name = 0;
@@ -51,12 +49,7 @@ where
     C: SubstCtx,
     U: Eq + PartialEq + Hash + From<UID> + Into<UID> + Copy,
 {
-    fn subst_free_vars_with(
-        &mut self,
-        subst: &HashMap<U, Term>,
-        state: &mut C,
-        depth: usize,
-    ) {
+    fn subst_free_vars_with(&mut self, subst: &HashMap<U, Term>, state: &mut C, depth: usize) {
         match self {
             Elim::App(a) => {
                 (&mut *a).subst_free_vars_with(subst, state, depth);
@@ -71,21 +64,26 @@ where
     C: SubstCtx,
     U: Eq + PartialEq + Hash + From<UID> + Into<UID> + Copy,
 {
-    fn subst_free_vars_with(
-        &mut self,
-        subst: &HashMap<U, Term>,
-        state: &mut C,
-        depth: usize,
-    ) {
+    fn subst_free_vars_with(&mut self, subst: &HashMap<U, Term>, state: &mut C, depth: usize) {
         let Closure::Plain(p) = self;
         p.subst_free_vars_with(subst, state, depth + 1);
     }
 }
 
-impl<C> SubstituteFreeVars<BindSubst, DBI, C> for Var
-{
-    fn subst_free_vars_with(&mut self, _subst: &HashMap<BindSubst, DBI>, _state: &mut C, _depth: usize) {}
-    fn subst_free_vars_with_to(&self, subst: &HashMap<BindSubst, DBI>, _state: &mut C, depth: usize) -> Option<Term> {
+impl<C> SubstituteFreeVars<BindSubst, DBI, C> for Var {
+    fn subst_free_vars_with(
+        &mut self,
+        _subst: &HashMap<BindSubst, DBI>,
+        _state: &mut C,
+        _depth: usize,
+    ) {
+    }
+    fn subst_free_vars_with_to(
+        &self,
+        subst: &HashMap<BindSubst, DBI>,
+        _state: &mut C,
+        depth: usize,
+    ) -> Option<Term> {
         match self {
             Var::V(Name::Free(uid), twin) if *uid != 0 => {
                 if let Some(dbi) = subst.get(&BindSubst(*uid)).cloned() {
@@ -103,10 +101,14 @@ impl<U, C> SubstituteFreeVars<U, Term, C> for Var
 where
     C: SubstCtx,
     U: Eq + PartialEq + Hash + Into<UID> + From<UID> + Copy,
-
 {
     fn subst_free_vars_with(&mut self, subst: &HashMap<U, Term>, state: &mut C, depth: usize) {}
-    fn subst_free_vars_with_to(&self, subst: &HashMap<U, Term>, state: &mut C, depth: usize) -> Option<Term> {
+    fn subst_free_vars_with_to(
+        &self,
+        subst: &HashMap<U, Term>,
+        state: &mut C,
+        depth: usize,
+    ) -> Option<Term> {
         match self {
             Var::V(Name::Free(uid), _) if *uid != 0 => {
                 if let Some(term) = subst.get(&U::from(*uid)).cloned() {
@@ -134,12 +136,7 @@ where
     C: SubstCtx,
     U: Eq + PartialEq + Hash + Into<UID> + From<UID> + Copy,
 {
-    fn subst_free_vars_with(
-        &mut self,
-        subst: &HashMap<U, Term>,
-        state: &mut C,
-        depth: usize,
-    ) {
+    fn subst_free_vars_with(&mut self, subst: &HashMap<U, Term>, state: &mut C, depth: usize) {
         match self {
             Term::Var(Var::Meta(_), args) => {
                 args.subst_free_vars_with(subst, state, depth);
@@ -217,12 +214,7 @@ where
     U: Eq + PartialEq + Hash + Into<UID> + From<UID> + Copy,
     T: SubstituteFreeVars<U, R, C>,
 {
-    fn subst_free_vars_with(
-        &mut self,
-        subst: &HashMap<U, R>,
-        state: &mut C,
-        depth: usize,
-    ) {
+    fn subst_free_vars_with(&mut self, subst: &HashMap<U, R>, state: &mut C, depth: usize) {
         self.into_iter()
             .map(|e| e.subst_free_vars_with(subst, state, depth))
             .collect()
@@ -233,12 +225,7 @@ where
     C: SubstCtx,
     U: Eq + PartialEq + Hash + From<UID> + Into<UID> + Copy,
 {
-    fn subst_free_vars_with(
-        &mut self,
-        subst: &HashMap<U, Term>,
-        state: &mut C,
-        depth: usize,
-    ) {
+    fn subst_free_vars_with(&mut self, subst: &HashMap<U, Term>, state: &mut C, depth: usize) {
         match self {
             Param::P(t) => {
                 t.subst_free_vars_with(subst, state, depth);
@@ -256,12 +243,7 @@ where
     C: SubstCtx,
     U: Eq + PartialEq + Hash + From<UID> + Into<UID> + Copy,
 {
-    fn subst_free_vars_with(
-        &mut self,
-        subst: &HashMap<U, Term>,
-        state: &mut C,
-        depth: usize,
-    ) {
+    fn subst_free_vars_with(&mut self, subst: &HashMap<U, Term>, state: &mut C, depth: usize) {
         match self {
             Problem::Unify(eq) => {
                 eq.tm1.subst_free_vars_with(subst, state, depth);
@@ -279,4 +261,3 @@ where
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BindSubst(DBI);
-

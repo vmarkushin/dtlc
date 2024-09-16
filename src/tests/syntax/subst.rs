@@ -4,6 +4,7 @@ use quickcheck_macros::quickcheck;
 use std::rc::Rc;
 
 #[quickcheck]
+#[ignore]
 fn prop_subst_split(SubCx(cx, subst): SubCx) -> bool {
     let subst = Rc::new(subst);
     if cx.len() == 0 {

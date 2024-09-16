@@ -1,27 +1,30 @@
-use std::ops::Deref;
 use crate::check::state::TypeCheckState;
-use crate::check::{Clause, Error, LshProblem, Result};
 use crate::check::unification::{Entry, Equation, MetaDecl, Param, Problem, Status};
+use crate::check::{Clause, Error, LshProblem, Result};
 use crate::ensure;
 use crate::syntax::abs::{AppView, Expr, Match};
-use crate::syntax::core::{self, pretty, pretty_list, Boxed, Closure, Ctx, DeBruijn, Lambda, Name, SubstCtx, Tele, Type};
+use crate::syntax::core::{
+    self, pretty, pretty_list, Boxed, Closure, Ctx, DeBruijn, Lambda, Name, SubstCtx, Tele, Type,
+};
 use crate::syntax::core::{Bind, DataInfo, Decl, Elim, Term, TermInfo, ValData, Var};
 use crate::syntax::surf::{nat_to_term, Literal};
 use crate::syntax::{abs, ConHead, Ident, LangItem, Loc, Universe, GI};
+use std::ops::Deref;
 
 impl TypeCheckState {
     /// Infer the type of the expression. Returns evaluated term and its type.
     pub fn infer(&mut self, input_term: &Expr) -> Result<(TermInfo, Type)> {
         if !self.trace_tc {
-            return self.infer_impl(input_term);
+            return self.infer_impl(input_term, None);
         }
         let depth_ws = self.tc_depth_ws();
         self.tc_deeper();
         debug!("{}⊢ {} ↓", depth_ws, input_term);
-        let (evaluated, inferred_ty) = self.infer_impl(input_term).map_err(|e| {
+        let (evaluated, inferred_ty) = self.infer_impl(input_term, None).map_err(|e| {
             debug!("{}Error inferring {}", depth_ws, input_term);
             e
         })?;
+
         debug!(
             "{}⊢ {} ↓ {} ⇝ {}",
             depth_ws, input_term, inferred_ty, evaluated.ast
@@ -30,7 +33,35 @@ impl TypeCheckState {
         Ok((evaluated, inferred_ty))
     }
 
-    fn infer_impl(&mut self, abs: &Expr) -> Result<(TermInfo, Term)> {
+    /// Infer the type of the expression (with a type hint). Returns evaluated term and its type.
+    ///
+    /// The hint is used to specify meta's type.
+    pub fn infer_with_hint(
+        &mut self,
+        input_term: &Expr,
+        ty_hint: &Type,
+    ) -> Result<(TermInfo, Type)> {
+        if !self.trace_tc {
+            return self.infer_impl(input_term, Some(&ty_hint));
+        }
+        let depth_ws = self.tc_depth_ws();
+        self.tc_deeper();
+        debug!("{}⊢ {} ↓ {{{ty_hint}}}", depth_ws, input_term);
+        let (evaluated, inferred_ty) =
+            self.infer_impl(input_term, Some(&ty_hint)).map_err(|e| {
+                debug!("{}Error inferring {}", depth_ws, input_term);
+                e
+            })?;
+
+        debug!(
+            "{}⊢ {} ↓ {} {{{ty_hint}}} ⇝ {}",
+            depth_ws, input_term, inferred_ty, evaluated.ast
+        );
+        self.tc_shallower();
+        Ok((evaluated, inferred_ty))
+    }
+
+    fn infer_impl(&mut self, abs: &Expr, ty_hint: Option<&Type>) -> Result<(TermInfo, Term)> {
         let abs = match abs {
             Expr::Pi(loc, bind, body) => {
                 let (bind_ty_ch, bind_ty_ty) = self.infer((*bind.ty).as_ref().unwrap())?;
@@ -101,6 +132,78 @@ impl TypeCheckState {
                     |name, gi, args| Term::cons(ConHead::new(name, gi), args),
                 )
             }
+            Term::Var(Var::Meta(mi), es) => {
+                debug_assert_eq!(es.len(), 0);
+                let Term::Var(Var::Meta(ty_mi), ty_es) = &ty else {
+                    unreachable!("Expected meta-variable as type");
+                };
+                debug_assert_eq!(ty_es.len(), 0);
+
+                // the meta hasn't been added to the meta-context yet at the moment, we're going to do it
+                // we have a meta of form ?m t1 t2 ... tn
+                // where ti may represent either a DeBruijn variable (referencing the current context) or some other term
+                // The strategy is to apply the meta to all the known context variables and then to
+                // the rest of the terms: ?m t1 t2 ... tn -> ?m x1 x2 ... xn u1 u2 ... un
+                // this will allow for the unification algorithm to solve the meta also using the context
+
+                // For example, if we have such meta in context Г:
+                // Г |- ?m t u v : ?n
+                // in the most general case, its type will look like this:
+                // ?m : (δ : Г) -> (a : ?m1 δ) -> (b : ?m2 δ a) -> (c : ?m3 δ a b) -> ?n
+                // where `δ` represents all the context variables applied to the meta
+                // and each new meta-variable ?mi is unified with the corresponding argument:
+                // ∀ (δ : Г). ?m1 δ ≡ t
+                // ∀ (δ : Г). ?m2 δ (?m1 δ) ≡ u
+                // ∀ (δ : Г). ?m3 δ (?m1 δ) (?m2 δ (?m1 δ)) ≡ v
+                // note that each additional argument of the meta is dependent on the previous ones
+                // this would allow finding more general solutions.
+                //
+                // Let's consider a simpler case
+                // where the additional arguments can't depend on each other
+                // ?m : (δ : Г) -> (a : ?m1 δ) -> (b : ?m2 δ) -> (c : ?m3 δ) -> ?n
+                // ∀ (δ : Г). ?m1 δ ≡ t
+                // ∀ (δ : Г). ?m2 δ ≡ u
+                // ∀ (δ : Г). ?m3 δ ≡ v
+                //
+                // The above approaches are more general and would allow more solutions, but they are also more complex,
+                // and the unification algorithm may not be able to solve them in a reasonable time.
+                //
+                // Instead, we are not going to introduce additional meta-variables for each argument
+                // but instead, we're going to apply the meta directly rest of the arguments:
+                // ?m : (δ : Г) -> T -> U -> V -> ?n
+                // so in the equations it may be used like so:
+                // ∀ (δ : Г). ?m δ t u v ≡ _
+
+                let ctx = self.context().clone();
+                let apply_ctx =
+                    |t: Term| t.apply((0..ctx.len()).rev().map(Term::from_dbi).collect());
+
+                // TODO: consider checking if some of the terms contain meta-variables or variables inside of the terms (like constructors or data types)?
+                let verified_args = view
+                    .args
+                    .iter()
+                    .map(|e| self.infer(e))
+                    .collect::<Result<Vec<_>>>()?;
+                let (args, args_tys): (Vec<_>, Vec<_>) = verified_args
+                    .into_iter()
+                    .map(|(t, ty)| (t.ast, Bind::unnamed(ty)))
+                    .unzip();
+                let mut tele = Tele(ctx.clone().0);
+                tele.0.extend(args_tys);
+                let real_ty = ty_hint.unwrap_or_else(|| &ty);
+                let new_ty = Term::pi_from_tele(tele, real_ty.clone());
+
+                // Г |- ?m t u v ...
+                //      |- Δ, ?n : Type
+                //      |- Δ, ?m : (δ : Г) -> T -> U -> V -> ... -> ?n
+                if ty_hint.is_none() {
+                    self.push_l(Entry::E(*ty_mi, Type::universe(0), MetaDecl::Hole))?;
+                }
+                self.push_l(Entry::E(*mi, new_ty.clone(), MetaDecl::Hole))?;
+
+                // TODO: apply_pi to the meta type to get the return type of the meta (?n)?
+                Ok((head.map_ast(|t| apply_ctx(t).apply(args)), real_ty.clone()))
+            }
             _ => {
                 let mut elims = Vec::with_capacity(view.args.len());
                 for arg in view.args {
@@ -163,9 +266,7 @@ impl TypeCheckState {
         let decl = self.def(decl);
         match decl {
             Decl::Data(data) => Ok(data.signature.clone().at(data.loc())),
-            Decl::Cons(cons) => {
-                Ok(cons.signature.clone().at(cons.loc()))
-            }
+            Decl::Cons(cons) => Ok(cons.signature.clone().at(cons.loc())),
             Decl::Proj(_proj) => {
                 unimplemented!()
             }
@@ -192,9 +293,7 @@ impl TypeCheckState {
 
     pub fn type_of(&mut self, term: &Term) -> Result<Type> {
         match term {
-            Term::Universe(Universe(u)) => {
-                Ok(Term::universe(Universe(u + 1)))
-            }
+            Term::Universe(Universe(u)) => Ok(Term::universe(Universe(u + 1))),
             Term::Cons(con, es) => {
                 let con_decl = self.def(con.cons_gi).as_cons();
                 let sig = &con_decl.signature.clone();
@@ -209,8 +308,19 @@ impl TypeCheckState {
             }
             Term::Var(Var::V(name, twin), es) => {
                 let args = es.iter().map(|e| e.clone().into_app()).collect::<Vec<_>>();
-                let pi = self.lookup_var(*name, *twin).map(|b| b.ty.clone())?;
-                self.pi_apply(&pi, &args)
+                let i = match name {
+                    Name::Free(x) => {
+                        return self.lookup_var(*name, *twin).map(|b| b.ty.clone());
+                    }
+                    Name::Bound(x) => *x,
+                };
+                let pi = self.lookup(i).map_term(|x| x.clone());
+                self.pi_apply(&pi.ty, &args)
+            }
+            Term::Var(Var::Meta(mi), es) => {
+                let m_ty = self.lookup_meta_ty(*mi).unwrap();
+                let args = es.iter().map(|e| e.clone().into_app()).collect::<Vec<_>>();
+                self.pi_apply(&m_ty.clone(), &args)
             }
             Term::Lam(Lambda(bind, closure)) => {
                 let body_ty = self.type_of(closure.as_inner())?;
@@ -223,7 +333,8 @@ impl TypeCheckState {
                 let body_ty = self.type_of(closure.as_inner())?;
                 self.gamma.pop().expect("Bad index");
                 let (Term::Universe(u), Term::Universe(v)) = (&bind_ty, &body_ty) else {
-                    return Err(Error::InvalidPi(bind_ty.boxed(), body_ty.boxed()));
+                    // TODO: the universe may not be known in case of meta type
+                    return Ok(Term::universe(1));
                 };
                 Ok(Term::universe(Universe(u.0.max(v.0))))
             }
@@ -280,7 +391,9 @@ impl TypeCheckState {
                 let bind_checked = Bind::identified(
                     bind.licit,
                     bind.name,
-                    self.infer((*bind.ty).as_ref().unwrap())?.0.ast,
+                    self.infer_with_hint((*bind.ty).as_ref().unwrap(), &Type::universe(2))?
+                        .0
+                        .ast,
                     bind.ident.clone(),
                 );
                 self.gamma.push(bind_checked.clone());
@@ -295,11 +408,9 @@ impl TypeCheckState {
                 let lb = self.local_by_id(*var);
                 Ok((lb.val.at(loc.loc), lb.bind.ty))
             }
-            Meta(ident, mi) => {
-                let ctx = self.context().clone();
-                let apply_ctx = |t: Term| t.apply((0..ctx.len()).rev().map(Term::from_dbi).collect());
-                let tyty = apply_ctx(self.fresh_meta());
-                let ty = apply_ctx(self.fresh_meta()); // Term::meta_with(*mi, vec![]);
+            Meta(ident, _mi) => {
+                let tyty = self.fresh_meta();
+                let ty = self.fresh_meta();
 
                 Ok((ty.at(ident.loc), tyty))
             }
@@ -456,7 +567,8 @@ impl TypeCheckState {
                 Ok(term.at(*info))
             }
             (Expr::Lam(_info, bind, ret), Term::Pi(bind_pi, ret_pi)) => {
-                let (bind_ty, _bind_ty_ty) = self.infer((*bind.ty).as_ref().unwrap())?;
+                let (bind_ty, _bind_ty_ty) =
+                    self.infer_with_hint((*bind.ty).as_ref().unwrap(), &Type::universe(2))?;
                 let val1 = bind_ty.ast.clone();
                 let val2 = *bind_pi.ty.clone();
                 self.subtype(&val1, &val2)?;
@@ -469,29 +581,6 @@ impl TypeCheckState {
                 Ok(Term::lam(bind_new.boxed(), body.ast).at(bind_ty.loc))
             }
             (Expr::Match(m), against) => self.check_match(m, against.clone()),
-            (Expr::Meta(ident, mi), against) => {
-                let ctx = self.context().clone();
-                let apply_ctx = |t: Term| t.apply((0..ctx.len()).rev().map(Term::from_dbi).collect());
-                let mi_ty = self.fresh_uid();
-                let mi = self.fresh_uid();
-                let ty = Term::meta(mi_ty);
-
-                let applied_ty = apply_ctx(ty);
-
-                let ty_ty = Term::universe(0); // TODO: self.type_of_decl(against);
-                self.push_l(Entry::E(mi_ty, Term::pis(ctx.clone(), ty_ty.clone()), MetaDecl::Hole))?;
-                self.push_l(Entry::E(mi, Term::pis(ctx.clone(), applied_ty.clone()), MetaDecl::Hole))?;
-                let problem = Problem::Unify(Equation {
-                    tm1: applied_ty,
-                    ty1: ty_ty.clone(),
-                    tm2: against.clone(),
-                    ty2: ty_ty.clone(),
-                });
-                self.push_l(Entry::Q(Status::Active, Problem::alls(ctx.0.clone().into_iter().map(|b| b.map_term(Param::P)).collect(), problem)))?;
-
-                let applied_meta = apply_ctx(Term::meta(mi));
-                Ok(applied_meta.at(ident.loc))
-            }
             (expr, anything) => self.check_fallback(expr.clone(), anything),
         }
     }
@@ -524,14 +613,20 @@ impl TypeCheckState {
         lhs.init(self)?;
         debug!("{}⊢ LHS init: {lhs}", self.indentation);
         let case_tree = lhs.check(self)?;
-        debug!("{}⊢ Checked case tree: {:?} {case_tree}", self.indentation, case_tree);
+        debug!(
+            "{}⊢ Checked case tree: {:?} {case_tree}",
+            self.indentation, case_tree
+        );
         let term = case_tree.into_term();
-        debug!("{}⊢ Checked case tree': {:?} {term}", self.indentation, term);
+        debug!(
+            "{}⊢ Checked case tree': {:?} {term}",
+            self.indentation, term
+        );
         Ok(term.at(Loc::default()))
     }
 
     pub fn check_fallback(&mut self, expr: Expr, expected_type: &Term) -> Result<TermInfo> {
-        let (evaluated, inferred) = self.infer(&expr)?;
+        let (evaluated, inferred) = self.infer_with_hint(&expr, expected_type)?;
         self.subtype(&inferred, expected_type)
             .map_err(|e| e.wrap(expr.loc()))?;
         Ok(evaluated)
@@ -544,9 +639,9 @@ impl TypeCheckState {
 
 #[cfg(test)]
 mod tests {
-    use itertools::Itertools;
     use super::*;
     use crate::syntax::parser::Parser;
+    use itertools::Itertools;
 
     use crate::syntax::core::ValData;
     use crate::syntax::desugar::desugar_prog;
@@ -624,7 +719,7 @@ mod tests {
             fn id' (A : Type) : A -> A := (lam (a : _) => a)
             fn bool := true
             fn idb := id _ bool
-            fn deep (x : Bool) : _ := (lam (y : _) => y) x
+            fn deep (x : Bool) := (lam (y : _) => y) x
             fn deep' (f : (A : Type) -> A -> A) (x : Bool) : Bool := (lam (y : Bool) => f _ y) x
             fn deep'' (f : (A : Type) -> A -> A) (x : Bool) : Bool := (lam (y : _) => f _ y) x
             fn deep''' (f : (A : Type) -> A -> A -> A) (x : Bool) := (lam (y : _) => f _ y x) x
@@ -637,10 +732,14 @@ mod tests {
 
         let print_def = |id| match env.sigma.get(id) {
             Some(Decl::Func(f)) => {
-                println!("fn {} : {} := {}", f.name, f.signature,
-                         f.body.as_ref().unwrap())
+                println!(
+                    "fn {} : {} := {}",
+                    f.name,
+                    f.signature,
+                    f.body.as_ref().unwrap()
+                )
             }
-            _ => ()
+            _ => (),
         };
         for i in 3..20 {
             print_def(i);
@@ -803,14 +902,10 @@ mod tests {
         fn sigma_test1 : Sigma Nat (lam z : Nat => match z { | O => Nat | (S n) => Bool }) :=
             mkSigma _ _ O O
 
-        -- fn sigma_test2 : Sigma Nat (lam z : Nat => match z { | O => Nat | (S n) => Bool }) :=
-        --     mkSigma _ _ (S O) true
+        fn sigma_test2 : Sigma Nat (lam z : Nat => match z { | O => Nat | (S n) => Bool }) :=
+            mkSigma _ _ (S O) true
        "#,
         )?)?;
-
-        // mkSigma ?2 ?4 O O : Sigma Nat (lam (z : Nat) => match z { | O => Nat | (S n) => Bool })
-        // ?2 == Nat
-        // ?4 == lam (z : Nat) => match z { | O => Nat | (S n) => Bool }
 
         env.check_prog(des.clone())?;
 
@@ -829,9 +924,6 @@ mod tests {
         );
 
         env.trace_tc = true;
-        // let t = pct!(p, des, env, "mkSigma Nat (lam (x : _) => _) O true");
-        // let t = pct!(p, des, env, "mkSigma Nat _ O true");
-        // let t = pct!(p, des, env, "mkSigma _ _ O true");
 
         typeck!(
             p,
@@ -841,34 +933,6 @@ mod tests {
             "Sigma Nat (lam (x : Nat) => Bool)"
         );
 
-        /*
-        ?1 : Type0
-        ?2 : ?1
-        ?Active (?1 : Type0) == (Type1 : Type0)
-        ?3 : Type0
-        ?4 : ?3
-        ?Active (?3 : Type0) == ((?2 -> Type1) : Type0)
-        ?Active (?1 : Type0) == (Type0 : Type0)
-        ?Active (?2 : Type0) == (data0 : Type0)
-        ?Active (?3 : Type0) == ((data0 -> Type0) : Type0)
-        ?Active ((?4 O) : Type0) == (data0 : Type0)
-        ?Active (?1 : Type0) == (Type0 : Type0)
-        ?Active (?2 : Type0) == (data0 : Type0)
-        ?Active (?3 : Type0) == (Type0 : Type0)
-        ?Active (?4 : (data0 -> Type1)) == ((\z[-]:data0. match @0 returning Type1 {
-         | O => data0
-         | (S 0) => data3
-        }) : (data0 -> Type1))
-
-    	?1 : Type0 := Type1
-        ?2 : Type1 := data0
-        ?3 : Type0 := (data0 -> Type1)
-        ?4 : (data0 -> Type1) := (\1[t]:data0. match @0 returning Type1 {
-         | O => data0
-         | (S 0) => data3
-        })
-        ?Blocked ((data0 -> Type1) : Type0) == (Type0 : Type0)
-         */
         Ok(())
     }
 

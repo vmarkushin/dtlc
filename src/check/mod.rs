@@ -4,7 +4,7 @@ use crate::syntax::abs::{Expr, Pat as PatA};
 use crate::syntax::core::{pretty, Elim, Pat, Pretty, Term};
 use crate::syntax::{Ident, Loc, Universe, MI};
 pub use case::{CaseTree, Clause, Constraint, LshProblem};
-pub use state::{TypeCheckState};
+pub use state::TypeCheckState;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 pub use unify::Unify;

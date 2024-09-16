@@ -1,16 +1,18 @@
+use std::assert_matches::assert_matches;
 // use crate::check::meta::MetaSol;
 use crate::check::state::TypeCheckState;
+use crate::check::unification::{Entry, Equation, MetaDecl, Param, Problem, Status};
 use crate::check::{Error, Result};
 use crate::ensure;
-use crate::syntax::core::{pretty, pretty_list, Bind, Boxed, DeBruijn, Subst, SubstCtx, Tele, Type, Var};
+use crate::syntax::core::{
+    pretty, pretty_list, Bind, Boxed, DeBruijn, Subst, SubstCtx, Tele, Type, Var,
+};
 use crate::syntax::core::{
     Case, Closure, Elim, FoldVal, Func, Lambda, Pat, SubstWith, Substitution, Term, ValData,
 };
 use crate::syntax::{DBI, GI, MI};
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use chumsky::chain::Chain;
-use crate::check::unification::{Entry, Equation, MetaDecl, Param, Problem, Status};
 
 impl TypeCheckState {
     pub fn subtype(&mut self, sub: &Term, sup: &Term) -> Result<()> {
@@ -25,7 +27,10 @@ impl TypeCheckState {
             e
         })?;
         if self.current_checking_def.is_some() {
-            debug!("{}{} <= {} --> {}", depth_ws, sub, sup,/* self.meta_ctx(else)*/ 0);
+            debug!(
+                "{}{} <= {} --> {}",
+                depth_ws, sub, sup, 0
+            );
         } else {
             debug!("{}{} <= {}", depth_ws, sub, sup);
         }
@@ -34,7 +39,7 @@ impl TypeCheckState {
     }
 
     fn subtype_impl(&mut self, sub: &Term, sup: &Term) -> Result<()> {
-        use Term::{Universe, Pi, Id};
+        use Term::{Id, Pi, Universe};
         match (sub, sup) {
             (Universe(sub_l), Universe(sup_l)) if sub_l <= sup_l => Ok(()),
             (Pi(a, c0), Pi(b, c1)) if a.licit == b.licit => {
@@ -76,6 +81,15 @@ impl TypeCheckState {
                 };
                 self.unify_depth_dec(id_a.tele.len());
                 res
+            }
+            (Term::Var(Var::Meta(mi), es), t) | (t, Term::Var(Var::Meta(mi), es)) => {
+                info!("Subtyping with meta: ?{} <= {}", mi, t);
+                let m_ty = self.lookup_meta_ty(*mi).cloned().unwrap();
+                let (_tele, ret) = m_ty.tele_view();
+                if !ret.is_universe() {
+                    assert_matches!(&ret, Term::Var(Var::Meta(_), es) if es.is_empty());
+                }
+                Unify::unify(self, sub, sup)
             }
             (e, t) if !e.is_whnf() || !t.is_whnf() => {
                 let e_simp = self.simplify(e.clone())?;
@@ -314,7 +328,6 @@ impl TypeCheckState {
     }
 
     #[allow(clippy::many_single_char_names)]
-    #[track_caller]
     fn unify_val(&mut self, left: &Term, right: &Term) -> Result<()> {
         debug!("{}Unify val {} = {}", self.tc_depth_ws(), left, right);
         use crate::syntax::core::Var::Meta;
@@ -336,70 +349,55 @@ impl TypeCheckState {
             (t, u) if matches!(t, Var(Meta(_), ..)) | matches!(u, Var(Meta(_), ..)) => {
                 match (t, u) {
                     (t, Var(Meta(mi), es)) | (Var(Meta(mi), es), t) => {
-                        let mut ctx = self.context().clone();
-
-                        let t_ty = self.type_of(t)?;
-                        let mut m_ty = Term::universe(0); // self.lookup_meta_ty(*mi).cloned().unwrap_or(Term::universe(0)); // TODO: self.type_of_decl(against);
-                        let mut other = self.lookup_meta_ty(*mi).cloned().unwrap_or(Term::universe(0));
-
                         let mut t = t.clone();
+                        let mut es = es.clone();
 
-                        let applied_meta = if es.is_empty() {
-                            Term::meta(*mi).apply((0..ctx.len()).rev().map(Term::from_dbi).collect())
-                        } else {
-                            let mut es = es.clone();
-                            debug!("Subtyping with applied meta: ?{} {} in {ctx}", mi, pretty(&es, self));
-                            let is_vars_spine = es.iter().filter(|e| e.is_app()).all(|e| e.clone().into_app().dbi_view().is_some());
-                            if is_vars_spine {
-                                let dbi_iter = es.iter().map(|e| e.clone().into_app().dbi_view().unwrap());
-                                // if the spine vars are non-linear,an equation won't be added to the context, because it can't be solved using the method being used
-                                let is_linear = dbi_iter.clone().collect::<HashSet<_>>().len() == es.len();
-                                if !is_linear {
-                                    debug!("Subtyping with applied metas with non-linear spine: ?{} {} in {ctx}", mi, pretty(&es, self));
-                                    return Ok(());
-                                }
+                        // the meta type in the end should look like
+                        // ?m : vars(Г) + types_of(es)
+                        // where `es` - terms not from the context
+                        let mut t_ty = self.type_of(&t)?;
+                        let mut m_ty = self.lookup_meta_ty(*mi).cloned().unwrap();
+                        let mut applied_meta = Var(Meta(*mi), es.clone());
+                        let mut applied_meta_ty = self.type_of(&applied_meta)?;
 
-                                if es.len() != ctx.len() {
-                                    debug!("Subtyping with applied metas with different spine: ?{} {} in {ctx}", mi, pretty(&es, self));
-                                    // assuming the meta is only applied to vars (?m v1 v2 ... vn) (TODO: add a check for that):
-                                    // then `num_out_binders` represents number of binders that are out of the context for the meta, so we need to prune them before creating an equation
-                                    let num_out_binders = dbi_iter.min().unwrap();
-                                    ctx.popn(num_out_binders);
-                                    let strengthen = Substitution::strengthen(num_out_binders);
-                                    es = es.subst(strengthen.clone());
-                                    t = t.subst(strengthen);
-                                }
-                                Term::meta_with(*mi, es.clone())
-                            } else {
-                                // we have a meta of form ?m t1 t2 ... tn, where some of the ti are not vars
-                                // TODO: add more context to the meta?
-
-                                let tys = es.iter().map(|e| self.type_of(&e.as_app())).collect::<Result<Vec<_>>>()?;
-                                m_ty = Term::pis(tys.clone().into_iter().map(Bind::unnamed), m_ty.clone());
-                                other = Term::pis(tys.into_iter().map(Bind::unnamed), other.clone());
-
-                                Term::meta_with(*mi, es.clone())
-                            }
-                        };
-
-                        let meta_ty = Term::pis(ctx.clone(), m_ty.clone());
-                        let other_meta_ty = Term::pis(ctx.clone(), other.clone());
-
-                        let mut other = self.lookup_meta_ty(*mi).cloned().unwrap_or(meta_ty.clone());
-                        info!("ADDING MTY {meta_ty}. BUT COULD {other_meta_ty}");
-                        self.push_l(Entry::E(*mi, other, MetaDecl::Hole))?;
+                        let dbi_iter = es.iter().filter_map(|e| e.clone().into_app().dbi_view());
+                        // assuming the meta is only applied to vars (?m v1 v2 ... vn)
+                        // then `num_out_binders` represents number of binders that are out of the context for the meta, so we need to prune them before creating an equation
+                        let num_out_binders = dbi_iter.min();
+                        if let Some(n) = num_out_binders
+                            && n != 0
+                        {
+                            let strengthen = Substitution::strengthen(n);
+                            applied_meta = applied_meta.subst(strengthen.clone());
+                            applied_meta_ty = applied_meta_ty.subst(strengthen.clone());
+                            t = t.subst(strengthen.clone());
+                            t_ty = t_ty.subst(strengthen.clone());
+                        }
 
                         let problem = Problem::Unify(Equation {
                             tm1: applied_meta,
-                            ty1: t_ty.clone(), // TODO: maybe different type for meta?
+                            ty1: applied_meta_ty,
                             tm2: t.clone(),
                             ty2: t_ty.clone(),
                         });
-                        self.push_l(Entry::Q(Status::Active, Problem::alls(ctx.0.clone().into_iter().map(|b| b.map_term(Param::P)).collect(), problem)))?;
+                        let (tele, _ret) = m_ty.tele_view();
+                        self.push_l(Entry::Q(
+                            Status::Active,
+                            Problem::alls(
+                                tele.0
+                                    .clone()
+                                    .into_iter()
+                                    .map(|b| b.map_term(Param::P))
+                                    .collect(),
+                                problem,
+                            ),
+                        ))?;
                         Ok(())
                     }
                     _ => {
-                        return Err(Error::Other("Subtyping with metas is not implemented".to_string()));
+                        return Err(Error::Other(
+                            "Subtyping with metas is not implemented".to_string(),
+                        ));
                     }
                 }
             }
@@ -409,14 +407,15 @@ impl TypeCheckState {
                     // TODO: this is probably wrong, because the args need to be applied
                     Unify::unify(self, a.as_slice(), b.as_slice())
                 } else {
-                    self.push_l(Entry::Q(Status::Active, Problem::Unify(
-                        Equation {
+                    self.push_l(Entry::Q(
+                        Status::Active,
+                        Problem::Unify(Equation {
                             tm1: Term::meta(*i),
                             ty1: self.lookup_meta_ty(*i)?.clone(),
                             tm2: Term::meta(*j),
                             ty2: self.lookup_meta_ty(*j)?.clone(),
-                        }
-                    )))?;
+                        }),
+                    ))?;
 
                     // TODO: this is probably wrong, because the args need to be applied
                     Unify::unify(self, a.as_slice(), b.as_slice())

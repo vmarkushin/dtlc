@@ -292,11 +292,11 @@ impl Display for Pretty<'_, Term> {
                 }
             }
             Term::Lam(Lambda(
-                          Bind {
-                              licit, ty, ident, ..
-                          },
-                          clos,
-                      )) => {
+                Bind {
+                    licit, ty, ident, ..
+                },
+                clos,
+            )) => {
                 let ty = pretty(&**ty, s);
                 let clos = pretty(clos, s);
                 match licit {
@@ -403,7 +403,7 @@ impl Display for Pretty<'_, Case> {
 impl Display for Pretty<'_, Pat> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let s = self.s;
-        write!(f, "{}", pretty(&self.inner.clone().into_term(), s), )
+        write!(f, "{}", pretty(&self.inner.clone().into_term(), s),)
     }
 }
 

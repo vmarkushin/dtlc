@@ -1,6 +1,8 @@
 use super::Result;
 // use crate::check::meta::HasMeta;
+use crate::check::norm::Normalize;
 use crate::check::state::TypeCheckState;
+use crate::check::unification::MetaSubstitution;
 use crate::check::Error;
 use crate::syntax::abs::{
     ConsInfo as AConsInfo, DataInfo as ADataInfo, Decl as ADecl, Expr, Tele as ATele,
@@ -11,8 +13,6 @@ use crate::syntax::core::{
 use crate::syntax::desugar::DesugarState;
 use crate::syntax::{LangItem, Universe, GI};
 use itertools::Either::*;
-use crate::check::norm::Normalize;
-use crate::check::unification::MetaSubstitution;
 
 impl TypeCheckState {
     pub fn check_prog(&mut self, desugar_state: DesugarState) -> Result<()> {
@@ -50,7 +50,7 @@ impl TypeCheckState {
 
     pub fn check_decls(
         &mut self,
-        decls: impl Iterator<Item=ADecl>,
+        decls: impl Iterator<Item = ADecl>,
         meta_ids: Vec<GI>,
     ) -> Result<()> {
         let curr_decl_len = self.sigma.len();
@@ -93,7 +93,9 @@ impl TypeCheckState {
             debug!("Checking decl {}", decl.ident());
             let new_defs = match decl {
                 ADecl::Data(info) => {
-                    let cs: Vec<_> = info.conses.iter()
+                    let cs: Vec<_> = info
+                        .conses
+                        .iter()
                         .map(|j| match take(&mut decls, *j - curr_decl_len) {
                             ADecl::Cons(i) => i,
                             _ => unreachable!(),
@@ -113,7 +115,7 @@ impl TypeCheckState {
                 ADecl::Fn(f) => {
                     let signature = self.check(
                         f.ty.as_ref().expect("please specify type"),
-                        &Term::universe(Universe(u32::MAX)), // TODO: this is Setω in Agda. Consider other ways for checking type here.
+                        &Term::universe(Universe(1)), // TODO: this is Setω in Agda. Consider other ways for checking type here.
                     )?;
 
                     let mut signature = signature.ast;

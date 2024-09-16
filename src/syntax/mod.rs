@@ -1,8 +1,9 @@
 use crate::syntax::core::{Name, Term, Var};
 use crate::syntax::token::Position;
-use chumsky::Span;
+use chumsky::prelude::SimpleSpan;
+use chumsky::span::Span;
 use codespan::{ColumnIndex, LineIndex};
-use derive_more::{Add, AsRef, Deref, From};
+use derive_more::{AsRef, Deref, From};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::{Add, Range};
 use std::str::FromStr;
@@ -29,6 +30,18 @@ pub struct Loc {
     pub end: usize,
     pub line: LineIndex,
     pub col: ColumnIndex,
+}
+
+impl From<SimpleSpan> for Loc {
+    fn from(value: SimpleSpan) -> Self {
+        Loc::new(value.start, value.end)
+    }
+}
+
+impl From<Loc> for SimpleSpan {
+    fn from(value: Loc) -> Self {
+        SimpleSpan::new(value.start, value.end)
+    }
 }
 
 impl Debug for Loc {
@@ -174,7 +187,7 @@ impl Display for Ident {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default, From, Add)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default, From, derive_more::Add)]
 pub struct Universe(pub u32);
 
 impl Universe {
@@ -362,7 +375,12 @@ impl<T> Bind<T> {
     }
 
     pub fn try_map_term<R, E>(self, f: impl FnOnce(T) -> Result<R, E>) -> Result<Bind<R>, E> {
-        Ok(Bind::identified(self.licit, self.name, f(self.ty)?, self.ident))
+        Ok(Bind::identified(
+            self.licit,
+            self.name,
+            f(self.ty)?,
+            self.ident,
+        ))
     }
 
     pub fn ident(self) -> Ident {

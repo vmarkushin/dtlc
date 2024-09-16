@@ -290,9 +290,7 @@ where
 impl<C: SubstCtx> SubstWith<Term, C, Term> for Var {
     fn subst_with(self, subst: Rc<PrimSubst<Term>>, state: &mut C) -> Term {
         match self {
-            v if let Some(f) = v.dbi_view() => {
-                subst.lookup_with::<C>(f, state)
-            }
+            v if let Some(f) = v.dbi_view() => subst.lookup_with::<C>(f, state),
             v => Term::Var(v, vec![]),
         }
     }
@@ -321,7 +319,9 @@ where
             }
             Term::Universe(n) => Term::universe(n),
             Term::Data(info) => Term::data(info.subst_with(subst, tcs)),
-            Term::Var(var, args) => var.subst_with(subst.clone(), tcs).apply_elim(args.subst_with(subst, tcs)),
+            Term::Var(var, args) => var
+                .subst_with(subst.clone(), tcs)
+                .apply_elim(args.subst_with(subst, tcs)),
             Term::Id(id) => id.subst_with(subst, tcs),
             Term::Refl(t) => Term::Refl(t.subst_with(subst, tcs).boxed()),
             Term::Redex(Func::Index(f), id, args) => {
@@ -419,7 +419,6 @@ where
     }
 }
 
-
 impl<S, C> SubstWith<S, C> for Closure
 where
     Term: SubstWith<S, C>,
@@ -436,7 +435,9 @@ where
     T: SubstWith<S, C, A>,
 {
     fn subst_with(self, subst: Rc<PrimSubst<S>>, tcs: &mut C) -> Vec<A> {
-        self.into_iter().map(|e| e.subst_with(subst.clone(), tcs)).collect()
+        self.into_iter()
+            .map(|e| e.subst_with(subst.clone(), tcs))
+            .collect()
     }
 }
 
@@ -469,8 +470,7 @@ where
     }
 }
 
-impl<C: SubstCtx> SubstWith<Term, C> for Pat<DBI, Term>
-{
+impl<C: SubstCtx> SubstWith<Term, C> for Pat<DBI, Term> {
     fn subst_with(self, subst: Rc<PrimSubst<Term>>, tcs: &mut C) -> Self {
         match self {
             Pat::Absurd => Pat::Absurd,

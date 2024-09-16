@@ -1,4 +1,5 @@
-use chumsky::Span;
+use chumsky::input::Input;
+use chumsky::span::Span;
 pub use codespan::{
     ByteIndex, ByteIndex as BytePos, ByteOffset, ColumnIndex as Column, ColumnOffset,
     LineIndex as Line, LineOffset, RawIndex,

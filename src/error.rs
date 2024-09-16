@@ -8,7 +8,7 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Parse error: {0}")]
-    Parse(#[from] ParseError<'static>),
+    Parse(#[from] ParseError<'static, String>),
     #[error("Desugar error: {0}")]
     Desugar(#[from] DesugarError),
     #[error("Check error: {0}")]

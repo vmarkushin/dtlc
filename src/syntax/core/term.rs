@@ -789,7 +789,6 @@ impl Term {
         }
     }
 
-
     pub fn as_single_meta(&self) -> Option<MI> {
         match self {
             Term::Var(Var::Meta(i), elims) if elims.is_empty() => Some(*i),

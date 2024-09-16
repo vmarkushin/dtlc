@@ -1,6 +1,6 @@
-use std::fmt::{Display, Formatter};
 use crate::syntax::core::{Tele, Term, TermInfo};
 use crate::syntax::{Ident, Loc, Universe, GI};
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ProjInfo {

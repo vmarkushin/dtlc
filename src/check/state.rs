@@ -1,7 +1,10 @@
 // use crate::check::meta::MetaContext;
 use crate::check::unification::{Context, Param};
 use crate::check::Error;
-use crate::syntax::core::{Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, Name, SubstCtx, SubstWith, Substitution, Term, Twin, Type, Var};
+use crate::syntax::core::{
+    Bind, Ctx, DeBruijn, Decl, Indentation, Let, LetList, Name, SubstCtx, SubstWith, Substitution,
+    Term, Twin, Type, Var,
+};
 use crate::syntax::{LangItem, DBI, GI, MI, UID};
 use std::collections::HashMap;
 use std::fmt::Display;

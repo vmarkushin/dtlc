@@ -154,8 +154,7 @@ impl<Term: DeBruijn + Subst<Term, Term> + Clone> PrimSubst<Term> {
     }
 }
 
-impl<'a, T> PrimSubst<T>
-{
+impl<'a, T> PrimSubst<T> {
     pub fn raise_term_with2<C>(k: DBI, term: T, tcs: &mut C) -> T
     where
         Term: SubstWith<T, C>,
@@ -172,7 +171,6 @@ impl<'a, T> PrimSubst<T>
         term.subst_with(Self::raise(k).lift_by(n), tcs)
     }
 
-
     // pub fn lookup_with2(&self, dbi: DBI, state: &'a mut TypeCheckState) -> Term {
     //     self.lookup_with_impl(dbi, state)
     //         // .map_left(Clone::clone)
@@ -186,11 +184,10 @@ impl<'a, T> PrimSubst<T>
     pub fn lookup_with_impl2<C>(&self, i: DBI, state: &'a mut C) -> Either<T, Term>
     where
         C: SubstCtx,
-    // Var: SubstWith<T, C, Term>,
-    // Pat: SubstWith<T, C>,
+        // Var: SubstWith<T, C, Term>,
+        // Pat: SubstWith<T, C>,
         Term: SubstWith<T, C>,
         T: SubstWith<T, C> + Debug + Clone + Display,
-
     {
         use Either::*;
         use PrimSubst::*;
@@ -585,9 +582,9 @@ mod tests {
                 (1, Term::data(ValData::new(1, vec![]))),
                 (0, Term::data(ValData::new(2, vec![]))),
             ]
-                .into_iter()
-                .map(From::from)
-                .collect(),
+            .into_iter()
+            .map(From::from)
+            .collect(),
         );
         debug!("Γ = {}", Γ);
         debug!("{}", t);
@@ -599,9 +596,9 @@ mod tests {
                 (3, Term::data(ValData::new(4, vec![]))),
                 (0, Term::data(ValData::new(2, vec![]))),
             ]
-                .into_iter()
-                .map(From::from)
-                .collect(),
+            .into_iter()
+            .map(From::from)
+            .collect(),
         );
 
         debug!("Γ' = {}", Γ_new);
@@ -611,8 +608,8 @@ mod tests {
                 (1, Term::from_dbi(1)),
                 (2, Term::meta_with(2, vec![])),
             ]
-                .into_iter()
-                .collect::<HashMap<_, _>>(),
+            .into_iter()
+            .collect::<HashMap<_, _>>(),
             3,
         );
         debug!("σ = {}", σ);

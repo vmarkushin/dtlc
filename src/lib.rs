@@ -20,6 +20,7 @@
     exclusive_range_pattern,
     type_name_of_val,
     if_let_guard,
+    assert_matches,
 )]
 #[macro_use]
 extern crate log;

@@ -1,9 +1,12 @@
+use crate::syntax::core::{
+    Bind, Boxed, Closure, Ctx, DeBruijn, Elim, Func, Id, Lambda, Name, PrimSubst, Subst, SubstCtx,
+    SubstWith, Tele, Term, Type, ValData, Var,
+};
+use crate::syntax::pattern::Pat;
+use crate::syntax::{DBI, UID};
+use itertools::Either;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
-use itertools::Either;
-use crate::syntax::core::{Bind, Boxed, Closure, Ctx, DeBruijn, Elim, Func, Id, Lambda, Name, PrimSubst, Subst, SubstCtx, SubstWith, Tele, Term, Type, ValData, Var};
-use crate::syntax::{DBI, UID};
-use crate::syntax::pattern::Pat;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Unbind(pub UID);
@@ -35,13 +38,10 @@ impl<C: SubstCtx> SubstWith<Unbind, C, Term> for Var {
     fn subst_with(self, subst: Rc<UnbindSubst>, state: &mut C) -> Term {
         match self {
             Var::V(Name::Bound(f), twin) => {
-                let either = subst
-                    .lookup_with_impl2::<C>(f, state);
+                let either = subst.lookup_with_impl2::<C>(f, state);
                 match either {
-                    Either::Left(Unbind(uid)) => {
-                        Term::Var(Var::V(Name::Free(uid), twin), vec![])
-                    }
-                    Either::Right(t) => { t }
+                    Either::Left(Unbind(uid)) => Term::Var(Var::V(Name::Free(uid), twin), vec![]),
+                    Either::Right(t) => t,
                 }
             }
             v => Term::Var(v, vec![]),
@@ -72,8 +72,7 @@ where
                     let np = match p {
                         Pat::Var(v) => {
                             if pi == 0 {
-                                todo!()
-                                // let t = subst.lookup_with(v, tcs);
+                                // let t = subst.lookup_with_impl2(v, tcs);
                                 // match t.dbi_view() {
                                 //     Some(nv) => {
                                 //         i = Some(nv);
@@ -81,6 +80,8 @@ where
                                 //     }
                                 //     _ => Pat::Var(v),
                                 // }
+                                // TODO: check this
+                                Pat::Var(v)
                             } else if let Some(j) = i {
                                 i = Some(j + 1);
                                 Pat::Var(j + 1)
@@ -107,10 +108,14 @@ where
 
 pub fn unbind_closed<C: SubstCtx>(t: Term, tcs: &mut C, limit: usize) -> (Tele, Term) {
     let (tele, t) = t.tele_view_n(limit);
-    let tele_unbound = tele.into_iter().map(|b| {
-        b.unbind(tcs)
-    }).collect::<Tele>();
-    let subst = PrimSubst::parallel(tele_unbound.clone().into_iter().map(|b| Unbind(b.name)).rev());
+    let tele_unbound = tele.into_iter().map(|b| b.unbind(tcs)).collect::<Tele>();
+    let subst = PrimSubst::parallel(
+        tele_unbound
+            .clone()
+            .into_iter()
+            .map(|b| Unbind(b.name))
+            .rev(),
+    );
     let body_free = t.subst_with(subst, tcs);
     (tele_unbound, body_free)
 }
@@ -138,8 +143,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
     use super::*;
+    use std::cell::Cell;
 
     struct MockSubstCtx {
         uid: Cell<UID>,
@@ -169,10 +174,10 @@ mod tests {
                 Bind::unnamed(Term::universe(0)),
                 Bind::unnamed(Term::universe(0)),
             ],
-            Term::Var(Var::bound(0), vec![
-                Elim::app(Term::bound_var(1)),
-                Elim::app(Term::bound_var(2)),
-            ]),
+            Term::Var(
+                Var::bound(0),
+                vec![Elim::app(Term::bound_var(1)), Elim::app(Term::bound_var(2))],
+            ),
         );
 
         println!("{}", long_term);
@@ -189,10 +194,16 @@ mod tests {
         assert_eq!(tele.0[2].name, 3);
 
         // check that the term was unbound correctly
-        assert_eq!(t, Term::Var(Var::free(3), vec![
-            Elim::app(Term::Var(Var::free(2), vec![])),
-            Elim::app(Term::Var(Var::free(1), vec![])),
-        ]));
+        assert_eq!(
+            t,
+            Term::Var(
+                Var::free(3),
+                vec![
+                    Elim::app(Term::Var(Var::free(2), vec![])),
+                    Elim::app(Term::Var(Var::free(1), vec![])),
+                ]
+            )
+        );
 
         tcs.reset();
         let (tele_2, t_2) = unbind_closed(long_term.clone(), &mut tcs, 33);
@@ -207,10 +218,19 @@ mod tests {
         assert_eq!(tele_3.0[1].name, 2);
 
         println!("{t_3}");
-        assert_eq!(t_3, Term::lam(Bind::unnamed(Term::universe(0)).boxed(), Term::Var(Var::bound(0), vec![
-            Elim::app(Term::Var(Var::free(2), vec![])),
-            Elim::app(Term::Var(Var::free(1), vec![])),
-        ])));
+        assert_eq!(
+            t_3,
+            Term::lam(
+                Bind::unnamed(Term::universe(0)).boxed(),
+                Term::Var(
+                    Var::bound(0),
+                    vec![
+                        Elim::app(Term::Var(Var::free(2), vec![])),
+                        Elim::app(Term::Var(Var::free(1), vec![])),
+                    ]
+                )
+            )
+        );
 
         tcs.reset();
         let (tele_3, t_3) = unbind_closed(long_term.clone(), &mut tcs, 1);
@@ -218,15 +238,21 @@ mod tests {
         assert_eq!(tele_3.0[0].name, 1);
 
         println!("{t_3}");
-        assert_eq!(t_3, Term::lams(
-            vec![
-                Bind::unnamed(Term::universe(0)),
-                Bind::unnamed(Term::universe(0)),
-            ],
-            Term::Var(Var::bound(0), vec![
-                Elim::app(Term::Var(Var::bound(1), vec![])),
-                Elim::app(Term::Var(Var::free(1), vec![])),
-            ]),
-        ));
+        assert_eq!(
+            t_3,
+            Term::lams(
+                vec![
+                    Bind::unnamed(Term::universe(0)),
+                    Bind::unnamed(Term::universe(0)),
+                ],
+                Term::Var(
+                    Var::bound(0),
+                    vec![
+                        Elim::app(Term::Var(Var::bound(1), vec![])),
+                        Elim::app(Term::Var(Var::free(1), vec![])),
+                    ]
+                ),
+            )
+        );
     }
 }

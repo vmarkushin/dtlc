@@ -1,3 +1,4 @@
+mod binding;
 mod dbi;
 mod decl;
 mod fold;
@@ -8,18 +9,19 @@ mod pretty;
 mod redex;
 mod subst;
 mod term;
-mod binding;
 
 use crate::check::unification::{Flavour, Occurrence};
-use crate::check::{TypeCheckState};
+use crate::check::TypeCheckState;
 use crate::syntax;
 use crate::syntax::{Loc, DBI};
+pub use binding::Unbind;
 pub use dbi::DeBruijn;
 pub use decl::{ConsInfo, DataInfo, Decl, FuncInfo, ProjInfo};
 pub use fold::FoldVal;
 use itertools::{Either, Itertools};
 pub use pats::Simpl;
 pub use pretty::{display_application, pretty, pretty_list, Indentation, Pretty};
+pub use redex::SubstCtx;
 pub use redex::{Subst, SubstWith};
 use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
@@ -29,8 +31,6 @@ pub use term::{
     Bind, BoundFreeVars, Case, Closure, Elim, Func, Id, Lambda, Name, Pat, Term, Twin, Type, Val,
     ValData, Var,
 };
-pub use redex::SubstCtx;
-pub use binding::Unbind;
 
 impl Term {
     pub fn at(self, loc: Loc) -> TermInfo {

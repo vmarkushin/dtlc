@@ -126,7 +126,8 @@ impl Term {
         maybe_x_max: Option<DBI>,
         from_uid: UID,
         pat_term: Term,
-    ) -> Term where
+    ) -> Term
+    where
         Term: SubstWith<Term, C>,
     {
         let x_min = x;
@@ -199,7 +200,8 @@ impl Term {
         x: DBI,
         x_max: DBI,
         from_uid: UID,
-    ) -> Term where
+    ) -> Term
+    where
         C: SubstCtx,
         Term: SubstWith<Term, C>,
     {
